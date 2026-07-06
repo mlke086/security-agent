@@ -1,0 +1,51 @@
+# 脱敏规则配置 — 高优先级规则排前
+# mask 字段说明: *** = 全替换, {prefix3}****{suffix4} = 保留前3后4, {user_first}*@{domain} = 邮箱掩码
+
+rules:
+  - name: password_field
+    pattern: '(?i)(?:password|passwd|pwd|secret)\s*[=:]\s*\S+'
+    type: credential
+    priority: 10
+    mask: "***"
+
+  - name: api_key_field
+    pattern: '(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token)\s*[=:]\s*\S+'
+    type: credential
+    priority: 10
+    mask: "***"
+
+  - name: phone_cn
+    pattern: '(?<!\d)1[3-9]\d{9}(?!\d)'
+    type: pii
+    priority: 5
+    mask: "{prefix3}****{suffix4}"
+
+  - name: email
+    pattern: '[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
+    type: pii
+    priority: 5
+    mask: "{user_first}***@{domain}"
+
+  - name: id_card_cn
+    pattern: '\b[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dX]\b'
+    type: pii
+    priority: 5
+    mask: "{prefix6}********{suffix4}"
+
+  - name: md5_hash
+    pattern: '\b[0-9a-fA-F]{32}\b'
+    type: hash
+    priority: 1
+    mask: null
+
+  - name: sha256_hash
+    pattern: '\b[0-9a-fA-F]{64}\b'
+    type: hash
+    priority: 1
+    mask: null
+
+  - name: sha1_hash
+    pattern: '\b[0-9a-fA-F]{40}\b'
+    type: hash
+    priority: 1
+    mask: null

@@ -36,7 +36,7 @@ class SandboxExecutor:
             self._docker = docker.from_env()
         except DockerException as exc:
             logger.warning("docker_unavailable", error=str(exc))
-            self._docker = None  # type: ignore[assignment]
+            self._docker = None
 
     async def execute(self, code: str) -> ExecutionResult:
         if self._docker is None:
@@ -52,7 +52,7 @@ class SandboxExecutor:
             )
             result.execution_time_ms = int((time.monotonic() - start) * 1000)
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await asyncio.to_thread(self._kill_container, container_name)
             return ExecutionResult(
                 status="timeout",

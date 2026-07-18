@@ -50,7 +50,9 @@ def _load_playbooks() -> list[dict]:
     if _PLAYBOOK_DIR.exists():
         for f in _PLAYBOOK_DIR.glob("*.yaml"):
             try:
-                playbooks.extend(yaml.safe_load(f.read_text()))
+                # utf-8-sig strips a leading BOM so the first key (playbook_id)
+                # isn't parsed as "﻿playbook_id" (which caused KeyError).
+                playbooks.append(yaml.safe_load(f.read_text(encoding="utf-8-sig")))
             except Exception:
                 pass
     return playbooks
@@ -66,6 +68,7 @@ async def playbook_matcher_node(state: ResponderSubState) -> dict[str, Any]:
     verdict = state.get("verdict", "")
     iocs = state.get("iocs", {})
     confidence = state.get("confidence", 0.0)
+    event_tags = state.get("event_tags", [])
 
     # Try rule-based match first
     all_playbooks = _load_playbooks()
@@ -75,6 +78,8 @@ async def playbook_matcher_node(state: ResponderSubState) -> dict[str, Any]:
         if (
             trigger.get("verdict") == verdict
             and confidence >= trigger.get("confidence_min", 0.0)
+            and (not trigger.get("event_tags")
+                 or any(t in event_tags for t in trigger["event_tags"]))
         ):
             matched = pb
             break
@@ -111,7 +116,7 @@ async def playbook_matcher_node(state: ResponderSubState) -> dict[str, Any]:
             max_level = op.level
 
     playbook = Playbook(
-        playbook_id=matched["playbook_id"] if matched else str(uuid.uuid4())[:8],
+        playbook_id=(matched.get("playbook_id") if matched else None) or str(uuid.uuid4())[:8],
         description=matched.get("description", "Auto-generated playbook") if matched else "LLM generated",
         operations=operations,
         max_level=max_level,

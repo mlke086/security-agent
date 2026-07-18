@@ -63,3 +63,9 @@ class GraphRAGEngine:
     async def close(self) -> None:
         await self._neo4j.close()
         await self._redis.aclose()
+        # P1-KNOW-1: also close the Milvus gRPC connection -- previously the
+        # pymilvus client leaked one connection per search() call.
+        try:
+            self._milvus.close()
+        except Exception:
+            pass

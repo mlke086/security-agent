@@ -1,0 +1,21 @@
+﻿playbook_id: brute_force
+description: "Brute force \u2014 block source IP"
+trigger:
+  verdict: true_positive
+  event_tags: ["brute_force", "auth_failure"]
+  confidence_min: 0.7
+max_level: L2
+operations:
+- type: tag
+  level: L1
+  params:
+    tag: brute_force
+- type: firewall_block
+  level: L2
+  params:
+    ip: '{source_ip}'
+    duration: 3600
+- type: notify
+  level: L1
+  params:
+    channel: user_owner

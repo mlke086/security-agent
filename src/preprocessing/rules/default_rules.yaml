@@ -3,13 +3,13 @@
 
 rules:
   - name: password_field
-    pattern: '(?i)(?:password|passwd|pwd|secret)\s*[=:]\s*\S+'
+    pattern: '(?i)(?:password|passwd|pwd|secret)\s*[=:]\s*.+?(?=\s{2,}|[;,]|$)'
     type: credential
     priority: 10
     mask: "***"
 
   - name: api_key_field
-    pattern: '(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token)\s*[=:]\s*\S+'
+    pattern: '(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token)\s*[=:]\s*.+?(?=\s{2,}|[;,]|$)'
     type: credential
     priority: 10
     mask: "***"

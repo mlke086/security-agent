@@ -2,10 +2,9 @@ from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, Milvus
 
 from src.common.config.settings import get_settings
 from src.common.logging.logger import get_logger
+from src.knowledge.graphrag.vector.embedding import EMBEDDING_DIM as VECTOR_DIM
 
 logger = get_logger(__name__)
-
-VECTOR_DIM = 768
 
 
 class MilvusVectorClient:
@@ -25,11 +24,11 @@ class MilvusVectorClient:
             anns_field="embedding",
             param={"metric_type": "IP", "params": {"nprobe": 16}},
             limit=top_k,
-            output_fields=["doc_id", "content", "source", "score"],
+            output_fields=["doc_id", "content", "source"],
         )
         hits = []
         for hit in results[0]:
-            if hit.score >= 0.65:
+            if hit.score >= get_settings().milvus_score_threshold:
                 hits.append({
                     "doc_id": hit.entity.get("doc_id"),
                     "content": hit.entity.get("content"),
@@ -49,6 +48,18 @@ class MilvusVectorClient:
         collection.insert(data)
         collection.flush()
 
+    def close(self) -> None:
+        """Disconnect the pymilvus gRPC connection (P1-KNOW-1).
+
+        Without this every GraphRAGEngine() leaks a Milvus connection that
+        only closes when the process exits.
+        """
+        try:
+            from pymilvus import connections
+            connections.disconnect("default")
+        except Exception as exc:
+            logger.debug("milvus_disconnect_failed", error=str(exc))
+
     def _ensure_collection(self) -> None:
         client = MilvusClient(
             uri=f"http://{get_settings().milvus_host}:{get_settings().milvus_port}"
@@ -62,5 +73,14 @@ class MilvusVectorClient:
                 FieldSchema("embedding", DataType.FLOAT_VECTOR, dim=VECTOR_DIM),
             ]
             schema = CollectionSchema(fields, description="Threat Intel")
-            Collection(self._collection_name, schema)
+            coll = Collection(self._collection_name, schema)
             logger.info("milvus_collection_created", name=self._collection_name)
+            # Create IVF_FLAT index for efficient vector search
+            index_params = {
+                "metric_type": "IP",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": 128},
+            }
+            coll.create_index(field_name="embedding", index_params=index_params)
+            coll.load()
+            logger.info("milvus_index_created", name=self._collection_name, index_type="IVF_FLAT")

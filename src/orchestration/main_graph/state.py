@@ -1,6 +1,7 @@
-from typing import Annotated, Any, Literal
-from typing_extensions import TypedDict
 import operator
+from typing import Annotated, Any
+
+from typing_extensions import TypedDict
 
 
 class AuditEntry(TypedDict):

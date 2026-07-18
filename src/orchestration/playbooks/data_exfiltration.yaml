@@ -1,0 +1,21 @@
+﻿playbook_id: data_exfiltration
+description: "Data exfiltration \u2014 block domain"
+trigger:
+  verdict: true_positive
+  event_tags: ["data_exfiltration"]
+  confidence_min: 0.8
+max_level: L3
+operations:
+- type: notify
+  level: L1
+  params:
+    channel: soc
+- type: dns_block
+  level: L3
+  params:
+    domain: '{domain}'
+- type: firewall_block
+  level: L3
+  params:
+    ip: '{dest_ip}'
+    duration: 86400

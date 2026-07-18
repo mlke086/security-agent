@@ -1,0 +1,16 @@
+[Unit]
+Description=Security Agent
+Documentation=https://github.com/security-agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/secagent/agent
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+Environment="CONFIG_PATH=/etc/secagent/config.json"
+
+[Install]
+WantedBy=multi-user.target

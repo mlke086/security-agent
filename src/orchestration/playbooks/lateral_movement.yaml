@@ -1,0 +1,21 @@
+﻿playbook_id: lateral_movement
+description: "Lateral movement \u2014 isolate host"
+trigger:
+  verdict: true_positive
+  event_tags: ["lateral_movement"]
+  confidence_min: 0.8
+max_level: L4
+operations:
+- type: notify
+  level: L1
+  params:
+    channel: soc
+- type: isolate_host
+  level: L4
+  params:
+    hostname: '{source_host}'
+- type: firewall_block
+  level: L3
+  params:
+    ip: '{source_ip}'
+    duration: 86400

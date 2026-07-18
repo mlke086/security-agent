@@ -1,0 +1,65 @@
+﻿# Security AI Agent — .gitignore
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+security_agent.egg-info/
+.venv/
+venv/
+.coverage
+.coverage.*
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+
+# Docker
+deployments/docker/docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+_backend*.log
+_frontend.log
+_be_*.log
+
+# Codex / dev session garbage
+_fix_*.py
+_start_*.cmd
+_start_*.py
+_store_*.b64
+diag_*.txt
+session_*.md
+debug/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Editor backup
+*.bak
+*.tmp

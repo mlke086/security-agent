@@ -13,6 +13,9 @@ from src.preprocessing.sanitization.engine import SanitizationEngine
 
 logger = get_logger(__name__)
 
+# Pipeline concurrency semaphore (module-level, shared across consumer runs)
+_pipeline_sem: asyncio.Semaphore | None = None
+
 
 class AlertConsumer:
     """Async Kafka consumer: sanitize → extract IOCs → emit structured JSON."""
@@ -50,26 +53,65 @@ class AlertConsumer:
             await self._dlq_producer.stop()
 
     async def run(self) -> None:
+        """Consume raw alerts, sanitize, emit into the pipeline, commit offsets.
+
+        P1-PRE-1: derive a stable event_id from the Kafka payload so redeliveries
+        do not change the downstream action idempotency key (op_id).
+        """
         assert self._consumer is not None
         async for msg in self._consumer:
+            stable_event_id: str | None = None
             try:
-                structured = self._process(msg.value)
+                stable_event_id = self._stable_event_id(msg.value)
+            except Exception:
+                stable_event_id = None
+            try:
+                structured = self._process(msg.value, event_id=stable_event_id)
+            except Exception as exc:
+                logger.error("parse_failed", error=str(exc), offset=msg.offset)
+                await self._send_dlq(msg.value, str(exc))
+                await self._consumer.commit()
+                continue
+
+            try:
                 await self._emit(structured)
                 await self._consumer.commit()
             except Exception as exc:
-                logger.error("message_processing_failed", error=str(exc), offset=msg.offset)
-                await self._send_dlq(msg.value, str(exc))
-                await self._consumer.commit()
+                logger.error(
+                    "pipeline_failed",
+                    event_id=structured.get("event_id"), error=str(exc),
+                )
+                # Do not commit -- Kafka re-delivers for retry.
+
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _process(self, raw: str) -> dict:
+    @staticmethod
+    def _stable_event_id(raw: str) -> str:
+        """Deterministic event_id from the raw Kafka payload.
+
+        If the payload is JSON with an ``id`` / ``event_id`` / ``alert_id`` field we
+        use it directly (most alert sources include a unique id). Otherwise we
+        sha256 the sanitized payload so re-deliveries hash to the same id.
+        """
+        try:
+            obj = json.loads(raw)
+            for key in ("id", "event_id", "alert_id", "uuid"):
+                val = obj.get(key)
+                if isinstance(val, str) and val:
+                    return val
+        except Exception:
+            pass
+        import hashlib
+        return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+    def _process(self, raw: str, event_id: str | None = None) -> dict:
         sanitized = self._sanitizer.sanitize(raw)
         iocs = self._extractor.extract(sanitized)
         return {
-            "event_id": str(uuid.uuid4()),
+            "event_id": event_id or str(uuid.uuid4()),
             "sanitized_text": sanitized,
             "iocs": {
                 "ips": iocs.ips,
@@ -82,8 +124,19 @@ class AlertConsumer:
         }
 
     async def _emit(self, event: dict) -> None:
-        # Hook point: downstream graph ingestion
-        logger.info("event_processed", event_id=event["event_id"])
+        """Submit event to the LangGraph pipeline with concurrency control."""
+        global _pipeline_sem
+        if _pipeline_sem is None:
+            _pipeline_sem = asyncio.Semaphore(get_settings().pipeline_concurrency)
+
+        from src.orchestration.runner import run_pipeline
+        async with _pipeline_sem:
+            await run_pipeline(
+                event["event_id"],
+                event["sanitized_text"],
+                event["iocs"],
+                event.get("source", "kafka"),
+            )
 
     async def _send_dlq(self, raw: str, error: str) -> None:
         assert self._dlq_producer is not None

@@ -1,3 +1,4 @@
+"""Orchestrator node — rule-based + LLM triage classification with fallback."""
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -9,7 +10,6 @@ from src.orchestration.main_graph.state import AuditEntry, MainGraphState
 
 logger = get_logger(__name__)
 
-# ---------- Honeypot rule: direct high-priority without LLM ----------
 _HONEYPOT_COMMANDS = frozenset(["whoami", "id", "uname", "ifconfig", "cat /etc/passwd"])
 
 
@@ -18,7 +18,6 @@ def _honeypot_rule(text: str) -> bool:
     return any(cmd in lower for cmd in _HONEYPOT_COMMANDS)
 
 
-# ---------- Pydantic output schema ----------
 class TriageResult(BaseModel):
     priority: Literal["high", "medium", "low"]
     event_tags: list[str] = Field(default_factory=list)
@@ -39,7 +38,6 @@ Examples:
 async def orchestrator_node(state: MainGraphState) -> dict[str, Any]:
     raw_text = str(state.get("raw_event", {}).get("sanitized_text", ""))
 
-    # Fast rule path — skip LLM for obvious honeypot activity
     if _honeypot_rule(raw_text):
         result = TriageResult(
             priority="high",
@@ -54,10 +52,19 @@ async def orchestrator_node(state: MainGraphState) -> dict[str, Any]:
             f"Classify this security event:\n{raw_text[:2000]}\n\n"
             "Return JSON matching the schema."
         )
-        result = await adapter.chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            schema=TriageResult,
-        )
+        try:
+            result = await adapter.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                schema=TriageResult,
+            )
+        except Exception as exc:
+            logger.warning("llm_unavailable_fallback", error=str(exc))
+            result = TriageResult(
+                priority="medium",
+                event_tags=["unknown"],
+                noise_score=0.5,
+                reasoning=f"LLM unavailable, rule-based fallback: {exc}",
+            )
 
     entry: AuditEntry = {
         "node": "orchestrator",
@@ -65,6 +72,17 @@ async def orchestrator_node(state: MainGraphState) -> dict[str, Any]:
         "summary": f"priority={result.priority} tags={result.event_tags} noise={result.noise_score:.2f}",
     }
     logger.info("triage_complete", **entry)
+
+    try:
+        from src.common.audit.audit_logger import get_audit_logger
+        await get_audit_logger().log(
+            event_id=state.get("event_id", "unknown"),
+            node="orchestrator",
+            action="triage",
+            details={"priority": result.priority, "tags": result.event_tags, "reasoning": result.reasoning},
+        )
+    except Exception:
+        pass
 
     return {
         "priority": result.priority,

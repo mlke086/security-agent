@@ -1,9 +1,8 @@
-from typing import Any, TypeVar
+from typing import TypeVar, overload
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from langchain_community.chat_models import ChatOpenAI as VLLMChat
-from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from src.common.config.settings import get_settings
@@ -28,17 +27,30 @@ class ModelAdapter:
                 max_tokens=4096,
             )
         elif self._provider == "openai":
-            self._llm = ChatOpenAI(
-                model="gpt-4o",
-                api_key=settings.openai_api_key,
-                temperature=0.1,
-            )
+            kwargs = {
+                "model": settings.openai_model,
+                "api_key": settings.openai_api_key,
+                "temperature": 0.1,
+            }
+            if settings.openai_base_url:
+                kwargs["base_url"] = settings.openai_base_url
+            self._llm = ChatOpenAI(**kwargs)
         else:  # vllm
-            self._llm = VLLMChat(
+            self._llm = ChatOpenAI(
                 model=settings.vllm_model,
                 base_url=settings.vllm_base_url,
                 temperature=0.1,
             )
+
+    @overload
+    async def chat_completion(
+        self, messages: list[dict[str, str]], schema: type[T], temperature: float = 0.1
+    ) -> T: ...
+
+    @overload
+    async def chat_completion(
+        self, messages: list[dict[str, str]], schema: None = None, temperature: float = 0.1
+    ) -> str: ...
 
     async def chat_completion(
         self,
@@ -46,13 +58,21 @@ class ModelAdapter:
         schema: type[T] | None = None,
         temperature: float = 0.1,
     ) -> T | str:
-        lc_messages = [HumanMessage(content=m["content"]) for m in messages if m["role"] == "user"]
+        # 保留 system / user / assistant 各类消息
+        lc_messages = []
+        for m in messages:
+            if m["role"] == "system":
+                lc_messages.append(SystemMessage(content=m["content"]))
+            elif m["role"] in ("user", "assistant"):
+                lc_messages.append(HumanMessage(content=m["content"]))
+
+        # 透传 temperature
+        self._llm.temperature = temperature
 
         if schema is not None:
             structured_llm = self._llm.with_structured_output(schema)
             result = await structured_llm.ainvoke(lc_messages)
             return result  # type: ignore[return-value]
-
         response = await self._llm.ainvoke(lc_messages)
         return str(response.content)
 

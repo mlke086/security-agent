@@ -1,4 +1,4 @@
-from neo4j import AsyncGraphDatabase, AsyncDriver
+from neo4j import AsyncDriver, AsyncGraphDatabase
 
 from src.common.config.settings import get_settings
 from src.common.logging.logger import get_logger
@@ -6,18 +6,14 @@ from src.common.logging.logger import get_logger
 logger = get_logger(__name__)
 
 _NEIGHBOUR_QUERY = """
-MATCH (start)
+MATCH (start)-[%rel_var%]-(related)
 WHERE start.value IN $ioc_values OR start.name IN $ioc_values
-CALL apoc.path.spanningTree(start, {maxLevel: $hops, relationshipFilter: ">"})
-YIELD path
-WITH nodes(path) AS ns, relationships(path) AS rels
-UNWIND ns AS n
 RETURN DISTINCT
-    labels(n)[0] AS node_type,
-    n.name AS name,
-    n.value AS value,
-    n.cve_id AS cve_id,
-    n.cvss AS cvss
+    labels(related)[0] AS node_type,
+    related.name AS name,
+    related.value AS value,
+    related.cve_id AS cve_id,
+    related.cvss AS cvss
 LIMIT 50
 """
 
@@ -33,12 +29,13 @@ class Neo4jGraphClient:
     async def query_neighbours(
         self, ioc_values: list[str], hops: int = 2
     ) -> list[dict]:
+        rel_pattern = f"*1..{hops}"
+        query = _NEIGHBOUR_QUERY.replace("%rel_var%", rel_pattern)
         async with self._driver.session() as session:
             try:
                 result = await session.run(
-                    _NEIGHBOUR_QUERY,
+                    query,
                     ioc_values=ioc_values,
-                    hops=hops,
                 )
                 return [dict(record) async for record in result]
             except Exception as exc:

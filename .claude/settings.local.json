@@ -4,7 +4,8 @@
       "Bash(dir \"V:\\\\project\\\\security-agent\")",
       "Bash(python3 -c ' *)",
       "Bash(pip install *)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(go env *)"
     ]
   }
 }

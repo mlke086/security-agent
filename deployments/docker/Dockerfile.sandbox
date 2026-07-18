@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ ARG http_proxy
+ ARG https_proxy
+ ENV http_proxy=$http_proxy
+ ENV https_proxy=$https_proxy
+ RUN pip install --no-cache-dir --progress-bar off requests urllib3
+ RUN groupadd -r sandbox && useradd -r -g sandbox sandbox
+ USER sandbox
+ WORKDIR /home/sandbox

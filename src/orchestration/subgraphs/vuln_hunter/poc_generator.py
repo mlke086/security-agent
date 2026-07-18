@@ -12,8 +12,23 @@ from src.orchestration.subgraphs.vuln_hunter.state import VulnHunterSubState
 logger = get_logger(__name__)
 
 MAX_ITERATIONS = 10
-_linter = PoCLinter()
-_sandbox = SandboxExecutor()
+_linter: PoCLinter | None = None
+_sandbox: SandboxExecutor | None = None
+
+
+def _get_linter() -> PoCLinter:
+    global _linter
+    if _linter is None:
+        _linter = PoCLinter()
+    return _linter
+
+
+def _get_sandbox() -> SandboxExecutor:
+    global _sandbox
+    if _sandbox is None:
+        _sandbox = SandboxExecutor()
+    return _sandbox
+
 
 
 class PoCOutput(BaseModel):
@@ -47,10 +62,10 @@ Generate iteration {iteration} PoC. MUST avoid all failed paths. Return JSON wit
 def _build_memory_history(memory: VulnHunterMemory) -> str:
     lines = []
     for i, poc in enumerate(memory.poc_candidates, 1):
-        snippet = poc[:200].replace("\n", " ")
-        lines.append(f'<iteration round="{i}"><poc_tried>{snippet}...</poc_tried></iteration>')
+       snippet = poc[:200].replace("\n", " ")
+       lines.append(f'<iteration round="{i}"><poc_tried>{snippet}...</poc_tried></iteration>')
     if memory.negative_evidence:
-        lines.append("<negative_paths>" + " | ".join(memory.negative_evidence) + "</negative_paths>")
+       lines.append("<negative_paths>" + " | ".join(memory.negative_evidence) + "</negative_paths>")
     return "\n".join(lines)
 
 
@@ -59,55 +74,58 @@ async def generate_poc_node(state: VulnHunterSubState) -> dict[str, Any]:
     memory.increment_iteration()
 
     prompt = _PROMPT_TEMPLATE.format(
-        memory_history=_build_memory_history(memory),
-        constraints="\n".join(f"- {c}" for c in memory.constraints),
-        target_info=memory.target_info,
-        iteration=memory.iteration_count,
+       memory_history=_build_memory_history(memory),
+       constraints="\n".join(f"- {c}" for c in memory.constraints),
+       target_info=memory.target_info,
+       iteration=memory.iteration_count,
     )
 
     adapter = get_model_adapter()
     result = await adapter.chat_completion(
-        messages=[{"role": "user", "content": prompt}],
-        schema=PoCOutput,
+       messages=[{"role": "user", "content": prompt}],
+       schema=PoCOutput,
     )
 
     for constraint in result.updated_constraints:
-        memory.add_constraint(constraint)
+       memory.add_constraint(constraint)
 
     return {"current_poc": result.poc_code, "memory": memory}
 
 
 async def linter_check_node(state: VulnHunterSubState) -> dict[str, Any]:
     code = state.get("current_poc") or ""
-    lint_result = _linter.check(code)
+    lint_result = _get_linter().check(code)
 
     if not lint_result.passed:
-        memory: VulnHunterMemory = state["memory"]
-        evidence = f"Round {memory.iteration_count}: Linter rejected — {lint_result.error_detail}"
-        memory.add_negative_evidence(evidence)
-        if lint_result.suggestion:
-            memory.add_constraint(lint_result.suggestion)
-        return {"memory": memory, "last_exec_result": {"status": "linter_fail", "detail": lint_result.error_detail}}
+       memory: VulnHunterMemory = state["memory"]
+       evidence = f"Round {memory.iteration_count}: Linter rejected — {lint_result.error_detail}"
+       memory.add_negative_evidence(evidence)
+       if lint_result.suggestion:
+           memory.add_constraint(lint_result.suggestion)
+       return {"memory": memory, "last_exec_result": {"status": "linter_fail", "detail": lint_result.error_detail}}
 
-    return {}
+    # Linter passed — clear any prior linter_fail marker so sandbox will run.
+    # Must write at least one channel (LangGraph rejects empty updates).
+    return {"memory": state["memory"], "last_exec_result": {"status": "linter_pass"}}
 
 
 async def sandbox_exec_node(state: VulnHunterSubState) -> dict[str, Any]:
     last = state.get("last_exec_result") or {}
     if last.get("status") == "linter_fail":
-        return {}
+       # Skip execution this round; keep the linter_fail marker for convergence check.
+       return {"memory": state["memory"], "last_exec_result": last}
 
     code = state.get("current_poc") or ""
-    exec_result = await _sandbox.execute(code)
+    exec_result = await _get_sandbox().execute(code)
 
     memory: VulnHunterMemory = state["memory"]
     if not exec_result.is_vulnerable:
-        evidence = f"Round {memory.iteration_count}: Sandbox {exec_result.status} — {exec_result.stderr[:100]}"
-        memory.add_negative_evidence(evidence)
+       evidence = f"Round {memory.iteration_count}: Sandbox {exec_result.status} — {exec_result.stderr[:100]}"
+       memory.add_negative_evidence(evidence)
 
     return {
-        "last_exec_result": exec_result.model_dump(),
-        "memory": memory,
+       "last_exec_result": exec_result.model_dump(),
+       "memory": memory,
     }
 
 
@@ -117,19 +135,19 @@ async def finalize_node(state: VulnHunterSubState) -> dict[str, Any]:
     is_vulnerable = exec_result.get("is_vulnerable", False)
 
     if is_vulnerable:
-        memory.final_poc = state.get("current_poc")
-        return {
-            "final_poc": memory.final_poc,
-            "is_vulnerable": True,
-            "exploit_chain": f"Verified in {memory.iteration_count} iterations",
-            "memory": memory,
-        }
+       memory.final_poc = state.get("current_poc")
+       return {
+           "final_poc": memory.final_poc,
+           "is_vulnerable": True,
+           "exploit_chain": f"Verified in {memory.iteration_count} iterations",
+           "memory": memory,
+       }
 
     return {
-        "final_poc": None,
-        "is_vulnerable": False,
-        "exploit_chain": f"Not reproduced after {memory.iteration_count} iterations",
-        "memory": memory,
+       "final_poc": None,
+       "is_vulnerable": False,
+       "exploit_chain": f"Not reproduced after {memory.iteration_count} iterations",
+       "memory": memory,
     }
 
 
@@ -138,7 +156,7 @@ def check_convergence(state: VulnHunterSubState) -> str:
     memory: VulnHunterMemory = state["memory"]
 
     if exec_result.get("is_vulnerable"):
-        return "finalize"
+       return "finalize"
     if memory.iteration_count >= MAX_ITERATIONS:
-        return "finalize"
+       return "finalize"
     return "generate_poc"

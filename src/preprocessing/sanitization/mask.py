@@ -2,7 +2,6 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-
 MaskType = Literal["credential", "pii", "hash"]
 
 
@@ -59,13 +58,27 @@ def resolve_spans(spans: list[Span]) -> list[Span]:
     if not spans:
         return []
 
-    sorted_spans = sorted(spans, key=lambda s: (-s.rule.priority, s.start))
+    # Sort by start position
+    sorted_by_start = sorted(spans, key=lambda s: s.start)
     resolved: list[Span] = []
     last_end = -1
 
-    for span in sorted(sorted_spans, key=lambda s: s.start):
+    for span in sorted_by_start:
         if span.start >= last_end:
+            # No overlap — accept
             resolved.append(span)
             last_end = span.end
+        else:
+            # Overlap — keep the higher priority span (or longer if same priority)
+            last = resolved[-1]
+            if span.rule.priority > last.rule.priority:
+                # New span has higher priority — replace
+                resolved[-1] = span
+                last_end = span.end
+            elif span.rule.priority == last.rule.priority and (span.end - span.start) > (last.end - last.start):
+                # Same priority but longer — replace
+                resolved[-1] = span
+                last_end = span.end
+            # else: keep the existing span
 
     return resolved

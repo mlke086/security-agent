@@ -1,0 +1,131 @@
+﻿import { useEffect, useState } from "react"
+import { Typography, Spin, Descriptions, Tag, Timeline, Button, Space, message, Collapse, Empty, Input } from "antd"
+import { Card } from "antd"
+import { ArrowLeftOutlined, CheckOutlined, CloseOutlined, BugOutlined, SafetyOutlined, SearchOutlined } from "@ant-design/icons"
+import { useParams, useNavigate } from "react-router-dom"
+import { getEventDetail, approveEvent } from "../api/client"
+import { useAuth } from "../context/AuthContext"
+import type { EventRecord } from "../types"
+
+const NODE_ICONS: Record<string, React.ReactNode> = {
+  entry: <SearchOutlined />, orchestrator: <SafetyOutlined />,
+  investigate: <BugOutlined />, aggregator: <SafetyOutlined />,
+  respond: <SafetyOutlined />,
+}
+
+export default function EventDetailPage() {
+  const { eventId } = useParams<{ eventId: string }>()
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  const [ev, setEv] = useState<EventRecord | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [approving, setApproving] = useState(false)
+  const [note, setNote] = useState("")
+
+  const canApprove = (user?.role === "admin" || user?.role === "responder") && ev?.status === "pending_approval"
+
+  useEffect(() => {
+    if (!eventId) return
+    setLoading(true)
+    getEventDetail(eventId).then(setEv).catch(() => message.error("获取事件详情失败")).finally(() => setLoading(false))
+  }, [eventId])
+
+  // SSE: live-refresh trace steps / status / approval as the pipeline progresses.
+  useEffect(() => {
+    if (!eventId) return
+    const token = localStorage.getItem("token")
+    if (!token) return
+    const host = window.location.hostname
+    const base = (host === "localhost" || host === "127.0.0.1") ? "" : `http://${host}:8000`
+    const source = new EventSource(`${base}/api/v1/events/${eventId}/stream?token=${token}`)
+    source.onmessage = (e) => {
+      if (e.data && e.data !== ": heartbeat") {
+        getEventDetail(eventId).then(setEv).catch(() => {})
+      }
+    }
+    return () => source.close()
+  }, [eventId])
+
+  const doApprove = async (action: "approved" | "rejected") => {
+    if (!eventId) return; setApproving(true)
+    try { await approveEvent(eventId, action, note); message.success(action === "approved" ? "已批准" : "已驳回"); getEventDetail(eventId).then(setEv) }
+    catch { message.error("操作失败") }
+    finally { setApproving(false) }
+  }
+
+  if (loading) return <Spin size="large" style={{ display: "block", margin: "100px auto" }} />
+  if (!ev) return <Empty description="事件不存在" />
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate("/events")}>返回</Button>
+        <Typography.Title level={4} style={{ margin: 0 }}>事件详情</Typography.Title>
+      </Space>
+
+      <Descriptions title="概览" column={3} bordered size="small" style={{ marginBottom: 16 }}>
+        <Descriptions.Item label="事件 ID" span={3}><Typography.Text copyable>{ev.event_id}</Typography.Text></Descriptions.Item>
+        <Descriptions.Item label="来源">{ev.source}</Descriptions.Item>
+        <Descriptions.Item label="定级">{ev.priority ? <Tag color={ev.priority === "high" ? "red" : ev.priority === "medium" ? "orange" : "default"}>{ev.priority}</Tag> : "-"}</Descriptions.Item>
+        <Descriptions.Item label="耗时">{ev.duration_ms ? `${ev.duration_ms}ms` : "-"}</Descriptions.Item>
+        <Descriptions.Item label="结论">{ev.final_verdict ? <Tag color={ev.final_verdict === "true_positive" ? "red" : "green"}>{ev.final_verdict}</Tag> : "-"}</Descriptions.Item>
+        <Descriptions.Item label="置信度">{ev.confidence != null ? `${(ev.confidence * 100).toFixed(0)}%` : "-"}</Descriptions.Item>
+        <Descriptions.Item label="状态"><Tag>{ev.status}</Tag></Descriptions.Item>
+        <Descriptions.Item label="事件描述" span={3}>{ev.sanitized_text}</Descriptions.Item>
+        {ev.mitre_ttps?.length > 0 && <Descriptions.Item label="MITRE TTP" span={3}>{ev.mitre_ttps.map((t) => <Tag key={t}>{t}</Tag>)}</Descriptions.Item>}
+      </Descriptions>
+
+      <Typography.Title level={5}>推理链</Typography.Title>
+      {ev.trace?.length > 0 ? (
+        <Timeline items={ev.trace.map((step, i) => ({
+          dot: NODE_ICONS[step.node],
+          color: step.node === "ignore" ? "gray" : step.node === "respond" ? "blue" : step.node === "aggregator" ? "green" : "blue",
+          children: (
+            <Collapse ghost size="small" items={[{
+              key: String(i),
+              label: (
+                <Space>
+                  <Tag color="blue">{step.node}</Tag>
+                  <strong>{step.action}</strong>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>{step.summary}</Typography.Text>
+                </Space>
+              ),
+              children: (
+                <div>
+                  {step.timestamp && <Typography.Paragraph style={{ fontSize: 12, margin: 0 }} type="secondary">{new Date(step.timestamp).toLocaleString()}</Typography.Paragraph>}
+                  {Object.keys(step.details).length > 0 && (
+                    <pre style={{ fontSize: 12, background: "#f6f8fa", padding: 8, borderRadius: 4, maxHeight: 200, overflow: "auto" }}>
+                      {JSON.stringify(step.details, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              ),
+            }]} />
+          ),
+        }))} />
+      ) : <Empty description="暂无推理轨迹" />}
+
+      {canApprove && (
+        <Card style={{ marginTop: 16 }}>
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <Input.TextArea rows={2} placeholder="审批备注（可选）" value={note} onChange={(e) => setNote(e.target.value)} />
+            <Space>
+              <Button type="primary" icon={<CheckOutlined />} loading={approving} onClick={() => doApprove("approved")}>批准</Button>
+              <Button danger icon={<CloseOutlined />} loading={approving} onClick={() => doApprove("rejected")}>驳回</Button>
+            </Space>
+          </Space>
+        </Card>
+      )}
+
+      {ev.approvals?.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <Typography.Title level={5}>审批历史</Typography.Title>
+          <Timeline items={ev.approvals.map((a: any) => ({
+            color: a.action === "approved" ? "green" : "red",
+            children: <div><Tag color={a.action === "approved" ? "success" : "error"}>{a.action}</Tag> {a.actor} ({a.role}){a.note ? `: ${a.note}` : ""}</div>,
+          }))} />
+        </div>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-agent
+  namespace: security-agent
+  labels:
+    app: security-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: security-agent
+  template:
+    metadata:
+      labels:
+        app: security-agent
+    spec:
+      containers:
+      - name: api
+        image: security-agent:latest
+        imagePullPolicy: IfNotPresent
+        command: ["python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: security-agent-config
+        - secretRef:
+            name: security-agent-secrets
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      - name: celery-worker
+        image: security-agent:latest
+        imagePullPolicy: IfNotPresent
+        command: ["celery", "-A", "src.common.celery_app", "worker", "--loglevel=info"]
+        envFrom:
+        - configMapRef:
+            name: security-agent-config
+        - secretRef:
+            name: security-agent-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"

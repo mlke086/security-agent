@@ -1,0 +1,20 @@
+﻿playbook_id: phishing
+description: "Phishing email \u2014 block sender"
+trigger:
+  verdict: true_positive
+  event_tags: ["phishing", "social_engineering"]
+  confidence_min: 0.7
+max_level: L2
+operations:
+- type: tag
+  level: L1
+  params:
+    tag: phishing
+- type: block_sender
+  level: L2
+  params:
+    email: '{sender}'
+- type: remove_email
+  level: L2
+  params:
+    message_id: '{message_id}'

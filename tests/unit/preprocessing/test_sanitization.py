@@ -1,4 +1,3 @@
-import pytest
 from src.preprocessing.sanitization.engine import SanitizationEngine
 
 engine = SanitizationEngine()

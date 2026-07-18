@@ -1,0 +1,21 @@
+﻿playbook_id: unauthorized_access
+description: "Unauthorized access \u2014 revoke and notify"
+trigger:
+  verdict: true_positive
+  event_tags: ["unauthorized_access", "auth_failure"]
+  confidence_min: 0.75
+max_level: L2
+operations:
+- type: notify
+  level: L1
+  params:
+    channel: security_team
+- type: revoke_access
+  level: L2
+  params:
+    user: '{user}'
+    resource: '{resource}'
+- type: tag
+  level: L1
+  params:
+    tag: unauthorized

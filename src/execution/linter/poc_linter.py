@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 ALLOWED_IMPORTS = frozenset([
-    "requests", "socket", "json", "re", "time", "sys",
+    "requests", "json", "re", "time", "sys",
     "struct", "hashlib", "base64", "urllib", "http",
     "ssl", "threading", "itertools", "functools", "string",
     "collections", "math", "random", "binascii", "hmac",
@@ -14,7 +14,7 @@ DANGEROUS_CALLS = frozenset([
     "os.system", "os.popen", "os.execv", "os.execvp",
     "subprocess.run", "subprocess.Popen", "subprocess.call", "subprocess.check_output",
     "eval", "exec", "compile", "__import__",
-    "open", "builtins.open",
+    "open", "builtins.open", "getattr",
 ])
 
 
@@ -33,10 +33,11 @@ class PoCLinter:
         result = self._syntax_check(code)
         if not result.passed:
             return result
+        alias_map = self._build_alias_map(code)
         result = self._import_check(code)
         if not result.passed:
             return result
-        return self._dangerous_call_check(code)
+        return self._dangerous_call_check(code, alias_map)
 
     # ------------------------------------------------------------------
 
@@ -83,7 +84,7 @@ class PoCLinter:
                     )
         return LinterResult(passed=True)
 
-    def _dangerous_call_check(self, code: str) -> LinterResult:
+    def _dangerous_call_check(self, code: str, alias_map: dict[str, str] | None = None) -> LinterResult:
         try:
             tree = ast.parse(code)
         except SyntaxError:
@@ -93,6 +94,13 @@ class PoCLinter:
             if not isinstance(node, ast.Call):
                 continue
             name = self._call_name(node.func)
+            # Resolve aliases
+            if alias_map:
+                parts = name.split(".", 1)
+                if parts[0] in alias_map:
+                    resolved = alias_map[parts[0]] + ("." + parts[1] if len(parts) > 1 else "")
+                    if resolved in DANGEROUS_CALLS:
+                        name = resolved
             if name in DANGEROUS_CALLS:
                 return LinterResult(
                     passed=False,
@@ -102,6 +110,23 @@ class PoCLinter:
                     line_number=getattr(node, "lineno", None),
                 )
         return LinterResult(passed=True)
+
+    @staticmethod
+    def _build_alias_map(code: str) -> dict[str, str]:
+        alias_map = {}
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        alias_map[alias.asname or alias.name] = alias.name.split(".")[0]
+                elif isinstance(node, ast.ImportFrom):
+                    module = (node.module or "").split(".")[0]
+                    for alias in node.names:
+                        alias_map[alias.asname or alias.name] = module
+        except SyntaxError:
+            pass
+        return alias_map
 
     @staticmethod
     def _call_name(node: ast.expr) -> str:

@@ -1,0 +1,32 @@
+{
+  "name": "security-agent-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "gen:types": "openapi-typescript openapi.json -o src/api/schema.ts",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui"
+  },
+  "dependencies": {
+    "@ant-design/charts": "^2.6.7",
+    "@ant-design/icons": "^5.4.0",
+    "antd": "^5.20.0",
+    "axios": "^1.7.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.0"
+  }
+}

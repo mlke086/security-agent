@@ -1,4 +1,5 @@
 from typing import Any
+
 from typing_extensions import TypedDict
 
 from src.orchestration.subgraphs.vuln_hunter.memory import VulnHunterMemory

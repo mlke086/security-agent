@@ -1,0 +1,20 @@
+﻿playbook_id: ransomware
+description: "Ransomware \u2014 isolate host"
+trigger:
+  verdict: true_positive
+  event_tags: ["ransomware", "malware"]
+  confidence_min: 0.85
+max_level: L4
+operations:
+- type: notify
+  level: L1
+  params:
+    channel: emergency
+- type: isolate_host
+  level: L4
+  params:
+    hostname: '{hostname}'
+- type: network_block
+  level: L4
+  params:
+    ip: '{host_ip}'

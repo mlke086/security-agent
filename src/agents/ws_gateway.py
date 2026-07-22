@@ -27,6 +27,12 @@ _conns: dict[str, WebSocket] = {}
 
 
 class AgentGateway:
+
+    # P1 (F4) -- agent_ids revoked by the server until the next reconnect.
+    # Used by `authenticate` so a WS that was already open at revocation
+    # time cannot continue to push commands under the old credentials.
+    def __init__(self) -> None:
+        self._revoked_conns: set[str] = set()
     """Manages persistent WebSocket connections to agents with multi-worker routing."""
 
     @property
@@ -46,6 +52,19 @@ class AgentGateway:
         """
         if not agent_id or not token:
             return False
+        if agent_id in self._revoked_conns:
+            logger.warning("agent_auth_failed_revoked_locally", agent_id=agent_id)
+            return False
+    async def drop_revoked_connection(self, agent_id: str) -> None:
+        """Close the local WebSocket for ``agent_id`` if we still hold it."""
+        self._revoked_conns.add(agent_id)
+        ws = _conns.pop(agent_id, None)
+        if ws is not None:
+            try:
+                await ws.close(code=1011, reason="server_revoked")
+            except Exception:
+                pass
+
         # Local import to avoid a circular import with src.agents.manager.
         from src.agents.enroll import validate_agent_token
 
@@ -75,10 +94,10 @@ class AgentGateway:
             self._pubsub_consumer(agent_id, pubsub),
             name=f"pubsub-{agent_id}",
         )
-        # Keepalive: 每 30s 发应用层消息，让 agent 的 ReadMessage 返回并重置
-        # read deadline。修复 read-deadline 与心跳冲突致频繁重连/命令丢失：
-        # agent 设 read deadline 检测死连接，但后端不发消息时 deadline 到期重连，
-        # 恰好错过下发的 rule_update/scan_command。keepalive 保活让 agent 稳定在线。
+        # Keepalive: 濮?30s 閸欐垵绨查悽銊ョ湴濞戝牊浼呴敍宀冾唨 agent 閻?ReadMessage 鏉╂柨娲栭獮鍫曞櫢缂?
+        # read deadline閵嗗倷鎱ㄦ径?read-deadline 娑撳骸绺剧捄鍐插暱缁愪浇鍤ф０鎴犵畳闁插秷绻?閸涙垝鎶ゆ稉銏犮亼閿?
+        # agent 鐠?read deadline 濡偓濞村顒存潻鐐村复閿涘奔绲鹃崥搴ｎ伂娑撳秴褰傚☉鍫熶紖閺?deadline 閸掔増婀￠柌宥堢箾閿?
+        # 閹澘銈介柨娆掔箖娑撳褰傞惃?rule_update/scan_command閵嗕看eepalive 娣囨繃妞跨拋?agent 缁嬪啿鐣鹃崷銊у殠閵?
         ws.state._keepalive_task = asyncio.create_task(
             self._keepalive_loop(ws, agent_id),
             name=f"keepalive-{agent_id}",
@@ -86,10 +105,10 @@ class AgentGateway:
         logger.info("agent_connected", agent_id=agent_id, worker=self.worker_id)
 
     async def _keepalive_loop(self, ws: WebSocket, agent_id: str) -> None:
-        """每 30s 发 keepalive 应用层消息（非敏感命令，无需签名）。
+        """濮?30s 閸?keepalive 鎼存梻鏁ょ仦鍌涚Х閹垽绱欓棃鐐存櫛閹扮喎鎳℃禒銈忕礉閺冪娀娓剁粵鎯ф倳閿涘鈧?
 
-        agent 收到后 handleMessage 返回、ReadMessage 循环重新 SetReadDeadline，
-        从而不会因 deadline 到期重连。连接断开时 send_json 抛异常，循环退出。
+        agent 閺€璺哄煂閸?handleMessage 鏉╂柨娲栭妴涓積adMessage 瀵邦亞骞嗛柌宥嗘煀 SetReadDeadline閿?
+        娴犲氦鈧奔绗夋导姘礈 deadline 閸掔増婀￠柌宥堢箾閵嗗倽绻涢幒銉︽焽瀵偓閺?send_json 閹舵稑绱撶敮闈╃礉瀵邦亞骞嗛柅鈧崙鎭掆偓?
         """
         try:
             while True:
@@ -103,7 +122,7 @@ class AgentGateway:
                         }
                     )
                 except Exception:
-                    break  # 连接已断
+                    break  # 鏉╃偞甯村鍙夋焽
         except asyncio.CancelledError:
             pass
 
@@ -193,6 +212,15 @@ class AgentGateway:
                 self._pub_task_progress(payload)
             elif msg_type == "update_ack":
                 logger.info("update_ack", agent_id=agent_id, payload=payload)
+                try:
+                    from src.agents.upgrade import record_upgrade_ack
+                    await record_upgrade_ack(agent_id, payload)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "update_ack_handler_failed",
+                        agent_id=agent_id,
+                        error=str(exc),
+                    )
             else:
                 logger.debug("unknown_agent_msg_type", type=msg_type, agent_id=agent_id)
         except Exception as exc:
@@ -215,13 +243,19 @@ class AgentGateway:
                 logger.warning("ws_send_failed", agent_id=agent_id, error=str(exc))
                 return False
 
+        r = None
         try:
             r = self._redis()
-            await r.publish(f"agent:cmd:{agent_id}", json.dumps(msg, ensure_ascii=False))
+            subscribers = await r.publish(
+                f"agent:cmd:{agent_id}", json.dumps(msg, ensure_ascii=False)
+            )
+            return int(subscribers or 0) > 0
         except Exception as exc:
             logger.warning("redis_publish_failed", agent_id=agent_id, error=str(exc))
-
-        return False
+            return False
+        finally:
+            if r is not None:
+                await r.aclose()
 
     async def broadcast(self, agent_ids: list[str], msg: dict) -> dict:
         """Send a message to multiple agents. Returns {sent, failed}."""
@@ -270,6 +304,15 @@ class AgentGateway:
         """
         task_id = payload.get("task_id", "")
         hostname = payload.get("hostname", "")
+        store = get_vulnscan_store()
+        task = await store.get_task(task_id) if task_id else None
+        if task is not None and task.status == "cancelled":
+            logger.info(
+                "late_scan_result_ignored",
+                agent_id=agent_id,
+                task_id=task_id,
+            )
+            return
         raw_findings = payload.get("findings") or []
         findings: list[VulnFinding] = []
         for idx, f in enumerate(raw_findings):
@@ -302,7 +345,7 @@ class AgentGateway:
                 is_final=payload.get("is_final", False),
                 ts=payload.get("ts") or datetime.now(UTC).isoformat(),
             )
-            await get_vulnscan_store().save_result(result)
+            await store.save_result(result)
         except Exception as exc:
             logger.warning(
                 "scan_result_save_failed",

@@ -123,8 +123,35 @@ export async function getAgents() {
   return res.data as { items: Host[] }
 }
 
-export async function deleteHost(agentId: string, _force?: boolean) {
-  const res = await api.delete(`/agents/${agentId}`)
+export async function upgradeAgent(agentId: string, version?: string | null) {
+  const res = await api.post(`/agents/${agentId}/upgrade`, version ? { version } : {})
+  return res.data as {
+    status: string
+    version: string
+    delivered: boolean
+    binary_path: string
+  }
+}
+
+export interface AgentUpgradeStatus {
+  agent_id: string
+  upgrade: {
+    state: string
+    target_version?: string
+    current_version?: string
+    message?: string
+    error?: string
+    updated_at?: string
+  }
+}
+
+export async function getAgentUpgradeStatus(agentId: string) {
+  const res = await api.get(`/agents/${agentId}/upgrade`)
+  return res.data as AgentUpgradeStatus
+}
+
+export async function deleteHost(agentId: string, purge: boolean = false) {
+  const res = await api.delete(`/agents/${agentId}`, { params: purge ? { purge: true } : undefined })
   return res.data
 }
 
@@ -367,6 +394,11 @@ export async function createScanTask(req: CreateScanTaskRequest, sync = false) {
   // false keeps the existing async (P2) behavior.
   const res = await api.post("/vulnscan/tasks", req, { params: sync ? { sync: 1 } : undefined })
   return res.data as { task_id: string; status: string; engine: string }
+}
+
+export async function cancelScanTask(taskId: string) {
+  const res = await api.post(`/vulnscan/tasks/${taskId}/cancel`)
+  return res.data as { status: string; sent: number; failed: number }
 }
 
 export async function deleteScanTask(taskId: string) {

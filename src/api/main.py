@@ -89,7 +89,7 @@ async def _ensure_es_indices():
         logger.warning("es_index_setup_failed", error=str(exc))
 
 
-# TaskWorker 句柄（lifespan shutdown 时需要停止）
+# TaskWorker 鍙ユ焺锛坙ifespan shutdown 鏃堕渶瑕佸仠姝級
 _task_worker_handle = None
 
 
@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
         logger.info("pg_schema_initialized")
     except Exception as exc:
         logger.warning("pg_schema_init_failed", error=str(exc))
-    # Nacos 配置中心：拉取业务配置注入 env，env 优先级最高（敏感配置不走 Nacos）
+    # Nacos 閰嶇疆涓績锛氭媺鍙栦笟鍔￠厤缃敞鍏?env锛宔nv 浼樺厛绾ф渶楂橈紙鏁忔劅閰嶇疆涓嶈蛋 Nacos锛?
     from src.common.config.settings import load_nacos_settings
 
     await load_nacos_settings()
@@ -114,7 +114,21 @@ async def lifespan(app: FastAPI):
 
     start_background_tasks()
 
-    # 启动 Vulnscan TaskWorker（消费 Redis Stream 异步扫描任务）
+    # P1 (F4) -- subscribe to cross-worker revocation events so token revoke
+    # also tears down any WS held by THIS worker.
+    revocation_task: asyncio.Task | None = None
+    try:
+        from src.agents.revoke import listen_for_revocations
+        from src.agents.ws_gateway import get_agent_gateway
+
+        async def _drop(agent_id: str) -> None:
+            await get_agent_gateway().drop_revoked_connection(agent_id)
+
+        revocation_task = asyncio.create_task(listen_for_revocations(_drop))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("revocation_listener_failed", error=str(exc))
+
+    # 鍚姩 Vulnscan TaskWorker锛堟秷璐?Redis Stream 寮傛鎵弿浠诲姟锛?
     global _task_worker_handle
     import os as _os
     if not _os.environ.get("DISABLE_TASK_WORKER"):
@@ -128,7 +142,7 @@ async def lifespan(app: FastAPI):
             logger.warning("vulnscan_task_worker_start_failed", error=str(exc))
 
     yield
-    # Shutdown: 先停 TaskWorker，再停 Nacos 监听 + 关闭异步单例
+    # Shutdown: 鍏堝仠 TaskWorker锛屽啀鍋?Nacos 鐩戝惉 + 鍏抽棴寮傛鍗曚緥
     if _task_worker_handle is not None:
         try:
             await _task_worker_handle.stop(timeout=5.0)
@@ -138,6 +152,15 @@ async def lifespan(app: FastAPI):
     from src.common.config.nacos_loader import stop_nacos_listener
 
     stop_nacos_listener()
+
+    if revocation_task is not None:
+        revocation_task.cancel()
+        try:
+            await revocation_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("revocation_listener_shutdown_failed", error=str(exc))
     from src.agents.scheduler import stop_background_tasks
     from src.agents.store import get_vulnscan_store
     from src.api.events_bus import get_event_bus
@@ -220,11 +243,11 @@ async def submit_event(
 async def agents_ws(websocket: WebSocket):
     """WebSocket endpoint for agent connections.
 
-    agent 端把 token 放在 Authorization: Bearer header（P1-GO-4，避免 token
-    落 URL/proxy 日志），后端需优先读 header；回退 query token 兼容旧 agent。
+    agent 绔妸 token 鏀惧湪 Authorization: Bearer header锛圥1-GO-4锛岄伩鍏?token
+    钀?URL/proxy 鏃ュ織锛夛紝鍚庣闇€浼樺厛璇?header锛涘洖閫€ query token 鍏煎鏃?agent銆?
     """
     agent_id = websocket.query_params.get("agent_id", "")
-    # 优先 Authorization header，回退 query token
+    # 浼樺厛 Authorization header锛屽洖閫€ query token
     token = ""
     auth_header = websocket.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):

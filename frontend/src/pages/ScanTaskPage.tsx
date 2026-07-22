@@ -19,6 +19,24 @@ export default function ScanTaskPage() {
 
   // mount 时默认在 tasks tab，自动加载任务列表
   useEffect(() => { fetchTasks() }, [])
+  // P1-UX (2026-07-22): dialog-created tasks set sessionStorage so we
+  // refresh the list automatically when the operator returns to this tab.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "secagent:task-created" && e.newValue) fetchTasks()
+    }
+    const last = (() => {
+      try { return sessionStorage.getItem("secagent:task-created") } catch { return null }
+    })()
+    if (last) {
+      // also fire on initial mount if a recent task-create event was set
+      // in this tab within the last 30s
+      const ts = Number(last)
+      if (Number.isFinite(ts) && Date.now() - ts < 30000) fetchTasks()
+    }
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
+  }, [])
 
   const handleSubmit = async (source: string, extra?: any) => {
     setSubmitting(true)

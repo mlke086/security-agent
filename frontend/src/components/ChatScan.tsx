@@ -49,6 +49,18 @@ interface ScanIntentData {
   engine?: string
   resource_limit?: Record<string, unknown>
   schedule?: string | null
+  // nuclei-specific knobs (only used when engine === 'nuclei')
+  nuclei_severity?: string[]
+  nuclei_tags?: string[]
+  nuclei_templates?: string[]
+  nuclei_timeout_sec?: number
+}
+
+interface NucleiOptions {
+  nuclei_severity: string[]
+  nuclei_tags: string[]
+  nuclei_templates: string
+  nuclei_timeout_sec: number
 }
 
 const ROUTE_LABEL: Record<ChatRoute, { text: string; cls: string }> = {
@@ -103,6 +115,141 @@ export default function ChatScan() {
     } catch { /* ignore */ }
   }, [])
 
+  // Refresh the conversation list after sending -- the backend fires
+  // an LLM-based title generator as soon as the second user turn lands,
+  // so we poll twice (1.5s + 4s) to catch the result without forcing
+  // the operator to refresh manually. Lightweight GET; no UI jank.
+  const titleTimer1 = useRef<number | null>(null)
+  const titleTimer2 = useRef<number | null>(null)
+  const clearPendingTitleRefresh = useCallback(() => {
+    if (titleTimer1.current) { window.clearTimeout(titleTimer1.current); titleTimer1.current = null }
+    if (titleTimer2.current) { window.clearTimeout(titleTimer2.current); titleTimer2.current = null }
+  }, [])
+  const scheduleTitleRefresh = useCallback(() => {
+    clearPendingTitleRefresh()
+    titleTimer1.current = window.setTimeout(() => { refreshList() }, 1500)
+    titleTimer2.current = window.setTimeout(() => { refreshList() }, 4000)
+  }, [clearPendingTitleRefresh, refreshList])
+
+  const handleConfirmScan = useCallback(
+    async (intent: ScanIntentData, nuclei: NucleiOptions, sync: boolean) => {
+      if (!intent) return
+      setExecuting(true)
+      try {
+        const body: any = {
+          source: "dialog",
+          intent_text: messages
+            .filter((m) => m.role === "user")
+            .map((m) => m.content)
+            .join("\n"),
+          targets: intent.targets || [],
+          modules:
+            intent.modules && intent.modules.length
+              ? intent.modules
+              : ["sys_vuln", "baseline"],
+          engine: intent.engine || "matcher",
+        }
+        // Forward nuclei knobs when the engine wants them. The backend
+        // ignores them for engine=='matcher', so it's safe to always send.
+        if ((intent.engine || "matcher") === "nuclei") {
+          body.nuclei_severity = nuclei.nuclei_severity || []
+          body.nuclei_tags = nuclei.nuclei_tags || []
+          body.nuclei_templates = (nuclei.nuclei_templates || "")
+            .split(",")
+            .map((s: string) => s.trim())
+            .filter(Boolean)
+          body.nuclei_timeout_sec = Number(nuclei.nuclei_timeout_sec) || 0
+        }
+        // Persist this turn to the scan conversation (keeps history in
+        // sync with the sidebar list).
+        try {
+          await chatConversation(activeId!, body.intent_text, modelId, false)
+        } catch { /* best-effort */ }
+        // sync=true -> backend runs the subgraph inline (writes ES before
+        // returning, so /scan-monitor and /scan task list see the record
+        // immediately). sync=false -> enqueues to Redis Stream; needs a
+        // running TaskWorker to materialize. We default to sync=true so
+        // chat-created tasks don't disappear from the list when the
+        // worker is offline (operator-visible bug we hit before).
+        const task = await createScanTask(body, sync)
+        message.success("扫描任务已创建，正在跳转监控页…")
+        // Tell the /scan task list to refresh next time it mounts; the
+        // listener lives in ScanTaskPage.
+        try { sessionStorage.setItem("secagent:task-created", String(Date.now())) } catch {}
+        navigate(`/scan-monitor/${task.task_id}`)
+      } catch (e: any) {
+        message.error(e?.response?.data?.detail || e?.message || "创建扫描任务失败")
+      } finally {
+        setExecuting(false)
+      }
+    },
+    [activeId, messages, modelId, navigate],
+  )
+
+  const handleSend = useCallback(async (presetText?: string) => {
+    const text = (presetText ?? input).trim()
+    if (!text) return
+    if (!activeId) {
+      message.warning("请先点击左上角「新建对话」")
+      return
+    }
+
+    const userMsg: ChatMessageEx = {
+      role: "user", content: text, ts: new Date().toISOString(),
+    }
+    const pendingAssistant: ChatMessageEx = {
+      role: "assistant", content: "", ts: new Date().toISOString(), pending: true,
+    }
+    setMessages((prev) => [...prev, userMsg, pendingAssistant])
+    setInput("")
+    setSending(true)
+    try {
+      // 关键修复：把对话历史一并传给后端，让 LLM 在多轮对话中能正确路由
+      const res = await chatAssistant(activeId, text, modelId)
+      setMessages((prev) => {
+        const next = [...prev]
+        const idx = next.findIndex((m) => m === pendingAssistant || (m.pending && m.role === "assistant"))
+        const finalMsg: ChatMessageEx = {
+          role: "assistant",
+          content: res.reply,
+          ts: new Date().toISOString(),
+          route: res.intent,
+          sources: res.sources,
+          intent: res.intent === "scan" ? parseIntentFromSources(res.sources) : null,
+        }
+        if (idx >= 0) next[idx] = finalMsg
+        else next.push(finalMsg)
+        return next
+      })
+      if (res.intent === "scan" && res.sources && res.sources.length > 0) {
+        message.success("已识别扫描意图，点下方卡片「执行扫描」即可创建任务")
+      }
+      scheduleTitleRefresh()
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || e?.message || "发送失败"
+      setMessages((prev) => {
+        const next = [...prev]
+        const idx = next.findIndex((m) => m === pendingAssistant || (m.pending && m.role === "assistant"))
+        if (idx >= 0) {
+          next[idx] = {
+            role: "assistant", content: detail,
+            ts: new Date().toISOString(), error: detail,
+          }
+        }
+        return next
+      })
+      message.error(detail)
+    } finally {
+      setSending(false)
+      inputRef.current?.focus()
+    }
+  }, [activeId, input, modelId])
+
+  // Clean up title refresh timers on unmount.
+  useEffect(() => () => clearPendingTitleRefresh(), [clearPendingTitleRefresh])
+
+
+
   const handleNew = useCallback(async () => {
     try {
       const conv = await createConversation()
@@ -148,91 +295,6 @@ export default function ChatScan() {
       try { await updateConversation(activeId, { model_id: id }) } catch { /* ignore */ }
     }
   }, [activeId])
-
-  const handleSend = useCallback(async (presetText?: string) => {
-    const text = (presetText ?? input).trim()
-    if (!text) return
-    if (!activeId) {
-      message.warning("请先点击左上角「新建对话」")
-      return
-    }
-
-    const userMsg: ChatMessageEx = {
-      role: "user", content: text, ts: new Date().toISOString(),
-    }
-    const pendingAssistant: ChatMessageEx = {
-      role: "assistant", content: "", ts: new Date().toISOString(), pending: true,
-    }
-    setMessages((prev) => [...prev, userMsg, pendingAssistant])
-    setInput("")
-    setSending(true)
-    try {
-      // 关键修复：把对话历史一并传给后端，让 LLM 在多轮对话中能正确路由
-      const res = await chatAssistant(activeId, text, modelId)
-      setMessages((prev) => {
-        const next = [...prev]
-        const idx = next.findIndex((m) => m === pendingAssistant || (m.pending && m.role === "assistant"))
-        const finalMsg: ChatMessageEx = {
-          role: "assistant",
-          content: res.reply,
-          ts: new Date().toISOString(),
-          route: res.intent,
-          sources: res.sources,
-          intent: res.intent === "scan" ? parseIntentFromSources(res.sources) : null,
-        }
-        if (idx >= 0) next[idx] = finalMsg
-        else next.push(finalMsg)
-        return next
-      })
-      if (res.intent === "scan" && res.sources && res.sources.length > 0) {
-        message.success("已识别扫描意图，点下方卡片「执行扫描」即可创建任务")
-      }
-    } catch (e: any) {
-      const detail = e?.response?.data?.detail || e?.message || "发送失败"
-      setMessages((prev) => {
-        const next = [...prev]
-        const idx = next.findIndex((m) => m === pendingAssistant || (m.pending && m.role === "assistant"))
-        if (idx >= 0) {
-          next[idx] = {
-            role: "assistant", content: detail,
-            ts: new Date().toISOString(), error: detail,
-          }
-        }
-        return next
-      })
-      message.error(detail)
-    } finally {
-      setSending(false)
-      inputRef.current?.focus()
-    }
-  }, [activeId, input, modelId])
-
-  const handleConfirmScan = useCallback(async (intent: ScanIntentData) => {
-    if (!intent) return
-    setExecuting(true)
-    try {
-      const body = {
-        source: "dialog",
-        intent_text: messages.filter((m) => m.role === "user").map((m) => m.content).join("\n"),
-        targets: intent.targets || [],
-        modules: (intent.modules && intent.modules.length) ? intent.modules : ["sys_vuln", "baseline"],
-        engine: intent.engine || "matcher",
-      }
-      // Persist this turn to the scan conversation (keeps history in sync
-      // with the sidebar list). The actual task creation goes through the
-      // /vulnscan/tasks endpoint below.
-      try {
-        await chatConversation(activeId!, body.intent_text, modelId, false)
-      } catch { /* best-effort */ }
-      const task = await createScanTask(body)
-      message.success("扫描任务已创建，正在跳转监控页…")
-      navigate(`/scan-monitor/${task.task_id}`)
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || e?.message || "创建扫描任务失败")
-    } finally {
-      setExecuting(false)
-    }
-  }, [activeId, messages, modelId, navigate])
 
   const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -412,7 +474,7 @@ function MessageRow({
   msg, onConfirmScan, executing,
 }: {
   msg: ChatMessageEx
-  onConfirmScan: (intent: ScanIntentData) => void
+  onConfirmScan: (intent: ScanIntentData, nuclei: NucleiOptions, sync: boolean) => void
   executing: boolean
 }) {
   const isUser = msg.role === "user"
@@ -453,12 +515,41 @@ function MessageRow({
 }
 
 // ── 扫描意图卡片 ────────────────────────────────────────
+const NUCLEI_SEVERITY_OPTIONS = [
+  { label: "critical", value: "critical" },
+  { label: "high", value: "high" },
+  { label: "medium", value: "medium" },
+  { label: "low", value: "low" },
+  { label: "info", value: "info" },
+]
+
+const NUCLEI_TAGS_OPTIONS = [
+  { label: "rce", value: "rce" },
+  { label: "auth-bypass", value: "auth-bypass" },
+  { label: "sqli", value: "sqli" },
+  { label: "exposure", value: "exposure" },
+]
+
 function IntentCard({
   intent, onConfirm, disabled,
-}: { intent: ScanIntentData; onConfirm: (i: ScanIntentData) => void; disabled: boolean }) {
+}: {
+  intent: ScanIntentData
+  onConfirm: (i: ScanIntentData, nuclei: NucleiOptions, sync: boolean) => void
+  disabled: boolean
+}) {
   const targets = intent.targets?.length ? intent.targets : ["（未指定，请在对话中补充）"]
   const modules = intent.modules?.length ? intent.modules : ["sys_vuln", "baseline"]
   const engine = intent.engine || "matcher"
+  const showNuclei = engine === "nuclei"
+  const [nuclei, setNuclei] = useState<NucleiOptions>({
+    nuclei_severity: intent.nuclei_severity || [],
+    nuclei_tags: intent.nuclei_tags || [],
+    nuclei_templates: (intent.nuclei_templates || []).join(", "),
+    nuclei_timeout_sec: intent.nuclei_timeout_sec || 0,
+  })
+  const [sync, setSync] = useState(true)
+  const [advanced, setAdvanced] = useState(false)
+  const canConfirm = (intent.targets?.length ?? 0) > 0
   return (
     <div className="intent-card">
       <h4><ThunderboltOutlined /> 已识别扫描意图</h4>
@@ -474,27 +565,92 @@ function IntentCard({
         <span className="label">引擎：</span>
         <span className="value">{engine}</span>
       </div>
+      {showNuclei && (
+        <div style={{ marginTop: 10 }}>
+          <button
+            type="button"
+            className="intent-advanced-toggle"
+            onClick={() => setAdvanced((v) => !v)}
+          >
+            {advanced ? "收起 nuclei 高级选项" : "展开 nuclei 高级选项"}
+          </button>
+          {advanced && (
+            <div className="intent-nuclei-grid">
+              <label>
+                <span>严重等级</span>
+                <Select
+                  mode="multiple"
+                  size="small"
+                  style={{ width: "100%" }}
+                  value={nuclei.nuclei_severity}
+                  onChange={(v) => setNuclei((s) => ({ ...s, nuclei_severity: v }))}
+                  options={NUCLEI_SEVERITY_OPTIONS}
+                  placeholder="留空 = 全部"
+                />
+              </label>
+              <label>
+                <span>标签</span>
+                <Select
+                  mode="tags"
+                  size="small"
+                  style={{ width: "100%" }}
+                  value={nuclei.nuclei_tags}
+                  onChange={(v) => setNuclei((s) => ({ ...s, nuclei_tags: v }))}
+                  options={NUCLEI_TAGS_OPTIONS}
+                  placeholder="如 rce, auth-bypass"
+                />
+              </label>
+              <label>
+                <span>模板 ID 列表</span>
+                <Input
+                  size="small"
+                  value={nuclei.nuclei_templates}
+                  onChange={(e) => setNuclei((s) => ({ ...s, nuclei_templates: e.target.value }))}
+                  placeholder="cves/2024/CVE-2024-1234, exposures/..."
+                />
+              </label>
+              <label>
+                <span>超时 (秒)</span>
+                <Input
+                  size="small"
+                  type="number"
+                  value={nuclei.nuclei_timeout_sec}
+                  onChange={(e) => setNuclei((s) => ({ ...s, nuclei_timeout_sec: Number(e.target.value) || 0 }))}
+                  placeholder="0 = runner 默认 600s"
+                />
+              </label>
+            </div>
+          )}
+        </div>
+      )}
+      <div className="intent-sync-toggle">
+        <label>
+          <input
+            type="checkbox"
+            checked={sync}
+            onChange={(e) => setSync(e.target.checked)}
+          />
+          立即同步执行（默认开启，避免任务卡在队列）
+        </label>
+      </div>
       <div className="actions">
-        <button className="btn-discard" disabled={disabled}>
-          调整一下
-        </button>
+        <button className="btn-discard" disabled={disabled}>调整一下</button>
         <button
           className="btn-confirm"
-          disabled={disabled || (intent.targets?.length ?? 0) === 0}
-          onClick={() => onConfirm(intent)}
+          disabled={disabled || !canConfirm}
+          onClick={() => onConfirm(intent, nuclei, sync)}
         >
-          {disabled ? "创建中…" : "执行扫描"}
+          {disabled ? "创建中…" : (sync ? "立即执行" : "入队执行")}
         </button>
       </div>
-      {(!intent.targets || intent.targets.length === 0) && (
+      {!canConfirm && (
         <div style={{ marginTop: 8, fontSize: 12, color: "#d48806" }}>
-          ⚠ 还没识别到目标主机/组，请在对话里告诉我"扫描 XX 组"或"扫描 IP 1.2.3.4"
+          ⚠ 还没识别到目标主机/组，请在对话里告诉我“扫描 XX 组”或“扫描 IP 1.2.3.4”
         </div>
       )}
     </div>
   )
 }
-
 // ── 来源列表 ────────────────────────────────────────────
 function SourcesBlock({ sources }: { sources: ChatSource[] }) {
   if (!sources?.length) return null

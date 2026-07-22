@@ -363,14 +363,34 @@ async def register_enroll_token(agent_id: str, agent_token: str, ttl_days: int =
 
 
 async def validate_agent_token(agent_id: str, token: str) -> bool:
-    """Validate agent token against PG (for WS gateway auth)."""
+    """Validate agent token against PG (for WS gateway auth).
+
+    Logs the specific failure reason (no such agent / token mismatch /
+    token revoked) so the operator can tell the difference from the
+    server log instead of having to crack open psql."""
     from src.common.db.pg import get_pg_pool
 
     pool = await get_pg_pool()
     token_hash = hashlib.sha256(token.encode()).hexdigest()
+    # Distinguish the three failure modes -- the agent process just keeps
+    # retrying on a tight loop otherwise and there is no way to know
+    # whether it is pointing at the wrong host or the wrong token.
     row = await pool.fetchrow(
-        "SELECT 1 FROM agent_tokens WHERE agent_id = $1 AND token_hash = $2 AND revoked_at IS NULL",
+        "SELECT token_hash, revoked_at FROM agent_tokens WHERE agent_id = $1",
         agent_id,
-        token_hash,
     )
-    return row is not None
+    if row is None:
+        logger.warning("agent_auth_failed_no_such_agent", agent_id=agent_id)
+        return False
+    if row["revoked_at"] is not None:
+        logger.warning("agent_auth_failed_token_revoked", agent_id=agent_id)
+        return False
+    if row["token_hash"] != token_hash:
+        logger.warning(
+            "agent_auth_failed_token_mismatch",
+            agent_id=agent_id,
+            stored_hash_prefix=row["token_hash"][:8],
+            incoming_hash_prefix=token_hash[:8],
+        )
+        return False
+    return True

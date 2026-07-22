@@ -207,6 +207,7 @@ class VulnscanStore:
         group: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        exclude_decommissioned: bool = True,
     ) -> list[Host]:
         # PG primary
         try:
@@ -218,6 +219,10 @@ class VulnscanStore:
                     idx += 1
                     where.append(f"status=${idx}")
                     params.append(status)
+                elif exclude_decommissioned:
+                    # Default ON: hide soft-deleted hosts from the operator
+                    # view so deleting a host actually makes it disappear.
+                    where.append("status<>'decommissioned'")
                 if group:
                     idx += 1
                     where.append(f"group_name=${idx}")
@@ -253,6 +258,9 @@ class VulnscanStore:
         must = []
         if status:
             must.append({"term": {"status": status}})
+        elif exclude_decommissioned:
+            # Mirror the PG default -- hide decommissioned from operator view.
+            must.append({"bool": {"must_not": [{"term": {"status": "decommissioned"}}]}})
         if group:
             must.append({"term": {"group": group}})
         query = {"bool": {"must": must}} if must else {"match_all": {}}

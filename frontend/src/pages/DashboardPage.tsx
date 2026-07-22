@@ -1,9 +1,22 @@
 import { useEffect, useRef, useState } from "react"
-import { Card, Row, Col, Statistic, Typography, Spin, Empty } from "antd"
+import { Card, Row, Col, Statistic, Typography, Spin, Empty, Progress, Tag } from "antd"
 import { AlertOutlined, CheckCircleOutlined, ClockCircleOutlined, ThunderboltOutlined } from "@ant-design/icons"
-import { Pie, Column, Line } from "@ant-design/charts"
 import api, { getMetrics, getMetricsTimeline, getSseToken } from "../api/client"
 import type { Metrics, TimelinePoint } from "../types"
+
+// 结论/定级中文标签 + 颜色
+const VERDICT_LABEL: Record<string, string> = {
+  true_positive: "真阳性", false_positive: "假阳性", unknown: "未知", ignored: "已忽略",
+}
+const VERDICT_COLOR: Record<string, string> = {
+  true_positive: "#52c41a", false_positive: "#ff4d4f", unknown: "#faad14", ignored: "#d9d9d9",
+}
+const PRIORITY_LABEL: Record<string, string> = {
+  critical: "严重", high: "高危", medium: "中危", low: "低危", info: "提示",
+}
+const PRIORITY_COLOR: Record<string, string> = {
+  critical: "#cf1322", high: "#d4380d", medium: "#d4b106", low: "#389e0d", info: "#1677ff",
+}
 
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
@@ -21,26 +34,16 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchData()
-    // F2 (2026-07-21): exchange the long-lived JWT for a 60s scoped SSE
-    // token; reuse api.defaults.baseURL so reverse-proxy / k8s ingress
-    // still work. Without this, the long-lived JWT leaks into nginx
-    // access logs and browser history, and the EventSource keeps
-    // reconnecting forever once the JWT expires (no refresh path).
-    if (!localStorage.getItem("token")) return  // P2-FE-07 guard
+    if (!localStorage.getItem("token")) return
     let cancelled = false
     ;(async () => {
       try {
         const shortToken = await getSseToken("metrics")
         if (cancelled) return
         const base = (api.defaults.baseURL || "").replace(/\/+$/, "")
-        // base 已含 /api/v1，只拼 /metrics/stream（不能重复 /api/v1，否则 404
-        // 致 EventSource 无限重连，占满浏览器同域连接数致所有请求阻塞）。
         const source = new EventSource(`${base}/metrics/stream?token=${shortToken}`)
-        // 立即存 ref，确保 cleanup（即便快速离开页面）也能 close，避免泄漏。
         sseRef.current = source
         source.onmessage = (e) => { if (e.data && e.data !== ": heartbeat") fetchData() }
-        // 防止 EventSource 重连风暴：404/网络错误后 readyState=CLOSED，
-        // 浏览器会无限重连占满同域连接数（6个）致所有请求阻塞。CLOSED 时主动 close。
         source.onerror = () => {
           if (source && source.readyState === EventSource.CLOSED) {
             source.close()
@@ -57,9 +60,12 @@ export default function DashboardPage() {
 
   if (loading) return <Spin size="large" style={{ display: "block", margin: "100px auto" }} />
 
-  const verdictData = Object.entries(metrics?.by_verdict || {}).map(([k, v]) => ({ type: k, value: v }))
-  const priorityData = Object.entries(metrics?.by_priority || {}).map(([k, v]) => ({ type: k, value: v }))
+  const verdictData = Object.entries(metrics?.by_verdict || {}).map(([k, v]) => ({ type: k, value: v as number }))
+  const priorityData = Object.entries(metrics?.by_priority || {}).map(([k, v]) => ({ type: k, value: v as number }))
   const total = metrics?.total_events || 0
+
+  // 趋势最大值（用于 Progress 比例）
+  const timelineMax = timeline.length > 0 ? Math.max(...timeline.map((t) => t.total || 0), 1) : 1
 
   return (
     <div>
@@ -75,24 +81,42 @@ export default function DashboardPage() {
       <Row gutter={[16, 16]}>
         <Col span={12}>
           <Card title="结论分布" size="small">
-            {verdictData.length === 0 ? <Empty description="暂无数据" /> : (
-              <Pie {...{
-                data: verdictData, angleField: "value", colorField: "type", radius: 0.8,
-                label: { type: "outer", content: "{name} ({percentage})" },
-                interactions: [{ type: "element-active" }],
-                height: 280,
-              }} />
+            {verdictData.length === 0 ? <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
+              <div style={{ padding: "12px 0" }}>
+                {verdictData.map((d) => {
+                  const pct = total > 0 ? Math.round((d.value / total) * 100) : 0
+                  return (
+                    <div key={d.type} style={{ marginBottom: 16 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span><Tag color={VERDICT_COLOR[d.type] || "default"}>{VERDICT_LABEL[d.type] || d.type}</Tag></span>
+                        <span style={{ color: "#999" }}>{d.value} ({pct}%)</span>
+                      </div>
+                      <Progress percent={pct} strokeColor={VERDICT_COLOR[d.type] || "#1677ff"} showInfo={false} />
+                    </div>
+                  )
+                })}
+              </div>
             )}
           </Card>
         </Col>
         <Col span={12}>
           <Card title="定级分布" size="small">
-            {priorityData.length === 0 ? <Empty description="暂无数据" /> : (
-              <Column {...{
-                data: priorityData, xField: "type", yField: "value",
-                color: ({ type }: any) => type === "high" ? "#ff4d4f" : type === "medium" ? "#faad14" : "#52c41a",
-                height: 280,
-              }} />
+            {priorityData.length === 0 ? <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
+              <div style={{ padding: "12px 0" }}>
+                {priorityData.map((d) => {
+                  const maxVal = Math.max(...priorityData.map((x) => x.value), 1)
+                  const pct = Math.round((d.value / maxVal) * 100)
+                  return (
+                    <div key={d.type} style={{ marginBottom: 16 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span><Tag color={PRIORITY_COLOR[d.type] || "default"}>{PRIORITY_LABEL[d.type] || d.type}</Tag></span>
+                        <span style={{ color: "#999" }}>{d.value}</span>
+                      </div>
+                      <Progress percent={pct} strokeColor={PRIORITY_COLOR[d.type] || "#1677ff"} showInfo={false} />
+                    </div>
+                  )
+                })}
+              </div>
             )}
           </Card>
         </Col>
@@ -101,12 +125,21 @@ export default function DashboardPage() {
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col span={24}>
           <Card title="事件趋势（按小时）" size="small">
-            {timeline.length === 0 ? <Empty description="暂无数据" /> : (
-              <Line {...{
-                data: timeline, xField: "time", yField: "total",
-                point: { size: 3, shape: "circle" },
-                height: 280,
-              }} />
+            {timeline.length === 0 ? <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
+              <div style={{ maxHeight: 280, overflow: "auto", padding: "8px 0" }}>
+                {timeline.slice().reverse().map((t, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6, fontSize: 13 }}>
+                    <span style={{ width: 120, color: "#999", flexShrink: 0 }}>{t.time}</span>
+                    <Progress
+                      percent={Math.round(((t.total || 0) / timelineMax) * 100)}
+                      strokeColor="#1677ff"
+                      showInfo={false}
+                      style={{ flex: 1, marginRight: 0 }}
+                    />
+                    <span style={{ width: 40, textAlign: "right", flexShrink: 0 }}>{t.total}</span>
+                  </div>
+                ))}
+              </div>
             )}
           </Card>
         </Col>

@@ -412,10 +412,19 @@ async def api_console_url(request: Request) -> dict:
 async def api_list_hosts(
     status_filter: str | None = Query(None, alias="status"),
     group: str | None = Query(None),
+    include_decommissioned: bool = Query(
+        False,
+        description="True=show soft-deleted hosts too (used by the admin "
+        "管理视图); False=hide them so deletion actually removes the row from the list",
+    ),
     current_user=Depends(require_role("admin", "analyst")),
 ):
-    """List enrolled hosts."""
-    hosts = await list_hosts(status_filter, group)
+    """List enrolled hosts.
+
+    By default ``decommissioned`` hosts are hidden -- clicking 删除 makes
+    the host disappear from the table. The admin-only 已下线主机 view
+    passes ``include_decommissioned=true`` to see the full roster."""
+    hosts = await list_hosts(status_filter, group, include_decommissioned=include_decommissioned)
     return {"items": [h.model_dump() for h in hosts]}
 
 
@@ -500,6 +509,55 @@ async def api_update_host(
     return {"status": "ok", "host": host.model_dump()}
 
 
+@router.get("/{agent_id}/token-status")
+async def api_agent_token_status(
+    agent_id: str,
+    current_user=Depends(require_role("admin")),
+):
+    """Diagnostic: does PG have an agent_token for this agent, and is it
+    currently active? Use this when an agent keeps failing the WS handshake
+    with 403 -- the three possible outcomes map 1:1 to the agent_auth_*
+    warnings emitted by enroll.validate_agent_token.
+
+    Returns:
+      { status: "missing" | "revoked" | "active",
+        agent_id: ...,
+        token_hash_prefix: "ab12cd34" | null,
+        issued_at: ISO string | null,
+        revoked_at: ISO string | null }
+    """
+    from src.common.db.pg import get_pg_pool
+
+    pool = await get_pg_pool()
+    row = await pool.fetchrow(
+        "SELECT token_hash, issued_at, revoked_at FROM agent_tokens WHERE agent_id = $1",
+        agent_id,
+    )
+    if row is None:
+        return {
+            "status": "missing",
+            "agent_id": agent_id,
+            "token_hash_prefix": None,
+            "issued_at": None,
+            "revoked_at": None,
+        }
+    if row["revoked_at"] is not None:
+        return {
+            "status": "revoked",
+            "agent_id": agent_id,
+            "token_hash_prefix": row["token_hash"][:8],
+            "issued_at": row["issued_at"].isoformat() if row["issued_at"] else None,
+            "revoked_at": row["revoked_at"].isoformat(),
+        }
+    return {
+        "status": "active",
+        "agent_id": agent_id,
+        "token_hash_prefix": row["token_hash"][:8],
+        "issued_at": row["issued_at"].isoformat() if row["issued_at"] else None,
+        "revoked_at": None,
+    }
+
+
 @router.get("/{agent_id}", response_model=Host)
 async def api_get_host(
     agent_id: str,
@@ -512,7 +570,6 @@ async def api_get_host(
     return host
 
 
-@router.delete("/{agent_id}")
 @router.delete("/{agent_id}")
 async def api_delete_host(
     agent_id: str,

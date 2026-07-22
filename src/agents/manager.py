@@ -86,9 +86,21 @@ async def mark_offline_expired() -> int:
     return count
 
 
-async def list_hosts(status_filter: str | None = None, group: str | None = None) -> list[Host]:
-    """List hosts with optional filters."""
-    return await get_vulnscan_store().list_hosts(status=status_filter, group=group)
+async def list_hosts(
+    status_filter: str | None = None,
+    group: str | None = None,
+    include_decommissioned: bool = False,
+) -> list[Host]:
+    """List hosts with optional filters.
+
+    ``include_decommissioned=False`` (default) hides soft-deleted hosts from
+    the operator view; pass True to see the full roster (used by the
+    admin-only "已下线主机" management view)."""
+    return await get_vulnscan_store().list_hosts(
+        status=status_filter,
+        group=group,
+        exclude_decommissioned=not include_decommissioned,
+    )
 
 
 async def get_host(agent_id: str) -> Host | None:

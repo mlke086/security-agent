@@ -360,8 +360,12 @@ export interface CreateScanTaskRequest {
   nuclei_timeout_sec?: number
 }
 
-export async function createScanTask(req: CreateScanTaskRequest) {
-  const res = await api.post("/vulnscan/tasks", req)
+export async function createScanTask(req: CreateScanTaskRequest, sync = false) {
+  // sync=true bypasses the Redis Stream queue and runs the subgraph inline
+  // inside the request -- safer when the TaskWorker is offline, slower on
+  // big targets because the HTTP connection blocks until done. Default
+  // false keeps the existing async (P2) behavior.
+  const res = await api.post("/vulnscan/tasks", req, { params: sync ? { sync: 1 } : undefined })
   return res.data as { task_id: string; status: string; engine: string }
 }
 
@@ -383,7 +387,11 @@ export interface HostGroup {
   origin?: "managed" | "legacy"
 }
 
-export async function listHosts(params?: { group?: string; status?: string }) {
+export async function listHosts(params?: {
+  group?: string
+  status?: string
+  include_decommissioned?: boolean
+}) {
   const res = await api.get("/agents", { params })
   return res.data as { items: Host[] }
 }
@@ -404,7 +412,7 @@ export async function deleteGroup(name: string) {
 }
 
 export async function getInstallScript(token: string, os: "linux" | "windows" = "linux") {
-  const res = await api.get("/agents/install-script", { params: { token, os } })
+  const res = await api.get("/agents/install", { params: { token, os } })
   return (res.data as any)?.script ?? (res.data as unknown as string)
 }
 

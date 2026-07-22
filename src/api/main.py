@@ -11,8 +11,10 @@ from src.api.auth.routes import require_role
 from src.api.routers.agents import router as agents_router
 from src.api.routers.chat import router as chat_router
 from src.api.routers.demo import router as demo_router
+from src.api.routers.models import router as models_router
 from src.api.routers.operations import router as operations_router
 from src.api.routers.rules import router as rules_router
+from src.api.routers.scan_chat import router as scan_chat_router
 from src.api.routers.stream import router as stream_router
 from src.api.routers.vulnscan import router as vulnscan_router
 from src.api.store import get_event_store
@@ -100,12 +102,18 @@ async def lifespan(app: FastAPI):
         logger.info("pg_schema_initialized")
     except Exception as exc:
         logger.warning("pg_schema_init_failed", error=str(exc))
+    # Nacos 配置中心：拉取业务配置注入 env，env 优先级最高（敏感配置不走 Nacos）
+    from src.common.config.settings import load_nacos_settings
+
+    await load_nacos_settings()
     from src.agents.scheduler import start_background_tasks
 
     start_background_tasks()
     yield
-    # Close async singletons so redis/ES connections don't leak or trigger
-    # "Event loop is closed" warnings on shutdown.
+    # Shutdown: 停 Nacos 监听 + 关闭异步单例
+    from src.common.config.nacos_loader import stop_nacos_listener
+
+    stop_nacos_listener()
     from src.agents.scheduler import stop_background_tasks
     from src.agents.store import get_vulnscan_store
     from src.api.events_bus import get_event_bus
@@ -186,9 +194,19 @@ async def submit_event(
 
 @app.websocket("/api/v1/agents/ws")
 async def agents_ws(websocket: WebSocket):
-    """WebSocket endpoint for agent connections."""
+    """WebSocket endpoint for agent connections.
+
+    agent 端把 token 放在 Authorization: Bearer header（P1-GO-4，避免 token
+    落 URL/proxy 日志），后端需优先读 header；回退 query token 兼容旧 agent。
+    """
     agent_id = websocket.query_params.get("agent_id", "")
-    token = websocket.query_params.get("token", "")
+    # 优先 Authorization header，回退 query token
+    token = ""
+    auth_header = websocket.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+    if not token:
+        token = websocket.query_params.get("token", "")
     gateway = get_agent_gateway()
     if not await gateway.authenticate(agent_id, token):
         await websocket.close(code=1008, reason="Authentication failed")
@@ -217,7 +235,9 @@ app.include_router(demo_router)
 app.include_router(agents_router)
 app.include_router(vulnscan_router)
 app.include_router(rules_router)
+app.include_router(models_router)
 app.include_router(chat_router)
+app.include_router(scan_chat_router)
 app.include_router(stream_router)
 
 if __name__ == "__main__":

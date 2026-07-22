@@ -132,6 +132,15 @@ class Settings(BaseSettings):
     default_viewer_password: str = ""
     default_responder_password: str = ""
 
+    # === Nacos 配置中心 ===
+    # Nacos 自身连接信息（环境变量，不进 Nacos -- 鸡生蛋问题）
+    nacos_server: str = ""  # 如 http://192.168.80.101:8848
+    nacos_data_id: str = "security-agent.yaml"
+    nacos_group: str = "security"
+    nacos_namespace: str = "prod"
+    nacos_username: str = "nacos"
+    nacos_password: str = "nacos"
+
     @model_validator(mode="after")
     def _validate_api_secret_key(self) -> "Settings":
         if len(self.api_secret_key) < 16:
@@ -146,7 +155,56 @@ _settings: Settings | None = None
 
 
 def get_settings() -> Settings:
+    """返回单例 Settings。
+
+    加载顺序：代码默认值 <- .env <- Nacos(注入env) <- 容器环境变量(最高优先级)
+    Nacos 配置在 load_nacos_settings() 后注入 env 并重建单例。
+    """
     global _settings
     if _settings is None:
         _settings = Settings()
     return _settings
+
+
+def reload_settings() -> None:
+    """重建 Settings 单例（Nacos 配置变更热更新时调用）。"""
+    global _settings
+    _settings = Settings()
+
+
+async def load_nacos_settings() -> None:
+    """从 Nacos 拉取全量配置注入 env，然后重建 Settings 单例。
+
+    在 FastAPI lifespan 中调用（异步环境）。如果 nacos_server 未配置则跳过
+    （使用 .env 文件 + 代码默认值）。
+    容器显式注入的环境变量优先级最高，不被 Nacos 覆盖。
+    """
+    global _settings
+    # 先用当前 settings 读 nacos 连接信息
+    s = _settings or Settings()
+    if not s.nacos_server:
+        return  # 未配置 Nacos，用 .env + 默认值
+
+    from src.common.config.nacos_loader import (
+        apply_nacos_overrides,
+        fetch_nacos_config,
+        start_nacos_listener,
+    )
+
+    nacos_config = await fetch_nacos_config(
+        server=s.nacos_server,
+        data_id=s.nacos_data_id,
+        group=s.nacos_group,
+        namespace=s.nacos_namespace,
+        username=s.nacos_username,
+        password=s.nacos_password,
+    )
+    if nacos_config:
+        apply_nacos_overrides(nacos_config)
+        # 重建 Settings（env 已被 Nacos 填充，容器显式 env 保留最高优先级）
+        reload_settings()
+        from src.common.logging.logger import get_logger as _gl
+
+        _gl(__name__).info("settings_reloaded_from_nacos", keys=len(nacos_config))
+        # 启动配置变更监听（热更新）
+        await start_nacos_listener()

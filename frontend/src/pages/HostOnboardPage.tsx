@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty } from "antd"
+import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty, Switch } from "antd"
 import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined } from "@ant-design/icons"
 import type { Host, HostGroup } from "../api/client"
 import {
@@ -21,6 +21,7 @@ function getStatusColor(status: string) {
   switch (status) {
     case "online": return "green"
     case "offline": return "red"
+    case "decommissioned": return "default"  // gray -- render below in a muted style
     default: return "default"
   }
 }
@@ -53,6 +54,10 @@ export default function HostOnboardPage() {
   const [hostSearch, setHostSearch] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [groupForm] = Form.useForm()
+  // P1-UX (2026-07-22): default hides soft-deleted hosts so clicking
+  // 删除 actually makes them disappear. Operators can flip this on to
+  // see + physically purge old rows.
+  const [showDecommissioned, setShowDecommissioned] = useState(false)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(hostSearch.trim().toLowerCase()), 300)
@@ -72,17 +77,21 @@ export default function HostOnboardPage() {
   // empty until the operator clicks the Refresh button.
   useEffect(() => {
     let alive = true
-    listHosts()
+    listHosts({ include_decommissioned: showDecommissioned })
       .then((res) => { if (alive) setHosts(res.items) })
       .catch(() => { if (alive) message.error("加载主机列表失败") })
     fetchGroups()
     return () => { alive = false }
-  }, [])
+  }, [showDecommissioned])
 
   const refreshHostsData = async () => {
     setLoading(true)
     try {
-      const res = await listHosts(groupFilter ? { group: groupFilter } : undefined)
+      const res = await listHosts(
+        groupFilter
+          ? { group: groupFilter, include_decommissioned: showDecommissioned }
+          : { include_decommissioned: showDecommissioned },
+      )
       setHosts(res.items)
     }
     catch { message.error("加载主机列表失败") }
@@ -107,12 +116,12 @@ export default function HostOnboardPage() {
   useEffect(() => {
     let alive = true
     setLoading(true)
-    listHosts(groupFilter ? { group: groupFilter } : undefined)
+    listHosts(groupFilter ? { group: groupFilter, include_decommissioned: showDecommissioned } : { include_decommissioned: showDecommissioned })
       .then((res) => { if (alive) setHosts(res.items) })
       .catch(() => { if (alive) message.error("加载主机列表失败") })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [groupFilter])
+  }, [groupFilter, showDecommissioned])
 
   const handleCreateToken = async (values: { group?: string; ttl_hours: number; uses: number }) => {
     try {
@@ -327,6 +336,14 @@ export default function HostOnboardPage() {
           onChange={(e) => setHostSearch(e.target.value)}
           style={{ width: 240 }}
         />
+        <Tooltip title="勾选后会显示 status=已下线 的软删除主机，方便做物理删除">
+          <Switch
+            checked={showDecommissioned}
+            onChange={setShowDecommissioned}
+            checkedChildren="含已下线"
+            unCheckedChildren="含已下线"
+          />
+        </Tooltip>
         <Button icon={<TeamOutlined />} onClick={() => setGroupModalOpen(true)}>主机组管理</Button>
       </Space>
 
@@ -390,8 +407,29 @@ export default function HostOnboardPage() {
       </Card>
 
       <Card title={`主机列表 (${hosts.length})`}>
-        <Table dataSource={filteredHosts} columns={columns} rowKey="agent_id" loading={loading} pagination={{ pageSize: 20 }}
-          locale={{ emptyText: <div style={{ padding: 40 }}><CloudServerOutlined style={{ fontSize: 48, color: "#ccc" }} /><div style={{ marginTop: 16, color: "#999" }}>暂无纳管主机</div></div> }}
+        <Table
+          dataSource={filteredHosts}
+          columns={columns}
+          rowKey="agent_id"
+          loading={loading}
+          pagination={{ pageSize: 20 }}
+          rowClassName={(r: Host) => r.status === "decommissioned" ? "host-row-decommissioned" : ""}
+          locale={{
+            emptyText: showDecommissioned ? (
+              <div style={{ padding: 40 }}>
+                <CloudServerOutlined style={{ fontSize: 48, color: "#ccc" }} />
+                <div style={{ marginTop: 16, color: "#999" }}>暂无纳管主机（包括已下线）</div>
+              </div>
+            ) : (
+              <div style={{ padding: 40 }}>
+                <CloudServerOutlined style={{ fontSize: 48, color: "#ccc" }} />
+                <div style={{ marginTop: 16, color: "#999" }}>暂无纳管主机</div>
+                <div style={{ marginTop: 8, color: "#999", fontSize: 12 }}>
+                  勾选右上角『含已下线』可查看已下线主机
+                </div>
+              </div>
+            ),
+          }}
         />
       </Card>
 

@@ -2,6 +2,7 @@ package scan
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -107,63 +108,107 @@ func (m *Matcher) matchKernelVersion(rule RuleDef, item CollectedItem) (Finding,
 	}, true
 }
 
+// matchConfigCheck matches a baseline rule against a config_file CollectedItem.
+//
+// The item must carry the full file body in item.Data["content"] (see
+// collector.collectConfigFiles). We locate the right file by matching
+// rule.Check.File to item.Data["path"]; an empty Check.File makes the
+// matcher consider the item irrelevant (returns false) -- baseline rules
+// always carry an explicit file path.
+//
+// Algorithm:
+//  1. If rule.Check.File != item.Data["path"], this item is not for us.
+//  2. Compile rule.Check.Pattern; scan item.Data["content"] line by line,
+//     skipping blanks and full-line comments (lines whose first non-blank
+//     char is "#"). Capture the first matching line.
+//  3. If no line matched:
+//       - expect == ""  -> no finding (rule is informational)
+//       - expect != ""  -> finding: rule missing, expected <expect>
+//  4. If a line matched and expect == "" -> not a finding.
+//  5. If a line matched and expect != "" -> case-insensitive substring
+//     check; mismatch -> finding with the offending line as evidence.
 func (m *Matcher) matchConfigCheck(rule RuleDef, item CollectedItem) (Finding, bool) {
-	if item.Type != "password_policy" && item.Type != "file_perm" && item.Type != "log_config" && item.Type != "account" {
+	if item.Type != "config_file" {
 		return Finding{}, false
+	}
+	targetPath := rule.Check.File
+	if targetPath == "" || item.Data["path"] != targetPath {
+		return Finding{}, false
+	}
+	content := item.Data["content"]
+	if content == "" {
+		// File existed at collection time but is empty (or unreadable now).
+		// Treat it like "no matching line".
+		if rule.Check.Expect == "" {
+			return Finding{}, false
+		}
+		return Finding{
+			Category: rule.Category,
+			CVE:      rule.CVE,
+			Name:     rule.Name,
+			Severity: rule.Severity,
+			Evidence: fmt.Sprintf("%s: rule %q not found (expected %s)",
+				targetPath, rule.Check.Pattern, rule.Check.Expect),
+			Fix:      rule.Fix,
+		}, true
 	}
 
 	pattern := rule.Check.Pattern
 	expect := rule.Check.Expect
 
-	// For config checks, we check if the collected data matches the pattern
-	// If we're looking for a specific config key, check if it exists with expected value
-	dataKey := rule.Check.Name
-	if dataKey == "" {
-		// Use pattern to determine what we're looking for
-		dataKey = pattern
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		log.Printf("[matcher] invalid pattern %q in rule %s: %v",
+			pattern, rule.ID, err)
+		return Finding{}, false
 	}
 
-	value, exists := item.Data[dataKey]
-	if !exists {
-		// Try to find by pattern in all data fields
-		for k, v := range item.Data {
-			re, err := regexp.Compile(pattern)
-			if err != nil {
-				continue
-			}
-			if re.MatchString(k) || re.MatchString(v) {
-				value = v
-				exists = true
-				break
-			}
+	var matchedLine string
+	for _, raw := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		// Treat "  # comment" and "# comment" the same -- full-line comment.
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if re.MatchString(line) {
+			matchedLine = line
+			break
 		}
 	}
 
-	if !exists && expect != "" {
+	if matchedLine == "" {
+		if expect == "" {
+			return Finding{}, false
+		}
 		return Finding{
 			Category: rule.Category,
 			CVE:      rule.CVE,
 			Name:     rule.Name,
 			Severity: rule.Severity,
-			Evidence: fmt.Sprintf("Config %s not found (expected %s)", pattern, expect),
-			Fix:      rule.Fix,
-		}, true
-	}
-	// Config not found and no expectation set - skip (not a finding)
-
-	// Check if value matches expectation
-	if expect != "" && !strings.Contains(strings.ToLower(value), strings.ToLower(expect)) {
-		return Finding{
-			Category: rule.Category,
-			CVE:      rule.CVE,
-			Name:     rule.Name,
-			Severity: rule.Severity,
-			Evidence: fmt.Sprintf("Config %s=%s (expected %s)", dataKey, value, expect),
+			Evidence: fmt.Sprintf("%s: rule %q not found (expected %s)",
+				targetPath, pattern, expect),
 			Fix:      rule.Fix,
 		}, true
 	}
 
-	return Finding{}, false
+	if expect == "" {
+		return Finding{}, false
+	}
+	if strings.Contains(strings.ToLower(matchedLine), strings.ToLower(expect)) {
+		return Finding{}, false
+	}
+	return Finding{
+		Category: rule.Category,
+		CVE:      rule.CVE,
+		Name:     rule.Name,
+		Severity: rule.Severity,
+		Evidence: fmt.Sprintf("%s: %s (expected %s)",
+			targetPath, matchedLine, expect),
+		Fix:      rule.Fix,
+	}, true
 }
 
 // versionCompare compares two version strings with an operator.

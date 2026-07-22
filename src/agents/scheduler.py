@@ -1,6 +1,7 @@
 """Background periodic tasks: rules sync and offline host detection."""
+
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.common.config.settings import get_settings
 from src.common.logging.logger import get_logger
@@ -25,15 +26,20 @@ async def _rules_sync_loop() -> None:
 
     logger.info("rules_sync_scheduler_started", hour=hour, minute=minute)
     while True:
+        # P2-COMMON-01 (2026-07-20): use timedelta(days=1) so the loop survives
+        # month boundaries (datetime.replace(day=32) raises ValueError on
+        # Jan 31 / Mar 31 / etc). datetime.now() stays naive here because the
+        # cron fields are wall-clock; we compare like-for-like.
         now = datetime.now()
         next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if next_run <= now:
-            next_run = next_run.replace(day=next_run.day + 1)
+            next_run = next_run + timedelta(days=1)
         wait_sec = (next_run - now).total_seconds()
         await asyncio.sleep(wait_sec)
 
         try:
             from src.agents.rules_sync import sync_rules
+
             version = await sync_rules(source=settings.rules_sync_source)
             logger.info("scheduled_rules_sync_complete", version=version)
         except Exception as exc:
@@ -48,6 +54,7 @@ async def _offline_check_loop() -> None:
         await asyncio.sleep(interval)
         try:
             from src.agents.manager import mark_offline_expired
+
             count = await mark_offline_expired()
             if count > 0:
                 logger.info("offline_detected", count=count)

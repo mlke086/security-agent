@@ -63,22 +63,31 @@ def resolve_spans(spans: list[Span]) -> list[Span]:
     resolved: list[Span] = []
     last_end = -1
 
+    # P2-PRE-02 (2026-07-20): the original `last_end = span.end` after a
+    # replacement shrunk the cursor when a higher-priority span started
+    # INSIDE a previously accepted lower-priority one. That left the tail
+    # of the lower-priority span (e.g. the rest of a credential past a PII
+    # hit) unmasked. Now we only advance last_end when we strictly accept
+    # the new span (no overlap with the existing one); replacement leaves
+    # the cursor at the END of the existing span so subsequent spans still
+    # see the full coverage window.
     for span in sorted_by_start:
         if span.start >= last_end:
-            # No overlap — accept
+            # No overlap with the previous accepted span -- accept.
             resolved.append(span)
             last_end = span.end
         else:
-            # Overlap — keep the higher priority span (or longer if same priority)
+            # Overlap -- compare priorities and replace if the new one wins.
+            # Note: we do NOT update last_end here. The new span sits inside
+            # the previous one's range; later spans must still see the
+            # outer boundary so we don't lose coverage of the tail.
             last = resolved[-1]
             if span.rule.priority > last.rule.priority:
-                # New span has higher priority — replace
                 resolved[-1] = span
-                last_end = span.end
-            elif span.rule.priority == last.rule.priority and (span.end - span.start) > (last.end - last.start):
-                # Same priority but longer — replace
+            elif span.rule.priority == last.rule.priority and (span.end - span.start) > (
+                last.end - last.start
+            ):
                 resolved[-1] = span
-                last_end = span.end
             # else: keep the existing span
 
     return resolved

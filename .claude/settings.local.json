@@ -5,7 +5,13 @@
       "Bash(python3 -c ' *)",
       "Bash(pip install *)",
       "Bash(python3 *)",
-      "Bash(go env *)"
+      "Bash(go env *)",
+      "Bash(python -m ruff check src/agents/rules_sync.py src/api/routers/rules.py src/common/config/settings.py src/agents/manager.py src/api/routers/agents.py)",
+      "Bash(python -m mypy src/agents/rules_sync.py src/api/routers/rules.py)",
+      "Bash(python -m ruff check src/agents/rules_sync.py src/api/routers/rules.py)",
+      "Bash(.venv/Scripts/python.exe -c \"from src.agents import rules_sync; from src.api.routers import rules; print\\('import ok'\\)\")",
+      "Bash(python -m ruff check src/agents/rules_sync.py src/api/routers/rules.py src/common/config/settings.py)",
+      "Bash(NVD_PROXY=http://192.168.254.121:7897 .venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

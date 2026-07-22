@@ -1,0 +1,62 @@
+﻿---
+# Operator-supplied extra baseline rules (F4, 2026-07-21).
+#
+# Loaded at rule-sync time from $BASELINE_RULES_FILE. The 5 inline rules in
+# src/agents/rules_sync.py are always present; this file is appended on top.
+#
+# Format: a top-level YAML list. Each entry must carry at least `id` and
+# `name`. Optional fields follow the same shape as the inline BL-xxx rules.
+#
+# CIS-style examples for a typical Linux server. Drop what does not apply.
+
+- id: BL-101
+  category: baseline
+  name: 禁用 Telnet 服务
+  severity: high
+  check:
+    type: package_check
+    name: telnetd
+    op: not_installed
+  fix: "apt-get remove telnetd   # 或 yum remove telnet-server"
+
+- id: BL-102
+  category: baseline
+  name: 防火墙已启用 (firewalld / ufw / iptables)
+  severity: high
+  check:
+    type: command_check
+    command: "systemctl is-active firewalld || systemctl is-active ufw"
+    expect: "active"
+  fix: "systemctl enable --now firewalld"
+
+- id: BL-103
+  category: baseline
+  name: 内核参数 net.ipv4.conf.all.rp_filter = 1
+  severity: medium
+  check:
+    type: config_check
+    file: /etc/sysctl.d/10-network-security.conf
+    pattern: "net.ipv4.conf.all.rp_filter"
+    expect: "1"
+  fix: "sysctl -w net.ipv4.conf.all.rp_filter=1"
+
+- id: BL-104
+  category: baseline
+  name: 审计日志服务 (auditd) 已启用
+  severity: medium
+  check:
+    type: command_check
+    command: "systemctl is-active auditd"
+    expect: "active"
+  fix: "systemctl enable --now auditd"
+
+- id: BL-105
+  category: baseline
+  name: 时间同步 (chrony / ntp) 已启用
+  severity: low
+  check:
+    type: command_check
+    command: "systemctl is-active chronyd || systemctl is-active ntpd"
+    expect: "active"
+  fix: "systemctl enable --now chronyd"
+

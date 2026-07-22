@@ -1,43 +1,36 @@
-import { useState } from "react"
-import { Card, Tabs, Form, Input, Button, Select, message, Table, Tag } from "antd"
-import { SendOutlined, ThunderboltOutlined } from "@ant-design/icons"
+import { useState, useEffect } from "react"
+import { Card, Tabs, Form, Input, Button, Select, message, Table, Tag, Popconfirm } from "antd"
+import { ThunderboltOutlined, MessageOutlined, DeleteOutlined } from "@ant-design/icons"
 import { useNavigate } from "react-router-dom"
 import api from "../api/client"
+import { deleteScanTask } from "../api/client"
+import TargetSelector from "../components/TargetSelector"
+import ChatScan from "../components/ChatScan"
 
 interface ScanTask { task_id: string; source: string; targets: string[]; status: string; created_at: string; stats: { total: number; done: number; failed: number } }
 
 export default function ScanTaskPage() {
-  const [text, setText] = useState("")
-  const [parsing, setParsing] = useState(false)
-  const [parsed, setParsed] = useState<any>(null)
   const [submitting, setSubmitting] = useState(false)
   const [tasks, setTasks] = useState<ScanTask[]>([])
   const [loading, setLoading] = useState(false)
+  // 受控 tab：默认 tasks（用户从监控页返回时停留在任务列表，而非对话式）。
+  const [activeTab, setActiveTab] = useState("tasks")
   const navigate = useNavigate()
 
-  const handleParse = async () => {
-    setParsing(true)
-    try {
-      const res = await api.post("/vulnscan/tasks/parse", { intent_text: text })
-      setParsed(res.data)
-    } catch { message.error("解析失败") }
-    finally { setParsing(false) }
-  }
+  // mount 时默认在 tasks tab，自动加载任务列表
+  useEffect(() => { fetchTasks() }, [])
 
   const handleSubmit = async (source: string, extra?: any) => {
     setSubmitting(true)
     try {
       const body: any = { source }
-      if (source === "dialog") {
-        body.intent_text = text
-        if (parsed) {
-          body.targets = parsed.targets
-          body.modules = parsed.modules
-        }
-      } else {
-        body.targets = extra?.targets || []
-        body.modules = extra?.modules || ["sys_vuln", "baseline"]
-      }
+      body.targets = extra?.targets || []
+      body.modules = extra?.modules || ["sys_vuln", "baseline"]
+      body.engine = extra?.engine || "matcher"
+      body.nuclei_severity = extra?.nuclei_severity || []
+      body.nuclei_tags = extra?.nuclei_tags || []
+      body.nuclei_templates = extra?.nuclei_templates || []
+      body.nuclei_timeout_sec = extra?.nuclei_timeout_sec || 0
       const res = await api.post("/vulnscan/tasks", body)
       message.success("任务已创建")
       navigate(`/scan-monitor/${res.data.task_id}`)
@@ -54,6 +47,14 @@ export default function ScanTaskPage() {
     finally { setLoading(false) }
   }
 
+  const handleDeleteTask = async (taskId: string) => {
+    try {
+      await deleteScanTask(taskId)
+      message.success("任务记录已删除")
+      fetchTasks()
+    } catch { message.error("删除失败") }
+  }
+
   const columns = [
     { title: "任务ID", dataIndex: "task_id", key: "task_id", ellipsis: true, width: 150 },
     { title: "源", dataIndex: "source", key: "source", width: 80, render: (v: string) => v === "dialog" ? "对话" : "手动" },
@@ -64,44 +65,98 @@ export default function ScanTaskPage() {
       return <Tag color={colors[v] || "default"}>{v}</Tag>
     }},
     { title: "创建时间", dataIndex: "created_at", key: "created_at", width: 180, render: (v: string) => v?.slice(0, 19) || "-" },
-    { title: "操作", key: "action", width: 100, render: (_: any, r: ScanTask) => (
-      <Button size="small" type="link" onClick={() => navigate(`/scan-monitor/${r.task_id}`)}>监控</Button>
+    { title: "操作", key: "action", width: 140, render: (_: any, r: ScanTask) => (
+      <>
+        <Button size="small" type="link" onClick={() => navigate(`/scan-monitor/${r.task_id}`)}>监控</Button>
+        <Popconfirm title="删除该任务记录?" description="将删除任务及关联结果/漏洞/报告" onConfirm={() => handleDeleteTask(r.task_id)}>
+          <Button size="small" type="link" danger icon={<DeleteOutlined />}>删除</Button>
+        </Popconfirm>
+      </>
     )},
   ]
 
   return (
     <div>
-      <Tabs defaultActiveKey="dialog" items={[
+      <Tabs activeKey={activeTab} onChange={(k) => {
+        setActiveTab(k)
+        if (k === "tasks") fetchTasks()
+      }} items={[
         {
-          key: "dialog", label: <span><SendOutlined /> 对话式</span>, children: (
-            <Card>
-              <Form layout="inline">
-                <Form.Item style={{ flex: 1 }}>
-                  <Input.TextArea rows={2} placeholder='例如：扫描生产 Linux 主机系统漏洞和安全基线' value={text} onChange={e => setText(e.target.value)} />
-                </Form.Item>
-                <Form.Item>
-                  <Button icon={<ThunderboltOutlined />} onClick={handleParse} loading={parsing} type="primary">解析</Button>
-                </Form.Item>
-              </Form>
-              {parsed && (
-                <Card size="small" style={{ marginTop: 12, background: "#f0f5ff" }}>
-                  <div>目标: {parsed.targets?.join(", ") || "未解析"}</div>
-                  <div>模块: {parsed.modules?.join(", ") || "-"}</div>
-                  <Button type="primary" style={{ marginTop: 8 }} onClick={() => handleSubmit("dialog")} loading={submitting}>确认并执行</Button>
-                </Card>
-              )}
-            </Card>
+          key: "dialog", label: <span><MessageOutlined /> 对话式</span>, children: (
+            <ChatScan />
           )
         },
         {
           key: "manual", label: <span><ThunderboltOutlined /> 手动</span>, children: (
             <Card>
-              <Form onFinish={(v) => handleSubmit("manual", { targets: v.targets?.split(",").map((s: string) => s.trim()), modules: v.modules })} initialValues={{ modules: ["sys_vuln", "baseline"] }}>
-                <Form.Item name="targets" label="目标主机" rules={[{ required: true }]}>
-                  <Input placeholder="agent_id列表，逗号分隔" />
+              <Form
+                onFinish={(v) => handleSubmit("manual", {
+                  targets: v.targets || [],
+                  modules: v.modules,
+                  engine: v.engine,
+                  nuclei_severity: v.nuclei_severity,
+                  nuclei_tags: v.nuclei_tags,
+                  nuclei_templates: v.nuclei_templates ? v.nuclei_templates.split(",").map((s: string) => s.trim()) : [],
+                  nuclei_timeout_sec: v.nuclei_timeout_sec,
+                })}
+                initialValues={{
+                  modules: ["sys_vuln", "baseline"],
+                  engine: "matcher",
+                  nuclei_severity: [],
+                  nuclei_tags: [],
+                  nuclei_templates: "",
+                  nuclei_timeout_sec: 0,
+                }}
+              >
+                <Form.Item name="targets" label="目标主机" rules={[{ required: true, message: "请选择目标主机或主机组" }]}>
+                  <TargetSelector />
                 </Form.Item>
                 <Form.Item name="modules" label="扫描模块">
                   <Select mode="multiple" options={[{ label: "系统漏洞", value: "sys_vuln" }, { label: "安全基线", value: "baseline" }]} />
+                </Form.Item>
+                <Form.Item name="engine" label="扫描引擎" tooltip="matcher: 内部规则匹配器；nuclei: projectdiscovery/nuclei 10000+ 模板">
+                  <Select
+                    options={[
+                      { label: "matcher (内部规则)", value: "matcher" },
+                      { label: "nuclei (CVE 模板)", value: "nuclei" },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item
+                  noStyle
+                  shouldUpdate={(prev, cur) => prev.engine !== cur.engine}
+                >
+                  {({ getFieldValue }) =>
+                    getFieldValue("engine") === "nuclei" ? (
+                      <>
+                        <Form.Item name="nuclei_severity" label="严重等级">
+                          <Select
+                            mode="multiple"
+                            options={["critical", "high", "medium", "low", "info"].map((v) => ({ label: v, value: v }))}
+                            placeholder="留空 = 全部"
+                          />
+                        </Form.Item>
+                        <Form.Item name="nuclei_tags" label="标签">
+                          <Select
+                            mode="tags"
+                            options={[
+                              { label: "rce", value: "rce" },
+                              { label: "auth-bypass", value: "auth-bypass" },
+                              { label: "sqli", value: "sqli" },
+                              { label: "exposure", value: "exposure" },
+                            ]}
+                            placeholder="例: rce, auth-bypass"
+                          />
+                        </Form.Item>
+                        <Form.Item name="nuclei_templates" label="模板 ID 列表" tooltip="逗号分隔，留空 = 全部已安装模板">
+                          <Input placeholder="cves/2024/CVE-2024-1234, exposures/..." />
+                        </Form.Item>
+                        <Form.Item name="nuclei_timeout_sec" label="超时 (秒)">
+                          <Input type="number" placeholder="0 = runner 默认 (600s)" />
+                        </Form.Item>
+                      </>
+                    ) : null
+                  }
                 </Form.Item>
                 <Form.Item>
                   <Button type="primary" htmlType="submit" loading={submitting}>开始扫描</Button>
@@ -112,12 +167,17 @@ export default function ScanTaskPage() {
         },
         {
           key: "tasks", label: "任务列表", children: (
-            <Table dataSource={tasks} columns={columns} rowKey="task_id" loading={loading} pagination={{ pageSize: 20 }}
-              locale={{ emptyText: "暂无扫描任务" }}
-            />
+            <>
+              <div style={{ marginBottom: 12 }}>
+                <Button onClick={fetchTasks} loading={loading}>刷新</Button>
+              </div>
+              <Table dataSource={tasks} columns={columns} rowKey="task_id" loading={loading} pagination={{ pageSize: 20 }}
+                locale={{ emptyText: "暂无扫描任务" }}
+              />
+            </>
           )
         },
-      ]} onTabClick={(key) => { if (key === "tasks") fetchTasks() }} />
+      ]} />
     </div>
   )
 }

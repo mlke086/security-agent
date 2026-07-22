@@ -7,8 +7,12 @@ _PRIVATE_IP_PATTERNS = re.compile(
 )
 
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# P2-PRE-03 (2026-07-20): domain TLD whitelist expanded with the common
+# new-gTLD suffixes (.app / .dev / .ai / .me / .cloud / .sh / .tv etc).
+# The previous list only covered the legacy gTLDs, which meant alerts
+# referencing a `*.app` or `*.dev` domain dropped the IOC silently.
 _DOMAIN_RE = re.compile(
-    r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|cn|info|biz|co|gov|edu|ru|de|uk|fr|jp|kr|xyz|top)\b"
+    r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|cn|info|biz|co|gov|edu|ru|de|uk|fr|jp|kr|xyz|top|app|dev|ai|me|cloud|sh|tv|io\.cn|com\.cn|net\.cn|org\.cn|edu\.cn|gov\.cn|ac\.cn)\b"
 )
 _HASH_MD5 = re.compile(r"\b[0-9a-fA-F]{32}\b")
 _HASH_SHA1 = re.compile(r"\b[0-9a-fA-F]{40}\b")

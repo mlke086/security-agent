@@ -1,4 +1,5 @@
 """VulnScan subgraph -- compiled graph."""
+
 from langgraph.graph import END, StateGraph
 
 from src.orchestration.subgraphs.vulnscan.nodes import (
@@ -28,16 +29,43 @@ _vulnscan_subgraph.add_edge("llm_analysis", "generate_report")
 _vulnscan_subgraph.add_edge("generate_report", END)
 compiled_vulnscan_subgraph = _vulnscan_subgraph.compile()
 
+
 def get_vulnscan_subgraph():
     return compiled_vulnscan_subgraph
 
-async def run_vulnscan(source, intent_text=None, targets=None, modules=None, task_id: str | None = None):
+
+async def run_vulnscan(
+    source,
+    intent_text=None,
+    targets=None,
+    modules=None,
+    task_id: str | None = None,
+    engine: str = "matcher",
+    nuclei_severity: list | None = None,
+    nuclei_tags: list | None = None,
+    nuclei_templates: list | None = None,
+    nuclei_timeout_sec: int = 0,
+):
     """Run the vulnscan subgraph. ``task_id`` is honored when provided so that
     the caller (router / orchestrator) can use the SAME id for the ES task, the
     scan_result stream and the API response. Without this, /tasks/{id}, /tasks/{id}/stream
     and /reports/{id} all 404 (P0-VS-2).
+
+    P0 (2026-07-18): engine selector + nuclei knobs propagate down to the
+    dispatch node which builds the WS scan_command payload.
     """
     graph = get_vulnscan_subgraph()
-    initial = _default_state(source, intent_text, targets, modules, task_id=task_id)
+    initial = _default_state(
+        source,
+        intent_text,
+        targets,
+        modules,
+        task_id=task_id,
+        engine=engine,
+        nuclei_severity=nuclei_severity,
+        nuclei_tags=nuclei_tags,
+        nuclei_templates=nuclei_templates,
+        nuclei_timeout_sec=nuclei_timeout_sec,
+    )
     result = await graph.ainvoke(initial)
     return result

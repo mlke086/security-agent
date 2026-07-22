@@ -12,7 +12,6 @@ from src.agents.manager import (
     register_online,
 )
 
-
 # -- register_online ----------------------------------------------------------
 
 class TestRegisterOnline:
@@ -33,7 +32,13 @@ class TestRegisterOnline:
             await register_online("agent-1", "worker-1")
             mock_redis.setex.assert_called()
             mock_redis.set.assert_called_with("agent:conn:agent-1", "worker-1")
-            mock_store.update_host.assert_called_with("agent-1", status="online")
+            # register_online now also refreshes last_heartbeat so the next
+            # mark_offline_expired sweep does not re-flag a freshly connected
+            # agent offline using a stale heartbeat.
+            assert mock_store.update_host.call_count == 1
+            _, kwargs = mock_store.update_host.call_args
+            assert kwargs["status"] == "online"
+            assert kwargs["last_heartbeat"]  # an iso8601 ts, not empty
 
 
 # -- heartbeat ----------------------------------------------------------------

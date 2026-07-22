@@ -69,8 +69,17 @@ class AlertConsumer:
                 structured = self._process(msg.value, event_id=stable_event_id)
             except Exception as exc:
                 logger.error("parse_failed", error=str(exc), offset=msg.offset)
-                await self._send_dlq(msg.value, str(exc))
-                await self._consumer.commit()
+                if await self._send_dlq(msg.value, str(exc)):
+                    # DLQ durable -- safe to commit so we don't re-deliver.
+                    await self._consumer.commit()
+                else:
+                    # DLQ write failed -- DO NOT commit. Kafka will redeliver
+                    # after the next session timeout so we get another shot.
+                    logger.warning(
+                        "parse_dlq_skipped_commit",
+                        offset=msg.offset,
+                        note="Kafka will redeliver this offset",
+                    )
                 continue
 
             try:
@@ -79,10 +88,10 @@ class AlertConsumer:
             except Exception as exc:
                 logger.error(
                     "pipeline_failed",
-                    event_id=structured.get("event_id"), error=str(exc),
+                    event_id=structured.get("event_id"),
+                    error=str(exc),
                 )
                 # Do not commit -- Kafka re-delivers for retry.
-
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -105,6 +114,7 @@ class AlertConsumer:
         except Exception:
             pass
         import hashlib
+
         return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
     def _process(self, raw: str, event_id: str | None = None) -> dict:
@@ -130,6 +140,7 @@ class AlertConsumer:
             _pipeline_sem = asyncio.Semaphore(get_settings().pipeline_concurrency)
 
         from src.orchestration.runner import run_pipeline
+
         async with _pipeline_sem:
             await run_pipeline(
                 event["event_id"],
@@ -138,15 +149,28 @@ class AlertConsumer:
                 event.get("source", "kafka"),
             )
 
-    async def _send_dlq(self, raw: str, error: str) -> None:
+    async def _send_dlq(self, raw: str, error: str) -> bool:
+        """Push the poison-pill alert onto the DLQ topic. Returns True if the
+        broker acknowledged the write (so the caller can safely commit the
+        original offset); False on transport failure -- the caller MUST NOT
+        commit so Kafka redelivers later.
+
+        P1-PRE-01 (2026-07-19): aiokafka producer.send() returns a Future;
+        awaiting it once resolves to RecordMetadata (broker ack). The
+        previous version used no return value and committed unconditionally,
+        so a broker hiccup between in-memory buffer and flush silently
+        dropped alerts.
+        """
         assert self._dlq_producer is not None
         try:
             await self._dlq_producer.send(
                 self._settings.kafka_topic_dlq,
                 value={"raw": raw, "error": error, "ts": datetime.now(UTC).isoformat()},
             )
+            return True
         except KafkaError as exc:
             logger.error("dlq_send_failed", error=str(exc))
+            return False
 
 
 async def run_consumer() -> None:

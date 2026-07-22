@@ -32,9 +32,14 @@ type Queue struct {
 
 // DefaultPath returns the OS-specific queue database path.
 func DefaultPath() string {
-	dir := "/var/lib/secagent"
-	if os.Getenv("OS") == "Windows_NT" {
+	var dir string
+	switch {
+	case os.Getenv("SECAGENT_HOME") != "":
+		dir = filepath.Join(os.Getenv("SECAGENT_HOME"), "queue")
+	case os.Getenv("OS") == "Windows_NT":
 		dir = filepath.Join(os.Getenv("ProgramData"), "secagent", "queue")
+	default:
+		dir = "/var/lib/secagent"
 	}
 	os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, "offline_queue.db")

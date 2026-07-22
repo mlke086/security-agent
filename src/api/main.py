@@ -9,6 +9,7 @@ from src.agents.ws_gateway import get_agent_gateway
 from src.api.auth import auth_router
 from src.api.auth.routes import require_role
 from src.api.routers.agents import router as agents_router
+from src.api.routers.chat import router as chat_router
 from src.api.routers.demo import router as demo_router
 from src.api.routers.operations import router as operations_router
 from src.api.routers.rules import router as rules_router
@@ -49,28 +50,33 @@ async def _ensure_es_indices():
     """Create ES indices with mappings if they don't exist."""
     try:
         from elasticsearch import AsyncElasticsearch
+
         s = get_settings()
         es = AsyncElasticsearch(hosts=[s.es_hosts])
         if not await es.indices.exists(index=s.es_index_events):
             await es.indices.create(index=s.es_index_events, body=_EVENTS_INDEX_MAPPING)
             logger.info("es_index_created", index=s.es_index_events)
         if not await es.indices.exists(index=s.es_index_audit):
-            await es.indices.create(index=s.es_index_audit, body={
-                "settings": {"number_of_shards": 1, "number_of_replicas": 0},
-                "mappings": {
-                    "properties": {
-                        "event_id": {"type": "keyword"},
-                        "node": {"type": "keyword"},
-                        "action": {"type": "keyword"},
-                        "actor": {"type": "keyword"},
-                        "summary": {"type": "text"},
-                        "details": {"type": "object", "enabled": False},
-                        "timestamp": {"type": "date"},
-                    }
+            await es.indices.create(
+                index=s.es_index_audit,
+                body={
+                    "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+                    "mappings": {
+                        "properties": {
+                            "event_id": {"type": "keyword"},
+                            "node": {"type": "keyword"},
+                            "action": {"type": "keyword"},
+                            "actor": {"type": "keyword"},
+                            "summary": {"type": "text"},
+                            "details": {"type": "object", "enabled": False},
+                            "timestamp": {"type": "date"},
+                        }
+                    },
                 },
-            })
+            )
             logger.info("es_index_created", index=s.es_index_audit)
         from src.agents.store import get_vulnscan_store
+
         vs = get_vulnscan_store()
         await vs.ensure_indices()
         # Do NOT close the singleton client here. Subsequent requests rely
@@ -84,15 +90,18 @@ async def _ensure_es_indices():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from src.agents.ws_gateway import _worker_id
+
     logger.info("startup", version="0.1.0", worker_id=_worker_id)
     await _ensure_es_indices()
     from src.common.db.pg import init_schema
+
     try:
         await init_schema()
         logger.info("pg_schema_initialized")
     except Exception as exc:
         logger.warning("pg_schema_init_failed", error=str(exc))
     from src.agents.scheduler import start_background_tasks
+
     start_background_tasks()
     yield
     # Close async singletons so redis/ES connections don't leak or trigger
@@ -102,6 +111,7 @@ async def lifespan(app: FastAPI):
     from src.api.events_bus import get_event_bus
     from src.common.db.pg import close_pool
     from src.orchestration.subgraphs.responder.approval_store import get_approval_store
+
     for closer in (
         get_event_store().close,
         get_event_bus().close,
@@ -124,8 +134,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(CORSMiddleware, allow_origin_regex=".*", allow_credentials=True,
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=".*",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 class EventSubmitRequest(BaseModel):
     sanitized_text: str
@@ -142,6 +158,7 @@ async def _run_pipeline(event_id: str, text: str, iocs: dict, source: str):
     """Background task: thin wrapper around shared runner."""
     try:
         from src.orchestration.runner import run_pipeline
+
         await run_pipeline(event_id, text, iocs, source)
     except Exception as exc:
         await get_event_store().update_event(event_id, status="error")
@@ -183,6 +200,7 @@ async def agents_ws(websocket: WebSocket):
             await gateway.handle_message(websocket, raw)
     except Exception as exc:
         from src.common.logging.logger import get_logger
+
         get_logger(__name__).warning("agent_ws_error", error=str(exc))
     finally:
         await gateway.disconnect(websocket)
@@ -199,9 +217,11 @@ app.include_router(demo_router)
 app.include_router(agents_router)
 app.include_router(vulnscan_router)
 app.include_router(rules_router)
+app.include_router(chat_router)
 app.include_router(stream_router)
 
 if __name__ == "__main__":
     import uvicorn
+
     settings = get_settings()
     uvicorn.run(app, host=settings.api_host, port=settings.api_port)

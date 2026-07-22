@@ -1,4 +1,5 @@
-﻿"""Operations & approval routers."""
+"""Operations & approval routers."""
+
 from datetime import UTC, datetime
 from typing import Any
 
@@ -63,6 +64,7 @@ class TimelineResponse(BaseModel):
 
 # ── Events ──────────────────────────────────────────────────
 
+
 @router.get("/api/v1/events", response_model=EventListResponse)
 async def list_events(
     status: str | None = None,
@@ -73,7 +75,9 @@ async def list_events(
     current_user=Depends(require_role("admin", "analyst", "viewer")),
 ):
     store = get_event_store()
-    items = await store.list_events(status=status, verdict=verdict, priority=priority, limit=limit, offset=offset)
+    items = await store.list_events(
+        status=status, verdict=verdict, priority=priority, limit=limit, offset=offset
+    )
     return EventListResponse(items=items, total=await store.total_count())
 
 
@@ -99,11 +103,17 @@ async def get_event_trace(
     ev = await store.get_event(event_id)
     trace = [s.model_dump() for s in ev.trace] if ev else []
     approvals = list(ev.approvals) if ev else []
-    return TraceResponse(event_id=event_id, trace=trace, approvals=approvals,
-                         trace_count=len(trace), approval_count=len(approvals))
+    return TraceResponse(
+        event_id=event_id,
+        trace=trace,
+        approvals=approvals,
+        trace_count=len(trace),
+        approval_count=len(approvals),
+    )
 
 
 # ── Approvals ────────────────────────────────────────────────
+
 
 @router.get("/api/v1/approvals", response_model=ApprovalListResponse)
 async def get_approvals(
@@ -125,22 +135,63 @@ async def approve_event(
         raise HTTPException(status_code=404, detail="Event not found")
 
     entry = ApprovalEntry(
-        event_id=event_id, action=action, note=note,
-        actor=current_user.username, role=current_user.role,
+        event_id=event_id,
+        action=action,
+        note=note,
+        actor=current_user.username,
+        role=current_user.role,
         timestamp=datetime.now(UTC).isoformat(),
     )
     await store.add_approval(event_id, entry)
-    await store.update_event(event_id, status="completed" if action == "approved" else "rejected")
 
-    await resolve_approval_by_event_id(event_id, action, actor=current_user.username)
-    await get_audit_logger().log(event_id=event_id, node="approval", action=action,
-                                 actor=current_user.username, details={"note": note})
+    # P2-CORE-NEW-10 (2026-07-20): vote through ApprovalStore so the
+    # multi-reviewer quorum is honoured. add_vote() only flips approval
+    # status to "approved" once the required vote count is met; mirror
+    # that onto the event so we don't flip the event to "completed"
+    # before the second reviewer has voted on an L4/L5 op.
+    from src.orchestration.subgraphs.responder.approval_store import (
+        get_approval_store,
+    )
 
-    logger.info("event_approved", event_id=event_id, action=action, actor=current_user.username)
+    vote_result = await get_approval_store().add_vote(
+        event_id=event_id,
+        actor=current_user.username,
+        decision=action,
+    )
+    approval_status = vote_result.get("status", "pending")
+    if approval_status == "approved":
+        await store.update_event(event_id, status="completed")
+    elif approval_status == "rejected":
+        await store.update_event(event_id, status="rejected")
+    # else: pending -- keep the event status as-is until the quorum is met.
+
+    try:
+        await resolve_approval_by_event_id(event_id, action, actor=current_user.username)
+    except Exception as exc:
+        # Non-fatal: the vote is persisted; any blocked wait_result() will
+        # pick it up via the next PG poll.
+        logger.warning("approval_resolve_notify_failed", event_id=event_id, error=str(exc))
+    await get_audit_logger().log(
+        event_id=event_id,
+        node="approval",
+        action=action,
+        actor=current_user.username,
+        details={"note": note},
+    )
+
+    logger.info(
+        "event_approved",
+        event_id=event_id,
+        action=action,
+        actor=current_user.username,
+        approval_status=approval_status,
+        vote_count=vote_result.get("count", 0),
+    )
     return ApprovalActionResponse(status="ok", event_id=event_id, action=action)
 
 
 # ── Metrics ──────────────────────────────────────────────────
+
 
 @router.get("/api/v1/metrics", response_model=MetricsResponse)
 async def get_metrics(
@@ -158,7 +209,10 @@ async def get_metrics_timeline(
     store = get_event_store()
     items = await store.list_events(limit=200)
     from collections import defaultdict
-    hourly: dict[str, dict] = defaultdict(lambda: {"total": 0, "true_positive": 0, "false_positive": 0, "other": 0})
+
+    hourly: dict[str, dict] = defaultdict(
+        lambda: {"total": 0, "true_positive": 0, "false_positive": 0, "other": 0}
+    )
     for ev in items:
         hour = ev.submitted_at[:13] if ev.submitted_at else "unknown"
         hourly[hour]["total"] += 1

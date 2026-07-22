@@ -1,8 +1,6 @@
 """Unit tests for VulnscanStore (ES operations with mocked ES client)."""
-import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
 
-from src.agents.models import Host, HostStatus, ScanTask, ScanPolicy, VulnFinding, ScanReport, ScanModule
+from src.agents.models import Host, HostStatus, ScanModule, ScanReport, ScanTask, VulnFinding
 
 
 class TestStoreModels:

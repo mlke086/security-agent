@@ -3,7 +3,7 @@ import { Typography, Spin, Descriptions, Tag, Timeline, Button, Space, message, 
 import { Card } from "antd"
 import { ArrowLeftOutlined, CheckOutlined, CloseOutlined, BugOutlined, SafetyOutlined, SearchOutlined } from "@ant-design/icons"
 import { useParams, useNavigate } from "react-router-dom"
-import { getEventDetail, approveEvent } from "../api/client"
+import api, { getEventDetail, approveEvent, getSseToken } from "../api/client"
 import { useAuth } from "../context/AuthContext"
 import type { EventRecord } from "../types"
 
@@ -33,17 +33,42 @@ export default function EventDetailPage() {
   // SSE: live-refresh trace steps / status / approval as the pipeline progresses.
   useEffect(() => {
     if (!eventId) return
-    const token = localStorage.getItem("token")
-    if (!token) return
-    const host = window.location.hostname
-    const base = (host === "localhost" || host === "127.0.0.1") ? "" : `http://${host}:8000`
-    const source = new EventSource(`${base}/api/v1/events/${eventId}/stream?token=${token}`)
+    // F2 (2026-07-21): mint a 60s scoped SSE token first; reuse
+    // api.defaults.baseURL so reverse-proxy / k8s ingress keep working.
+    if (!eventId) return
+    if (!localStorage.getItem("token")) return
+    // Capture the narrowed string so the async IIFE and inner helper both
+    // see it as `string`, not `string | undefined`.
+    const eventIdStr: string = eventId
+    let source: EventSource | null = null
+    let cancelled = false
+    ;(async () => {
+      try {
+        const shortToken = await getSseToken("events")
+        if (cancelled) return
+        const base = (api.defaults.baseURL || "").replace(/\/+$/, "")
+        // base 已含 /api/v1，只拼 /events/...（不能重复 /api/v1，否则 404 致
+        // EventSource 无限重连占满连接数致所有请求阻塞）。
+        source = new EventSource(`${base}/events/${eventIdStr}/stream?token=${shortToken}`)
+        wireSource(source)
+      } catch (err) { console.warn("event_detail_sse_token_failed", err) }
+    })()
+    function wireSource(source: EventSource) {
     source.onmessage = (e) => {
       if (e.data && e.data !== ": heartbeat") {
-        getEventDetail(eventId).then(setEv).catch(() => {})
+        getEventDetail(eventIdStr).then(setEv).catch(() => {})
       }
     }
-    return () => source.close()
+    // 防重连风暴：404/网络错误 readyState=CLOSED 时主动 close，避免无限重连
+    // 占满浏览器同域连接数致所有请求阻塞。
+    source.onerror = () => {
+      if (source.readyState === EventSource.CLOSED) source.close()
+    }
+    return () => {
+      cancelled = true
+      source?.close()
+    }
+    }
   }, [eventId])
 
   const doApprove = async (action: "approved" | "rejected") => {

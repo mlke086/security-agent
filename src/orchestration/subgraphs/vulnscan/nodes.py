@@ -1,8 +1,10 @@
-""""VulnScan subgraph node implementations."""
+""" "VulnScan subgraph node implementations."""
+
 import uuid
 from datetime import UTC, datetime
 
 from src.agents.models import (
+    ScanModule,
     ScanPolicy,
     ScanReport,
     ScanTask,
@@ -21,12 +23,21 @@ def _default_state(
     targets: list[str] | None = None,
     modules: list[str] | None = None,
     task_id: str | None = None,
+    engine: str = "matcher",
+    nuclei_severity: list[str] | None = None,
+    nuclei_tags: list[str] | None = None,
+    nuclei_templates: list[str] | None = None,
+    nuclei_timeout_sec: int = 0,
 ) -> dict:
     """Build the initial VulnScanState from input params.
 
     ``task_id`` is taken from the caller when provided so the API can return
     the SAME identifier the subgraph uses (P0-VS-2). When None (e.g. dialog-driven
     scans started from the orchestrator), generate a fresh uuid.
+
+    P0 (2026-07-18): ``engine`` and the nuclei_* knobs are propagated through
+    the subgraph state so dispatch() and the WS scan_command payload both
+    see them. The agent's engine.go branches on engine=="nuclei".
     """
     task_id = task_id or str(uuid.uuid4())
     return {
@@ -35,6 +46,11 @@ def _default_state(
         "intent_text": intent_text,
         "targets": targets or [],
         "modules": modules or ["sys_vuln", "baseline"],
+        "engine": engine,
+        "nuclei_severity": nuclei_severity or [],
+        "nuclei_tags": nuclei_tags or [],
+        "nuclei_templates": nuclei_templates or [],
+        "nuclei_timeout_sec": nuclei_timeout_sec,
         "resource_limit": {"cpu_percent": 30, "mem_percent": 30},
         "schedule": None,
         "task": None,
@@ -66,6 +82,7 @@ async def parse_intent(state: dict) -> dict:
     try:
         from src.agents.models import ScanIntent
         from src.knowledge.models.adapter import get_model_adapter
+
         adapter = get_model_adapter()
         prompt = f"""You are a security scan assistant. Parse the following user request into a scan intent.
 User request: {intent_text}
@@ -112,6 +129,11 @@ async def dispatch(state: dict) -> dict:
             resource_limit=state.get("resource_limit", {}),
         ),
         rule_version="latest",
+        engine=state.get("engine", "matcher"),
+        nuclei_severity=state.get("nuclei_severity", []),
+        nuclei_tags=state.get("nuclei_tags", []),
+        nuclei_templates=state.get("nuclei_templates", []),
+        nuclei_timeout_sec=state.get("nuclei_timeout_sec", 0),
         status="dispatching",
         created_at=datetime.now(UTC).isoformat(),
         stats={"total": len(agent_ids), "done": 0, "failed": 0},
@@ -119,9 +141,42 @@ async def dispatch(state: dict) -> dict:
     await store.save_task(task)
 
     if not agent_ids:
-        return {"error": "No target agents found", "status": "failed", "task": task}
+        # Persist the failure to ES so GET /tasks/{id} sees "failed" instead
+        # of sitting on "queued"/"scanning" forever. Without this the linear
+        # graph would still run collect, which (total_targets=0) polled ES for
+        # the full timeout window before reporting an empty "completed" (P1-VULN-01).
+        await store.update_task(
+            task_id,
+            status="failed",
+            error="No target agents found",
+            finished_at=datetime.now(UTC).isoformat(),
+        )
+        logger.warning("scan_dispatch_no_targets", task_id=task_id, targets=targets)
+        # F1.3a (2026-07-21): publish the failure to SSE so the operator
+        # sees it the next render tick instead of staring at "等待 agent 上报"
+        # for 30 minutes.
+        await _pub_progress(
+            task_id,
+            "dispatch",
+            "failed",
+            f"No online agent matches any of {targets!r}",
+        )
+        return {
+            "error": "No target agents found",
+            "status": "failed",
+            "task": task,
+            "total_targets": 0,
+        }
 
-    # Broadcast scan command
+    # Broadcast scan command.
+    #
+    # The agent's engine.go branches on payload["engine"]:
+    #   "matcher" (default) -> own rule-based matcher (legacy)
+    #   "nuclei"           -> os/exec wrapper around the nuclei CLI which carries
+    #                        the projectdiscovery templates bundle.
+    #
+    # Nuclei-specific knobs (nuclei_severity / nuclei_tags / nuclei_templates /
+    # nuclei_timeout_sec) are only inspected when engine == "nuclei".
     scan_cmd = {
         "v": 1,
         "type": "scan_command",
@@ -133,6 +188,12 @@ async def dispatch(state: dict) -> dict:
             "modules": modules,
             "resource_limit": state.get("resource_limit", {}),
             "deadline": "",
+            "engine": task.engine,
+            "nuclei_targets": task.targets,
+            "nuclei_severity": task.nuclei_severity,
+            "nuclei_tags": task.nuclei_tags,
+            "nuclei_templates": task.nuclei_templates,
+            "nuclei_timeout_sec": task.nuclei_timeout_sec,
         },
     }
     result = await gateway.broadcast(agent_ids, scan_cmd)
@@ -143,18 +204,46 @@ async def dispatch(state: dict) -> dict:
         status="scanning",
         stats={"total": len(agent_ids), "done": result["sent"], "failed": result["failed"]},
     )
+    # F1.3b (2026-07-21): publish the broadcast result to SSE so the operator
+    # gets instant feedback (sent vs failed counts) instead of waiting until
+    # the first agent scan_step lands -- which never happens for typos like
+    # "host-a" where no agent is listening on agent:cmd:host-a.
+    await _pub_progress(
+        task_id,
+        "dispatch",
+        "running",
+        f"Broadcast to {len(agent_ids)} target(s): "
+        f"{result['sent']} sent, {result['failed']} not reachable",
+    )
 
-    # Store collection tracking in Redis
+    # Store collection tracking in Redis. Wrap in try/finally so the
+    # connection is closed even when hset/expire raises -- otherwise each
+    # dispatch leaks one redis client (P2-VULN-13).
     import redis.asyncio as aioredis
 
     from src.common.config.settings import get_settings
+
     r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
-    await r.hset(f"vulnscan:collect:{task_id}", mapping={
-        "total": str(len(agent_ids)),
-        "received": "0",
-    })
-    if state.get("policy"):
-        await r.expire(f"vulnscan:collect:{task_id}", state.get("policy", ScanPolicy()).timeout_sec)
+    try:
+        await r.hset(
+            f"vulnscan:collect:{task_id}",
+            mapping={
+                "total": str(len(agent_ids)),
+                "received": "0",
+            },
+        )
+        # P2-VULN-15 (2026-07-20): always set the TTL so the counter key
+        # doesn't linger forever when generate_report fails. Previously the
+        # code only expired the key when state["policy"] (a non-existent
+        # field) was truthy -- i.e. essentially never. The fallback below
+        # uses the saved task's ScanPolicy or the module default.
+        ttl = 1800
+        task_obj = state.get("task")
+        if task_obj is not None and getattr(task_obj, "policy", None) is not None:
+            ttl = int(task_obj.policy.timeout_sec or ttl)
+        await r.expire(f"vulnscan:collect:{task_id}", ttl)
+    finally:
+        await r.aclose()
 
     logger.info("scan_dispatched", task_id=task_id, target_count=len(agent_ids))
     return {
@@ -167,26 +256,63 @@ async def dispatch(state: dict) -> dict:
 
 
 async def _resolve_targets(targets: list[str]) -> list[str]:
-    """Resolve target names (hostname/IP/group) to agent_ids."""
+    """Resolve target names (hostname/IP/group) to agent_ids.
+
+    A group target expands to EVERY online agent in that group (not just the
+    first match) -- otherwise scanning "prod" with 10 agents would silently
+    cover only 1 host (P1-VULN-02). agent_id / hostname / IP are unique, so
+    they match at most one host. Results are de-duplicated because a host can
+    be hit by several targets at once (e.g. its agent_id AND its group).
+    """
     store = get_vulnscan_store()
     all_hosts = await store.list_hosts(status="online", limit=1000)
 
-    agent_ids: list[str] = []
-    for target in targets:
-        # Check if target is already an agent_id
-        for h in all_hosts:
-            if h.agent_id == target:
-                agent_ids.append(target)
-                break
-            if h.hostname == target or h.ip == target or h.group == target:
-                agent_ids.append(h.agent_id)
-                break
+    resolved: list[str] = []
+    seen: set[str] = set()
+    matched_any = False
 
-    # If no matches found, try to use targets as-is (might be agent_ids)
-    if not agent_ids:
+    def _add(agent_id: str) -> None:
+        nonlocal matched_any
+        if agent_id and agent_id not in seen:
+            seen.add(agent_id)
+            resolved.append(agent_id)
+            matched_any = True
+
+    for target in targets:
+        for h in all_hosts:
+            # agent_id / hostname / ip are unique -- single match is correct.
+            if h.agent_id == target or h.hostname == target or h.ip == target:
+                _add(h.agent_id)
+                break
+            # group is NOT unique -- collect every host in the group. Do NOT
+            # break here: the loop continues to find the remaining members.
+            if h.group == target:
+                _add(h.agent_id)
+
+    if not matched_any:
+        # Nothing matched: either an offline agent_id the operator knows
+        # about (genuine pass-through) or a typo / unregistered name. Pass
+        # through so dispatch's "no online agent" branch can name the bad
+        # target. (F1.1, 2026-07-21: previous fall-through masked the
+        # "host-a" case where the user typed a placeholder that no agent
+        # ever connects to, causing a silent 30-minute wait.)
         return targets
 
-    return agent_ids
+    # Surface unresolved targets alongside resolved ones -- a partial scan
+    # caused by typos ("test" matches group=5 hosts, "host-b" matches none)
+    # used to look like success.
+    unknown = [
+        t
+        for t in targets
+        if t not in {h.agent_id for h in all_hosts}
+        and t not in {h.hostname for h in all_hosts}
+        and t not in {h.ip for h in all_hosts}
+        and t not in {h.group for h in all_hosts if h.group}
+    ]
+    if unknown:
+        logger.warning("vulnscan_targets_unresolved", resolved=resolved, unknown=unknown)
+
+    return resolved
 
 
 async def collect(state: dict) -> dict:
@@ -198,15 +324,33 @@ async def collect(state: dict) -> dict:
     We now poll ES for ``is_final`` batches with a bounded wait bounded by
     ``ScanPolicy.timeout_sec``. When the deadline passes we proceed with the
     partial results so we never deadlock the orchestrator.
+
+    P1-VULN-01: if dispatch already failed (no target agents, or zero targets),
+    short-circuit here -- do NOT poll ES for 30 minutes. The failure status is
+    already persisted by dispatch.
     """
     import asyncio
+
     task_id = state["task_id"]
+    total = state.get("total_targets", 0)
+    if state.get("status") == "failed" or total == 0:
+        return {"status": "failed", "received_results": 0}
+
     store = get_vulnscan_store()
     total = state.get("total_targets", 0)
-    failed = state["task"].stats.get("failed", 0)
     timeout_sec = int((state["task"].policy.timeout_sec or 1800) if state.get("task") else 1800)
     poll_interval = 5  # seconds
     deadline = asyncio.get_running_loop().time() + timeout_sec
+
+    # F1.2 (2026-07-21): the dispatch node updated ES with the *real* failed
+    # count (e.g. 1 when the broadcast could not reach any agent) but the
+    # in-memory ScanTask object it returns still has stats["failed"]=0 from
+    # its constructor. Reading from state["task"].stats used to overwrite the
+    # dispatch-time failure back to 0, so collect waited the full timeout.
+    # Always re-read fresh stats from ES (the dispatch update is the source
+    # of truth) and treat failed as 0 only when truly absent.
+    es_task = await store.get_task(task_id)
+    failed = es_task.stats.get("failed", 0) if es_task and es_task.stats else 0
 
     done_count = 0
     while True:
@@ -224,13 +368,18 @@ async def collect(state: dict) -> dict:
 
         if asyncio.get_running_loop().time() >= deadline:
             logger.warning(
-                "vulnscan_collect_timeout", task_id=task_id,
-                done=done_count, total=total, failed=failed,
+                "vulnscan_collect_timeout",
+                task_id=task_id,
+                done=done_count,
+                total=total,
+                failed=failed,
             )
             await store.update_task(task_id, status="analyzing")
             return {"status": "analyzing", "received_results": done_count}
 
         await asyncio.sleep(poll_interval)
+
+
 async def aggregate(state: dict) -> dict:
     """Aggregate findings from all agents, deduplicate, store as VulnFindings."""
     task_id = state["task_id"]
@@ -277,13 +426,19 @@ async def llm_analysis(state: dict) -> dict:
 
     try:
         from src.knowledge.models.adapter import get_model_adapter
+
         adapter = get_model_adapter()
     except Exception:
         logger.warning("llm_adapter_unavailable")
         return {"status": "reporting"}
 
     # Publish analysis start
-    await _pub_progress(task_id, "analysis", "running", f"LLM analysing {len(findings)} findings in {batches_total} batches")
+    await _pub_progress(
+        task_id,
+        "analysis",
+        "running",
+        f"LLM analysing {len(findings)} findings in {batches_total} batches",
+    )
 
     from pydantic import BaseModel
 
@@ -299,7 +454,7 @@ async def llm_analysis(state: dict) -> dict:
 
     for batch_idx in range(batches_total):
         start = batch_idx * batch_size
-        batch = findings[start:start + batch_size]
+        batch = findings[start : start + batch_size]
 
         try:
             prompt = _build_analysis_prompt(batch)
@@ -308,21 +463,27 @@ async def llm_analysis(state: dict) -> dict:
                 schema=AnalyzedResult,
             )
             for af in result.analyzed:
-                all_analyzed.append({
-                    "finding_id": af.finding_id,
-                    "ai_severity": af.ai_severity,
-                    "ai_filtered": af.ai_filtered,
-                    "reason": af.reason,
-                    "fix_advice": af.fix_advice,
-                })
+                all_analyzed.append(
+                    {
+                        "finding_id": af.finding_id,
+                        "ai_severity": af.ai_severity,
+                        "ai_filtered": af.ai_filtered,
+                        "reason": af.reason,
+                        "fix_advice": af.fix_advice,
+                    }
+                )
             await _pub_progress(
-                task_id, "analysis", "running",
+                task_id,
+                "analysis",
+                "running",
                 f"Batch {batch_idx + 1}/{batches_total} done ({len(result.analyzed)} analysed)",
             )
         except Exception as exc:
             logger.warning("llm_batch_failed", batch=batch_idx, error=str(exc))
             await _pub_progress(
-                task_id, "analysis", "running",
+                task_id,
+                "analysis",
+                "running",
                 f"Batch {batch_idx + 1}/{batches_total} failed, continuing",
             )
             continue
@@ -338,13 +499,16 @@ async def llm_analysis(state: dict) -> dict:
         )
 
     logger.info("llm_analysis_complete", count=len(all_analyzed), task_id=task_id)
-    await _pub_progress(task_id, "analysis", "done", f"AI analysis complete: {len(all_analyzed)} findings analysed")
+    await _pub_progress(
+        task_id, "analysis", "done", f"AI analysis complete: {len(all_analyzed)} findings analysed"
+    )
     return {"status": "reporting"}
 
 
 def _build_analysis_prompt(findings: list) -> str:
     """Build the LLM analysis prompt for a batch of findings."""
     import json
+
     findings_json = []
     for f in findings:
         fid = f.get("finding_id", "") if isinstance(f, dict) else f.finding_id
@@ -357,14 +521,16 @@ def _build_analysis_prompt(findings: list) -> str:
         if hasattr(fcat, "value"):
             fcat = str(fcat.value)
         fev = f.get("evidence", "")[:300] if isinstance(f, dict) else (f.evidence or "")[:300]
-        findings_json.append({
-            "finding_id": fid,
-            "name": fname,
-            "cve": fcve,
-            "severity": fsev,
-            "category": fcat,
-            "evidence": fev,
-        })
+        findings_json.append(
+            {
+                "finding_id": fid,
+                "name": fname,
+                "cve": fcve,
+                "severity": fsev,
+                "category": fcat,
+                "evidence": fev,
+            }
+        )
 
     return f"""You are a senior vulnerability analyst for an enterprise security team. For each finding below:
 
@@ -387,23 +553,35 @@ Return JSON with "analyzed" array of: finding_id, ai_severity, ai_filtered, reas
 
 async def _pub_progress(task_id: str, step: str, status: str, message: str) -> None:
     """Publish analysis progress to Redis for SSE subscribers."""
+    r = None
     try:
         import json as _json
 
         import redis.asyncio as aioredis
 
         from src.common.config.settings import get_settings
+
         r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
-        await r.publish(f"vulnscan:task:{task_id}", _json.dumps({
-            "type": "scan_step",
-            "task_id": task_id,
-            "step": step,
-            "status": status,
-            "message": message,
-        }))
+        await r.publish(
+            f"vulnscan:task:{task_id}",
+            _json.dumps(
+                {
+                    "type": "scan_step",
+                    "task_id": task_id,
+                    "step": step,
+                    "status": status,
+                    "message": message,
+                }
+            ),
+        )
     except Exception:
         pass
-
+    finally:
+        if r is not None:
+            try:
+                await r.aclose()
+            except Exception:
+                pass
 
 
 async def generate_report(state: dict) -> dict:
@@ -425,7 +603,9 @@ async def generate_report(state: dict) -> dict:
             generated_at=datetime.now(UTC).isoformat(),
         )
         await store.save_report(report)
-        await store.update_task(task_id, status="completed", finished_at=datetime.now(UTC).isoformat())
+        await store.update_task(
+            task_id, status="completed", finished_at=datetime.now(UTC).isoformat()
+        )
         await _pub_progress(task_id, "report", "done", "Report generated: 0 findings")
         return {"report": report, "status": "completed"}
 
@@ -435,6 +615,10 @@ async def generate_report(state: dict) -> dict:
     for v in vulns:
         cat = str(v.category)
         by_category[cat] = by_category.get(cat, 0) + 1
+        # 修复：by_severity 按 ai_severity(优先) 或 severity 统计，原代码漏填致报告
+        # 严重等级分布恒为空。
+        sev = str(v.ai_severity or v.severity or "info")
+        by_severity[sev] = by_severity.get(sev, 0) + 1
 
     # Non-filtered vulns, sorted by severity
     not_filtered = [v for v in vulns if not v.ai_filtered]
@@ -442,28 +626,39 @@ async def generate_report(state: dict) -> dict:
     not_filtered.sort(key=lambda x: severity_order.get(str(x.severity), 99))
     top_vulns = []
     for v in not_filtered[:20]:
-        top_vulns.append({
-            "finding_id": v.finding_id,
-            "hostname": v.hostname,
-            "name": v.name,
-            "cve": v.cve,
-            "severity": v.severity,
-            "ai_severity": v.ai_severity,
-            "category": str(v.category),
-            "fix_advice": v.fix_advice,
-        })
+        top_vulns.append(
+            {
+                "finding_id": v.finding_id,
+                "hostname": v.hostname,
+                "name": v.name,
+                "cve": v.cve,
+                "severity": v.severity,
+                "ai_severity": v.ai_severity,
+                "category": str(v.category),
+                "fix_advice": v.fix_advice,
+            }
+        )
 
     # Generate recommendations
     recommendations: list[str] = []
     sev_set = {v.severity for v in not_filtered}
     if "critical" in sev_set:
-        recommendations.append("Critical: immediate emergency patching required - schedule change window within 24 hours")
+        recommendations.append(
+            "Critical: immediate emergency patching required - schedule change window within 24 hours"
+        )
     if "high" in sev_set:
-        recommendations.append("High: schedule patching within 7 days, apply compensating controls in interim")
+        recommendations.append(
+            "High: schedule patching within 7 days, apply compensating controls in interim"
+        )
     if "medium" in sev_set:
         recommendations.append("Medium: include in next regular patch cycle (within 30 days)")
-    if by_category.get("ScanModule.BASELINE", 0) > 0:
-        recommendations.append("Baseline: review and harden system configurations per CIS benchmarks")
+    # The dict key uses str(ScanModule.BASELINE) == "ScanModule.BASELINE"
+    # (Python's str() on a str-Enum returns the member name, not the value).
+    # Tests rely on this so we keep the same lookup.
+    if by_category.get(str(ScanModule.BASELINE), 0) > 0:
+        recommendations.append(
+            "Baseline: review and harden system configurations per CIS benchmarks"
+        )
     recommendations.append("Re-scan affected hosts after remediation to verify fixes")
 
     # AI summary generation (lightweight, non-blocking)
@@ -471,6 +666,7 @@ async def generate_report(state: dict) -> dict:
     ai_analysis_text = ""
     try:
         from src.knowledge.models.adapter import get_model_adapter
+
         adapter = get_model_adapter()
         summary_prompt = f"""Summarise this vulnerability scan result in 2-3 sentences in Chinese.
 
@@ -510,19 +706,30 @@ Focus on actionable risk posture and top remediation priority."""
     await store.update_task(task_id, status="completed", finished_at=datetime.now(UTC).isoformat())
 
     # Publish completion event
-    await _pub_progress(task_id, "report", "done", f"Report generated: {len(vulns)} findings, {len(recommendations)} recommendations")
+    await _pub_progress(
+        task_id,
+        "report",
+        "done",
+        f"Report generated: {len(vulns)} findings, {len(recommendations)} recommendations",
+    )
 
     # Clean up collect counter
+    r = None
     try:
         import redis.asyncio as aioredis
 
         from src.common.config.settings import get_settings
+
         r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
         await r.delete(f"vulnscan:collect:{task_id}")
     except Exception:
         pass
+    finally:
+        if r is not None:
+            try:
+                await r.aclose()
+            except Exception:
+                pass
 
     logger.info("vulnscan_report_generated", task_id=task_id, total=len(vulns))
     return {"report": report, "status": "completed"}
-
-

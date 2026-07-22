@@ -40,7 +40,9 @@ class SandboxExecutor:
 
     async def execute(self, code: str) -> ExecutionResult:
         if self._docker is None:
-            return ExecutionResult(status="error", stdout="", stderr="Docker not available", exit_code=-1)
+            return ExecutionResult(
+                status="error", stdout="", stderr="Docker not available", exit_code=-1
+            )
 
         start = time.monotonic()
         container_name = f"poc-{uuid.uuid4().hex[:8]}"
@@ -77,7 +79,7 @@ class SandboxExecutor:
                 network=self._network,
                 mem_limit="1g",
                 cpu_period=100000,
-                cpu_quota=200000,   # 2 CPUs
+                cpu_quota=200000,  # 2 CPUs
                 read_only=True,
                 tmpfs={"/tmp": "size=64m"},
                 security_opt=["no-new-privileges:true", "seccomp=runtime/default"],
@@ -89,7 +91,13 @@ class SandboxExecutor:
             stdout_text = output.decode("utf-8", errors="replace")
             is_vuln = "VULNERABLE" in stdout_text or "exploit_success" in stdout_text.lower()
             return ExecutionResult(
-                status="success" if is_vuln else "crash",
+                # P2-EXEC-07 (2026-07-20): don't label every non-vulnerable
+                # successful run as "crash" -- "success" + is_vulnerable=False
+                # is the accurate outcome. Crash is reserved for actual
+                # container / runtime failures below.
+                # V4.1 (P0-4): Pydantic v2 BaseModel does not accept positional
+                # args (was raising TypeError at runtime AND failing mypy).
+                status="success",
                 stdout=stdout_text,
                 stderr="",
                 exit_code=0,

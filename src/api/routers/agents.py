@@ -1,10 +1,12 @@
 """Agent / Vulnscan REST API endpoints."""
+
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, PlainTextResponse
+from pydantic import BaseModel, Field
 
 from src.agents.enroll import (
     create_enroll_token,
@@ -13,7 +15,16 @@ from src.agents.enroll import (
     register_enroll_token,
     validate_enroll_token,
 )
-from src.agents.manager import decommission_host, get_host, list_hosts
+from src.agents.manager import (
+    create_group,
+    decommission_host,
+    delete_group,
+    delete_host_permanently,
+    get_host,
+    list_groups,
+    list_hosts,
+    update_host_group,
+)
 from src.agents.models import (
     EnrollRequest,
     EnrollResponse,
@@ -28,10 +39,37 @@ from src.api.auth.routes import require_role
 from src.common.audit.audit_logger import get_audit_logger
 from src.common.config.settings import get_settings
 
+
+# P1 / 2026-07-19: explicit Pydantic models for /upgrade and /config so missing
+# or malformed fields return 422 (instead of silently sending an empty
+# agent_upgrade / config_update command).
+class UpgradeRequest(BaseModel):
+    version: str = Field(..., min_length=1, description="Target agent binary version, e.g. v0.2.0")
+    download_url: str = Field(
+        ..., min_length=1, description="HTTPS URL the agent downloads the new binary from"
+    )
+
+
+class AgentConfigRequest(BaseModel):
+    heartbeat_interval: int | None = Field(default=None, ge=1, le=3600)
+    log_level: str | None = Field(default=None, description="debug|info|warn|error")
+    resource_limit: dict | None = None
+
+
+class GroupCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128, description="组名")
+    description: str = ""
+
+
+class HostGroupUpdateRequest(BaseModel):
+    group: str | None = Field(default=None, description="目标组名，传 null 清空")
+
+
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 
 # ----------------------------------------------------------------------- Enrollment
+
 
 @router.post("/enroll-tokens", response_model=EnrollTokenResponse)
 async def api_create_enroll_token(
@@ -40,10 +78,14 @@ async def api_create_enroll_token(
 ):
     """Create an enrollment token (admin only)."""
     token, expires = await create_enroll_token(
-        group=req.group, ttl_hours=req.ttl_hours, uses=req.uses,
+        group=req.group,
+        ttl_hours=req.ttl_hours,
+        uses=req.uses,
     )
     await get_audit_logger().log(
-        event_id="agent", node="agents.router", action="create_enroll_token",
+        event_id="agent",
+        node="agents.router",
+        action="create_enroll_token",
         actor=current_user.username,
         details={"group": req.group, "ttl_hours": req.ttl_hours},
     )
@@ -52,7 +94,8 @@ async def api_create_enroll_token(
 
 @router.get("/install")
 async def api_install_script(
-    token: str = Query(...), os: str = Query("linux"),
+    token: str = Query(...),
+    os: str = Query("linux"),
     request: Request = None,  # type: ignore[assignment]
 ):
     """Return the install script for the given token and OS.
@@ -70,7 +113,10 @@ async def api_install_script(
     """
     valid = await peek_enroll_token(token)
     if not valid:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid or expired enrollment token")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid or expired enrollment token",
+        )
     # Prefer the configured external URL (settings.agent_console_external_url)
     # so the generated script points at the canonical, deployable console URL
     # rather than whatever hostname the operator happened to hit. Fall back to
@@ -113,7 +159,10 @@ async def api_install_helper(
     """
     valid = await peek_enroll_token(token)
     if not valid:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid or expired enrollment token")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid or expired enrollment token",
+        )
     settings = get_settings()
     configured = (settings.agent_console_external_url or "").strip()
     if configured:
@@ -133,16 +182,14 @@ async def api_install_helper(
         # PowerShell two-step: real newlines between commands (PowerShell
         # users are used to multi-line copy-paste).
         snippet = (
-            f'# Run PowerShell as Administrator, then:\n'
+            f"# Run PowerShell as Administrator, then:\n"
             f'Invoke-WebRequest -Uri "{install_url}" -OutFile secagent-install.ps1\n'
-            f'Unblock-File .\\secagent-install.ps1\n'
-            f'.\\secagent-install.ps1'
+            f"Unblock-File .\\secagent-install.ps1\n"
+            f".\\secagent-install.ps1"
         )
     else:
         # Linux two-step: SINGLE LINE, no continuations, no trailing newline.
-        snippet = (
-            rf'curl -fsSL "{install_url}" -o secagent-install.sh && chmod +x secagent-install.sh && sudo bash secagent-install.sh'
-        )
+        snippet = rf'curl -fsSL "{install_url}" -o secagent-install.sh && chmod +x secagent-install.sh && sudo bash secagent-install.sh'
     return PlainTextResponse(
         content=snippet,
         media_type="text/plain",
@@ -151,30 +198,49 @@ async def api_install_helper(
 
 
 @router.post("/enroll", response_model=EnrollResponse)
-async def api_enroll_host(req: EnrollRequest):
+async def api_enroll_host(req: EnrollRequest, request: Request):
     """Register a new agent host using an enrollment token.
 
     P1 (2026-07-17): if the request IP already has a host row (operator
     re-ran the installer), the old row is decommissioned first so the new
     registration replaces it cleanly. This keeps the host list de-duplicated
     by IP and prevents stale offline rows from accumulating.
+
+    P1-6 修复：IP 去重用服务端可信 IP（X-Forwarded-For 或 request.client.host），
+    不信任请求体里的 req.ip -- 否则攻击者用合法 enroll token 伪造 ip 即可
+    decommission_host_by_ip(任意ip) 下线任意在产主机。req.ip 仅作为展示用
+    Host.ip 字段保留（agent 上报的真实内网 IP，NAT 后服务端看不到）。
     """
     valid = await validate_enroll_token(req.token)
     if not valid:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid or expired enrollment token")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid or expired enrollment token",
+        )
 
-    # IP-based dedup: drop any previous host row with the same IP BEFORE
-    # creating the new row so PG keeps a single current record per IP.
-    # We keep the new agent_id; the agent_token on the old host is no
-    # longer useful since the operator has the new one.
-    if req.ip:
+    # 推导服务端可信 IP：优先代理校验过的 X-Forwarded-For 首段，回退到
+    # request.client.host。两者都不可用时跳过 IP 去重（不阻断注册）。
+    server_ip = ""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        server_ip = xff.split(",")[0].strip()
+    elif request.client and request.client.host:
+        server_ip = request.client.host
+
+    # IP-based dedup: drop any previous host row with the same server-side IP.
+    if server_ip:
         from src.agents.manager import decommission_host_by_ip
-        removed = await decommission_host_by_ip(req.ip)
+
+        removed = await decommission_host_by_ip(server_ip)
         if removed > 0:
             from src.common.logging.logger import get_logger as _log
-            _log(__name__).info("host_ip_replaced_during_enroll", ip=req.ip, removed=removed)
+
+            _log(__name__).info(
+                "host_ip_replaced_during_enroll", server_ip=server_ip, removed=removed
+            )
 
     import secrets
+
     agent_id = f"agent-{uuid.uuid4().hex[:12]}"
     agent_token = secrets.token_urlsafe(32)
     settings = get_settings()
@@ -202,7 +268,9 @@ async def api_enroll_host(req: EnrollRequest):
     await register_enroll_token(agent_id, agent_token)
 
     await get_audit_logger().log(
-        event_id="agent", node="agents.router", action="enroll",
+        event_id="agent",
+        node="agents.router",
+        action="enroll",
         actor="agent",
         details={"agent_id": agent_id, "hostname": req.hostname, "os": req.os},
     )
@@ -213,6 +281,7 @@ async def api_enroll_host(req: EnrollRequest):
     # immediately (without waiting for the server to push a rule_update).
     try:
         from src.agents.rules_sync import current_rule_version as _cur_ver
+
         rule_version = await _cur_ver()
     except Exception:
         rule_version = ""
@@ -231,9 +300,11 @@ async def api_enroll_host(req: EnrollRequest):
 
 # ----------------------------------------------------------------------- Binary Download
 
+
 @router.get("/binary/{os}/{arch}")
 async def api_download_binary(
-    os: str, arch: str,
+    os: str,
+    arch: str,
     token: str | None = Query(default=None),
     authorization: str | None = Header(default=None),
 ):
@@ -246,10 +317,15 @@ async def api_download_binary(
     """
     effective = _extract_token(token, authorization)
     if not effective:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Missing enrollment token")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Missing enrollment token"
+        )
     valid = await peek_enroll_token(effective)
     if not valid:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid or expired enrollment token")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid or expired enrollment token",
+        )
 
     settings = get_settings()
     binary_dir = Path(settings.agent_binary_dir)
@@ -257,7 +333,10 @@ async def api_download_binary(
     binary_path = binary_dir / os / arch / f"agent{ext}"
 
     if not binary_path.is_file():
-        raise HTTPException(status_code=404, detail=f"Binary not available for {os}/{arch}. Build with: cd agent && make build-{os}-{arch}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Binary not available for {os}/{arch}. Build with: cd agent && make build-{os}-{arch}",
+        )
 
     return FileResponse(
         path=str(binary_path),
@@ -278,10 +357,15 @@ async def api_download_ca(
     """
     effective = _extract_token(token, authorization)
     if not effective:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Missing enrollment token")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Missing enrollment token"
+        )
     valid = await peek_enroll_token(effective)
     if not valid:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid or expired enrollment token")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid or expired enrollment token",
+        )
 
     settings = get_settings()
     ca_path = settings.agent_ca_cert
@@ -293,7 +377,6 @@ async def api_download_ca(
         media_type="application/x-pem-file",
         filename="ca.pem",
     )
-
 
 
 @router.get("/console-url")
@@ -324,6 +407,7 @@ async def api_console_url(request: Request) -> dict:
 
 # ------------------------------------------------------------------------ Host Management
 
+
 @router.get("", response_model=dict)
 async def api_list_hosts(
     status_filter: str | None = Query(None, alias="status"),
@@ -333,6 +417,87 @@ async def api_list_hosts(
     """List enrolled hosts."""
     hosts = await list_hosts(status_filter, group)
     return {"items": [h.model_dump() for h in hosts]}
+
+
+# -- Host groups (declared before /{agent_id} so "groups" isn't captured as
+#    an agent_id path parameter) --
+
+
+@router.get("/groups")
+async def api_list_groups(
+    current_user=Depends(require_role("admin", "analyst")),
+):
+    """List host groups with member counts."""
+    groups = await list_groups()
+    return {"items": groups}
+
+
+@router.post("/groups")
+async def api_create_group(
+    req: GroupCreateRequest,
+    current_user=Depends(require_role("admin")),
+):
+    """Create a new host group (admin only)."""
+    import asyncpg
+
+    try:
+        await create_group(req.name, req.description)
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(status_code=409, detail="主机组已存在")
+    await get_audit_logger().log(
+        event_id="agent",
+        node="agents.router",
+        action="create_group",
+        actor=current_user.username,
+        details={"group": req.name},
+    )
+    return {"status": "ok"}
+
+
+@router.delete("/groups/{name}")
+async def api_delete_group(
+    name: str,
+    current_user=Depends(require_role("admin")),
+):
+    """Delete a host group (admin only).
+
+    P1-4 修复：组内仍有主机时拒绝删除（返回 409），避免 hosts.group_name
+    引用已删组变成 legacy 孤儿。操作员需先迁移或下线组内主机。
+    """
+    remaining = await delete_group(name)
+    if remaining > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"组内仍有 {remaining} 台主机，请先迁移或下线后再删除",
+        )
+    await get_audit_logger().log(
+        event_id="agent",
+        node="agents.router",
+        action="delete_group",
+        actor=current_user.username,
+        details={"group": name},
+    )
+    return {"status": "ok"}
+
+
+@router.patch("/{agent_id}")
+async def api_update_host(
+    agent_id: str,
+    body: HostGroupUpdateRequest,
+    current_user=Depends(require_role("admin")),
+):
+    """Move a host to a different group (admin only)."""
+    host = await update_host_group(agent_id, body.group)
+    if not host:
+        raise HTTPException(status_code=404, detail="Host not found")
+    await get_audit_logger().log(
+        event_id="agent",
+        node="agents.router",
+        action="update_host_group",
+        actor=current_user.username,
+        details={"agent_id": agent_id, "group": body.group},
+    )
+    return {"status": "ok", "host": host.model_dump()}
 
 
 @router.get("/{agent_id}", response_model=Host)
@@ -348,17 +513,40 @@ async def api_get_host(
 
 
 @router.delete("/{agent_id}")
+@router.delete("/{agent_id}")
 async def api_delete_host(
     agent_id: str,
+    purge: bool = Query(False, description="True=物理删除(仅已下线主机允许); False=软删除(下线)"),
     current_user=Depends(require_role("admin")),
 ):
-    """Decommission a host (admin only)."""
+    """Delete a host (admin only).
+
+    需求1.4：purge=True 时物理删除（仅 decommissioned 主机允许），purge=False 时软删除（下线）。
+    """
     host = await get_host(agent_id)
     if not host:
         raise HTTPException(status_code=404, detail="Host not found")
+    if purge:
+        # 物理删除：仅已下线主机允许，避免误删在线主机
+        ok = await delete_host_permanently(agent_id)
+        if not ok:
+            raise HTTPException(
+                status_code=422,
+                detail="仅可物理删除已下线的主机，请先下线该主机",
+            )
+        await get_audit_logger().log(
+            event_id="agent",
+            node="agents.router",
+            action="delete_permanent",
+            actor=current_user.username,
+            details={"agent_id": agent_id},
+        )
+        return {"status": "ok", "purged": True}
     await decommission_host(agent_id)
     await get_audit_logger().log(
-        event_id="agent", node="agents.router", action="decommission",
+        event_id="agent",
+        node="agents.router",
+        action="decommission",
         actor=current_user.username,
         details={"agent_id": agent_id},
     )
@@ -368,16 +556,17 @@ async def api_delete_host(
 @router.post("/{agent_id}/upgrade")
 async def api_upgrade_agent(
     agent_id: str,
-    body: dict,
+    body: UpgradeRequest,
     current_user=Depends(require_role("admin")),
 ):
     """Trigger an agent_upgrade command via the WS gateway."""
     from datetime import UTC, datetime
 
     from src.agents.ws_gateway import get_agent_gateway
+
     gateway = get_agent_gateway()
-    version = body.get("version", "")
-    download_url = body.get("download_url", "")
+    version = body.version
+    download_url = body.download_url
     msg = {
         "v": 1,
         "type": "agent_upgrade",
@@ -393,21 +582,27 @@ async def api_upgrade_agent(
 @router.patch("/{agent_id}/config")
 async def api_update_agent_config(
     agent_id: str,
-    body: dict,
+    body: AgentConfigRequest,
     current_user=Depends(require_role("admin")),
 ):
     """Trigger a config_update command via the WS gateway."""
     from datetime import UTC, datetime
 
     from src.agents.ws_gateway import get_agent_gateway
+
     gateway = get_agent_gateway()
     msg = {
         "v": 1,
         "type": "config_update",
         "ts": datetime.now(UTC).isoformat(),
         "payload": {
-            "heartbeat_interval": body.get("heartbeat_interval", 60),
-            "resource_limit": body.get("resource_limit", {"cpu_percent": 30, "mem_percent": 30}),
+            "heartbeat_interval": body.heartbeat_interval
+            if body.heartbeat_interval is not None
+            else 60,
+            "log_level": body.log_level,
+            "resource_limit": body.resource_limit
+            if body.resource_limit is not None
+            else {"cpu_percent": 30, "mem_percent": 30},
         },
     }
     ok = await gateway.send_to_agent(agent_id, msg)

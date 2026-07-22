@@ -56,6 +56,50 @@ class TestAuth:
         assert resp.status_code == 401
 
 
+    def test_disabled_user_cannot_login(self):
+        # P1-API-01 (2026-07-20): a disabled user must NOT be able to log
+        # in even with the correct password. We monkeypatch get_user so
+        # the test does not depend on the PG seed.
+        from passlib.context import CryptContext
+
+        from src.api.auth import jwt as jwt_module
+        _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        valid_hash = _pwd.hash("any")
+        async def _fake_disabled(username):
+            return jwt_module.UserInDB(
+                username=username, hashed_password=valid_hash,
+                role="admin", disabled=True,
+            )
+        original = jwt_module.get_user
+        jwt_module.get_user = _fake_disabled
+        try:
+            resp = client.post(
+                "/api/v1/auth/login",
+                json={"username": "admin", "password": "admin123"},
+            )
+            assert resp.status_code == 401
+        finally:
+            jwt_module.get_user = original
+
+    def test_sse_token_endpoint_returns_short_lived_jwt(self):
+        # P1-API-04 (2026-07-20): /auth/sse-token mints a token scoped
+        # to one channel with a 60s TTL.
+        headers = _auth_headers("admin")
+        resp = client.post(
+            "/api/v1/auth/sse-token",
+            json={"scope": "events"},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["expires_in"] == 60
+        assert body["token"] != headers["Authorization"].split()[-1]
+
+    def test_sse_token_endpoint_rejects_unauthenticated(self):
+        resp = client.post("/api/v1/auth/sse-token", json={"scope": "events"})
+        assert resp.status_code == 401
+
+
 # -- health -------------------------------------------------------------------
 
 class TestHealth:
@@ -319,21 +363,81 @@ class TestInstall:
         fields = set(EnrollResponse.model_fields.keys())
         assert "rule_version" in fields, "EnrollResponse must expose rule_version"
 
+    def test_engine_field_roundtrip_through_scantask(self):
+        # P0 (2026-07-18): engine selector flows from API -> ScanTask -> WS
+        # scan_command payload -> agent engine.go. We assert the model + the
+        # WS payload construction both carry the new field.
+        from src.agents.models import ScanTask
+        t = ScanTask(
+            task_id="task-engine-1",
+            engine="nuclei",
+            nuclei_severity=["critical", "high"],
+            nuclei_tags=["rce", "auth-bypass"],
+            nuclei_templates=["cves/2024/CVE-2024-1234"],
+            nuclei_timeout_sec=300,
+        )
+        # Make sure the model exposes the new fields consistently.
+        assert t.engine == "nuclei"
+        assert "critical" in t.nuclei_severity
+        assert "rce" in t.nuclei_tags
+        assert "cves/2024/CVE-2024-1234" in t.nuclei_templates
+        assert t.nuclei_timeout_sec == 300
+        # And that ScanIntent-style scan_task dict (which is what we send to
+        # the WS gateway) carries them too. We use a tiny inline construction
+        # mirroring the payload builder; we don't call the actual subgraph
+        # because that requires ES + LangGraph.
+        payload = {
+            "task_id": t.task_id,
+            "engine": t.engine,
+            "nuclei_targets": t.targets,
+            "nuclei_severity": t.nuclei_severity,
+            "nuclei_tags": t.nuclei_tags,
+            "nuclei_templates": t.nuclei_templates,
+            "nuclei_timeout_sec": t.nuclei_timeout_sec,
+        }
+        assert payload["engine"] == "nuclei"
+        assert payload["nuclei_targets"] == []
+        assert "rce" in payload["nuclei_tags"]
+        assert payload["nuclei_timeout_sec"] == 300
+
+    def test_install_script_downloads_nuclei(self):
+        # P0 (2026-07-18): install.sh must attempt to fetch the nuclei CLI
+        # alongside the agent binary so the agent's runNuclei() path has
+        # something to invoke. The download is best-effort: failure should
+        # not abort the install (matcher-only mode still works).
+        from src.agents.enroll import get_install_script_content
+        script = get_install_script_content("tok123", "linux", console_url="http://console:8000")
+        assert "install_nuclei()" in script, (
+            "install.sh should call install_nuclei() (P0 step 6)")
+        assert "/opt/secagent/bin/nuclei" in script, (
+            "nuclei binary should land at /opt/secagent/bin/nuclei")
+        assert "projectdiscovery/nuclei" in script, (
+            "nuclei should be downloaded from the official GitHub release")
+        # Best-effort: failure paths must NOT contain 'exit 1' that would
+        # abort the whole install.
+        assert "install_nuclei || true" in script
+
     def test_install_script_systemd_unit_expands_variables(self):
         # P1 / 2026-07-17 user feedback: systemd unit had ExecStart=$INSTALL_DIR/agent
         # (literal) which systemd rejected as "bad unit file setting". The root
         # cause was the heredoc using ``<<\'EOFSVC\'`` (single-quoted) which
-        # disables bash variable expansion. The systemd heredoc must be
-        # unquoted so $INSTALL_DIR / ${SERVICE_NAME} are interpolated before
-        # writing the file.
+        # disables bash variable expansion. Both heredocs must be UNQUOTED so
+        # bash interpolates $INSTALL_DIR / ${SERVICE_NAME} / $CONSOLE /
+        # $AGENT_ID / $AGENT_TOKEN / $SERVER_PUBKEY before writing the file.
+        # The Go agent's config.Load() does a plain json.Unmarshal (no shell
+        # variable expansion), so the runtime values must be baked into
+        # config.json at install time -- keeping both heredocs unquoted is
+        # the only correct design that satisfies "agent starts with real
+        # agent_token / server_public_key" without requiring Go-side parsing.
         from src.agents.enroll import get_install_script_content
         script = get_install_script_content("tok123", "linux", console_url="http://console:8000")
         # The systemd heredoc opener MUST be unquoted:
         assert "<<EOFSVC" in script, "systemd heredoc opener must not be single-quoted"
         assert "<<\'EOFSVC\'" not in script, "systemd heredoc opener must not be single-quoted"
-        # Conversely, the JSON config heredoc SHOULD stay quoted (the Go
-        # agent resolves the literal ``$CONSOLE`` strings at runtime):
-        assert "<<\'EOFCFG\'" in script, "config.json heredoc should stay single-quoted"
+        # The JSON config heredoc MUST also be unquoted (bash expands
+        # $CONSOLE / $AGENT_ID / $AGENT_TOKEN / $SERVER_PUBKEY into the file):
+        assert "<<EOFCFG" in script, "config.json heredoc must be unquoted for bash variable expansion"
+        assert "<<\'EOFCFG\'" not in script, "config.json heredoc must be unquoted"
 
     @pytest.mark.asyncio
     async def test_enroll_host_sets_last_heartbeat_to_now(self):

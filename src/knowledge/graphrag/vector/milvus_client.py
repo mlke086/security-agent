@@ -29,12 +29,14 @@ class MilvusVectorClient:
         hits = []
         for hit in results[0]:
             if hit.score >= get_settings().milvus_score_threshold:
-                hits.append({
-                    "doc_id": hit.entity.get("doc_id"),
-                    "content": hit.entity.get("content"),
-                    "source": hit.entity.get("source"),
-                    "similarity": hit.score,
-                })
+                hits.append(
+                    {
+                        "doc_id": hit.entity.get("doc_id"),
+                        "content": hit.entity.get("content"),
+                        "source": hit.entity.get("source"),
+                        "similarity": hit.score,
+                    }
+                )
         return hits
 
     def insert(self, docs: list[dict]) -> None:
@@ -48,6 +50,25 @@ class MilvusVectorClient:
         collection.insert(data)
         collection.flush()
 
+    def delete_by_event(self, event_id: str) -> int:
+        """Delete every vector whose doc_id starts with ``<event_id>:``. Returns
+        rows deleted. P1-CORE-2: MemoryManager.cleanup() needs this to actually
+        prune Milvus instead of leaving orphans forever.
+        """
+        try:
+            from pymilvus import Collection
+
+            collection = Collection(self._collection_name)
+            # expr requires escaping; event_id is server-generated so safe
+            expr = f'doc_id like "{event_id}:%"'
+            collection.delete(expr)
+            collection.flush()
+            logger.info("milvus_event_deleted", event_id=event_id)
+            return -1  # count not returned synchronously by Milvus 2.x
+        except Exception as exc:
+            logger.warning("milvus_event_delete_failed", event_id=event_id, error=str(exc))
+            return 0
+
     def close(self) -> None:
         """Disconnect the pymilvus gRPC connection (P1-KNOW-1).
 
@@ -56,6 +77,7 @@ class MilvusVectorClient:
         """
         try:
             from pymilvus import connections
+
             connections.disconnect("default")
         except Exception as exc:
             logger.debug("milvus_disconnect_failed", error=str(exc))

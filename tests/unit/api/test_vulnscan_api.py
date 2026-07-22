@@ -2,9 +2,8 @@
 
 Covers: tasks/parse, tasks CRUD, task cancel, stream, results, reports, vulns CRUD.
 """
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
@@ -30,6 +29,7 @@ def _mock_store():
     store.save_task = AsyncMock()
     store.update_task = AsyncMock()
     store.list_vulns = AsyncMock(return_value=[])
+    store.get_vuln = AsyncMock(return_value=None)
     store.get_report = AsyncMock(return_value=None)
     store.save_report = AsyncMock()
     store.save_result = AsyncMock()

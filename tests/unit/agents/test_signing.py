@@ -5,7 +5,7 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from src.agents.signing import sign_message, verify_message, SENSITIVE_TYPES
+from src.agents.signing import SENSITIVE_TYPES, sign_message, verify_message
 
 
 @pytest.fixture

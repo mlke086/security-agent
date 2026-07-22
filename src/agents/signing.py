@@ -1,4 +1,5 @@
-""""Ed25519 instruction signing -- sign outgoing commands, verify on Agent side."""
+""" "Ed25519 instruction signing -- sign outgoing commands, verify on Agent side."""
+
 import base64
 import json
 from datetime import UTC, datetime
@@ -34,6 +35,8 @@ def _get_private_key() -> ed25519.Ed25519PrivateKey | None:
     except Exception as exc:
         logger.error("invalid_agent_signing_key_hex", error=str(exc))
         return None
+
+
 def sign_bytes(data: bytes) -> str:
     """Sign arbitrary bytes with Ed25519. Returns base64-encoded signature.
     Used for agent_upgrade binary hash verification."""
@@ -50,6 +53,41 @@ def get_public_key_hex() -> str:
     if pk is None:
         return ""
     return pk.public_key().public_bytes_raw().hex()
+
+
+def check_signing_key() -> bool:
+    """P2-2 修复：启动时校验 agent_signing_key 已配置且是合法 Ed25519 私钥 hex。
+
+    未配置或格式错误时，规则分发链路（rule_update 的 Ed25519 签名）会静默
+    失败 -- agent 拒收所有 rule_update。返回 True 表示配置正常，False 表示
+    有问题（调用方应告警）。不抛异常以免阻断 dev 环境启动。
+    """
+    s = get_settings()
+    key_hex = s.agent_signing_key
+    if not key_hex:
+        logger.error(
+            "agent_signing_key_not_configured",
+            note="规则分发链路将静默失败：agent 会拒收所有 rule_update。"
+            "请在 .env 设置 AGENT_SIGNING_KEY（64 字节 Ed25519 私钥的 hex）",
+        )
+        return False
+    try:
+        bytes.fromhex(key_hex)
+    except ValueError:
+        logger.error(
+            "agent_signing_key_invalid_hex",
+            note="agent_signing_key 不是合法 hex，规则分发链路将失败",
+        )
+        return False
+    # 进一步校验长度（Ed25519 私钥 32 字节 = 64 hex）
+    if len(key_hex) != 64:
+        logger.error(
+            "agent_signing_key_wrong_length",
+            length=len(key_hex),
+            note="Ed25519 私钥应为 32 字节(64 hex 字符)，规则分发链路将失败",
+        )
+        return False
+    return True
 
 
 def sign_message(msg: dict) -> dict:
@@ -76,7 +114,13 @@ def sign_message(msg: dict) -> dict:
     if "ts" not in msg:
         msg["ts"] = ts
 
-    logger.debug("instruction_signed", type=msg_type)
+    # P1-GO-4 (2026-07-19) + V4.1 (P0-2): emit the canonical string only
+    # when the operator opted in via `agent_debug=True` (mirrors the Go
+    # AGENT_DEBUG=1 gating in agent/internal/comm/client.go::dbgLog and
+    # agent/internal/crypto/verify.go::Verify). At INFO level the default
+    # production run never sees raw payload fields.
+    if get_settings().agent_debug:
+        logger.info("instruction_signed_debug", canonical=sign_payload)
     return msg
 
 
@@ -100,7 +144,9 @@ def verify_message(msg: dict, public_key_hex: str) -> bool:
         signature = base64.b64decode(sig_b64)
         ts = msg.get("ts", "")
         payload = msg.get("payload", {})
-        verify_payload = f"{msg_type}|{ts}|{json.dumps(payload, sort_keys=True, ensure_ascii=False)}"
+        verify_payload = (
+            f"{msg_type}|{ts}|{json.dumps(payload, sort_keys=True, ensure_ascii=False)}"
+        )
         public_key.verify(signature, verify_payload.encode())
         return True
     except Exception as exc:

@@ -5,6 +5,8 @@ package updater
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/security-agent/agent/internal/crypto"
 	"github.com/security-agent/agent/internal/scan"
@@ -108,6 +111,39 @@ type RuleUpdateRequest struct {
 	RuleVersion string `json:"rule_version"`
 	DownloadURL string `json:"download_url"`
 	Signature   string `json:"signature"`
+	// AgentID / AgentToken / CAPath are NOT part of the server payload; the
+	// caller (main.go) fills them in so the pack download can authenticate
+	// against /rules/pack/{version} (which requires a JWT or agent_token) and
+	// trust the server's TLS cert when a self-signed CA is in use.
+	// Left empty in unit tests (test server doesn't enforce auth / TLS).
+	AgentID     string `json:"-"`
+	AgentToken  string `json:"-"`
+	CAPath      string `json:"-"`
+}
+
+// httpClient builds an *http.Client that trusts the configured CA (so
+// self-signed console certs work) and has a 60s timeout (so a hung server
+// can't block the rule-update goroutine forever). Mirrors the CA loading in
+// comm/client.go Connect.
+func httpClient(caPath string) *http.Client {
+	client := &http.Client{Timeout: 60 * time.Second}
+	if caPath == "" {
+		return client
+	}
+	caCert, err := os.ReadFile(caPath)
+	if err != nil {
+		log.Printf("[updater] WARN: read CA failed (%v), using system roots", err)
+		return client
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caCert) {
+		log.Printf("[updater] WARN: CA pool append failed, using system roots")
+		return client
+	}
+	client.Transport = &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: caPool},
+	}
+	return client
 }
 
 // HandleRuleUpdate downloads and hot-loads new vulnerability rules (no restart).
@@ -127,7 +163,24 @@ func HandleRuleUpdate(req RuleUpdateRequest, sendAck func(kind, version string, 
 		return fmt.Errorf("server public key not configured - cannot verify rule update")
 	}
 
-	resp, err := http.Get(req.DownloadURL)
+	// 修复(P1-1/P1-2)：用带 CA + 超时的 http.Client，凭证走 Authorization
+	// header（与 WS 链路一致，不把 token 拼进 URL 落日志/抓包）。agent_id 走
+	// query（非敏感，后端用它 + header token 做 validate_agent_token）。
+	downloadURL := req.DownloadURL
+	httpReq, err := http.NewRequest("GET", downloadURL, nil)
+	if err != nil {
+		if sendAck != nil { sendAck("rule", req.RuleVersion, false, err.Error()) }
+		return fmt.Errorf("build download request: %w", err)
+	}
+	if req.AgentID != "" {
+		q := httpReq.URL.Query()
+		q.Set("agent_id", req.AgentID)
+		httpReq.URL.RawQuery = q.Encode()
+	}
+	if req.AgentID != "" && req.AgentToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+req.AgentToken)
+	}
+	resp, err := httpClient(req.CAPath).Do(httpReq)
 	if err != nil {
 		if sendAck != nil { sendAck("rule", req.RuleVersion, false, err.Error()) }
 		return fmt.Errorf("download rule pack: %w", err)
@@ -161,6 +214,8 @@ func HandleRuleUpdate(req RuleUpdateRequest, sendAck func(kind, version string, 
 	}
 
 	log.Printf("[updater] rules v%s loaded", req.RuleVersion)
+	// F-WSL (2026-07-21): the caller (main.go) records the new version
+	// on the client so the next heartbeat reports it back.
 	if sendAck != nil { sendAck("rule", req.RuleVersion, true, "") }
 	return nil
 }

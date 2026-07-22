@@ -1,9 +1,22 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Security AI Agent</title>
+    <!-- P3-7 修复：在 React mount 前根据已保存的主题预设 body 背景，
+         避免暗色/科技蓝用户首屏白闪。内联脚本同步执行，无 FOUC。 -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("theme");
+          var darkBg = { dark: "#141414", "tech-blue": "#0a1929" };
+          var lightBg = { light: "#ffffff", "eye-green": "#f0f7ed" };
+          if (t && darkBg[t]) { document.documentElement.style.background = darkBg[t]; }
+          else if (t && lightBg[t]) { document.documentElement.style.background = lightBg[t]; }
+        } catch (e) { /* localStorage 不可用(隐私模式)，忽略 */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -56,7 +56,22 @@ async def test_aggregator_node():
     result = await aggregator_node(state)
     assert result["final_verdict"] == "true_positive"
     assert result["confidence_score"] == 0.9
-    assert result["stage"] == "done"
+    # No upstream stage -> default "investigate" (first-pass investigation).
+    assert result["stage"] == "investigate"
+
+
+@pytest.mark.asyncio
+async def test_aggregator_preserves_verify_stage():
+    """Aggregator must preserve stage="verify" from vuln_check so
+    route_after_verdict can route confirmed-vuln events to respond (P1-CORE-1)."""
+    state = {
+        "event_id": "e1",
+        "stage": "verify",
+        "subgraph_result": {"final_verdict": "true_positive", "confidence_score": 0.95},
+    }
+    result = await aggregator_node(state)
+    assert result["stage"] == "verify"
+    assert result["final_verdict"] == "true_positive"
 
 
 @pytest.mark.asyncio

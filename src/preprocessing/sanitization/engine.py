@@ -33,6 +33,7 @@ class SanitizationEngine:
         self._rules: list[Rule] = []
         self.reload_rules()
         self._start_watcher()
+        self._closed = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -94,3 +95,24 @@ class SanitizationEngine:
         observer.schedule(_RulesReloader(self), str(self._rules_path.parent), recursive=False)
         observer.daemon = True
         observer.start()
+
+    def close(self) -> None:
+        """Stop the rules-file watchdog. Safe to call multiple times.
+
+        P2-PRE-04 (2026-07-20): the Observer thread was started by
+        _start_watcher() but never joined, so every SanitizationEngine
+        leaked one thread. The consumer process used to spawn several
+        engines over its lifetime, eventually exhausting the thread
+        limit. close() is idempotent so callers don't have to track
+        whether they already shut down.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        obs = getattr(self, "_observer", None)
+        if obs is not None:
+            try:
+                obs.stop()
+                obs.join(timeout=2.0)
+            except Exception:
+                pass

@@ -1,4 +1,4 @@
-﻿"""ActionDispatcher — routes operations to registered connectors."""
+"""ActionDispatcher — routes operations to registered connectors."""
 
 import hashlib
 from typing import Any
@@ -39,7 +39,9 @@ class ActionDispatcher:
         raw = f"{event_id}:{op.get('type','')}:{str(op.get('params',{}))}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
-    async def execute_playbook(self, playbook: dict[str, Any], ctx: ActionContext) -> list[dict[str, Any]]:
+    async def execute_playbook(
+        self, playbook: dict[str, Any], ctx: ActionContext
+    ) -> list[dict[str, Any]]:
         """Execute all operations in the playbook sequentially with rollback on failure."""
         audit = get_audit_logger()
         results: list[ActionResult] = []
@@ -51,36 +53,77 @@ class ActionDispatcher:
 
             # Idempotency: skip if already executed successfully (check only; mark after success)
             if await self._is_done(op_id, ctx):
-                results.append(ActionResult(op_id=op_id, op_type=op_type, status="skipped",
-                                            output="Duplicate operation (already executed)"))
+                results.append(
+                    ActionResult(
+                        op_id=op_id,
+                        op_type=op_type,
+                        status="skipped",
+                        output="Duplicate operation (already executed)",
+                        op=op,
+                    )
+                )
                 continue
 
             if not connector:
                 logger.warning("connector_not_implemented", op_type=op_type)
-                results.append(ActionResult(op_id=op_id, op_type=op_type, status="skipped",
-                                            output=f"No connector for {op_type}"))
+                results.append(
+                    ActionResult(
+                        op_id=op_id,
+                        op_type=op_type,
+                        status="skipped",
+                        output=f"No connector for {op_type}",
+                        op=op,
+                    )
+                )
                 continue
 
             if ctx.dry_run:
-                await audit.log(event_id=ctx.event_id, node="action", action="execute_op_dry_run",
-                                actor=ctx.actor, details={"op_type": op_type, "op_id": op_id, "params": op.get("params", {})})
-                results.append(ActionResult(op_id=op_id, op_type=op_type, status="dry_run",
-                                            output=f"Dry-run: would execute {op_type}"))
+                await audit.log(
+                    event_id=ctx.event_id,
+                    node="action",
+                    action="execute_op_dry_run",
+                    actor=ctx.actor,
+                    details={"op_type": op_type, "op_id": op_id, "params": op.get("params", {})},
+                )
+                results.append(
+                    ActionResult(
+                        op_id=op_id,
+                        op_type=op_type,
+                        status="dry_run",
+                        output=f"Dry-run: would execute {op_type}",
+                        op=op,
+                    )
+                )
                 continue
 
             # Execute
-            await audit.log(event_id=ctx.event_id, node="action", action="execute_op_start",
-                            actor=ctx.actor, details={"op_type": op_type, "op_id": op_id})
+            await audit.log(
+                event_id=ctx.event_id,
+                node="action",
+                action="execute_op_start",
+                actor=ctx.actor,
+                details={"op_type": op_type, "op_id": op_id},
+            )
             try:
                 result = await connector.execute(op, ctx)
+                # P1-EXEC-03: stash the original op dict (with params) so the
+                # rollback path can pass it to connector.rollback().
+                result.op = op
                 await self._mark_done(op_id, ctx)
                 results.append(result)
             except Exception as exc:
                 error = str(exc)
                 logger.error("execute_op_failed", op_type=op_type, op_id=op_id, error=error)
-                await audit.log(event_id=ctx.event_id, node="action", action="execute_op_error",
-                                actor=ctx.actor, details={"op_type": op_type, "op_id": op_id, "error": error})
-                results.append(ActionResult(op_id=op_id, op_type=op_type, status="failed", error=error))
+                await audit.log(
+                    event_id=ctx.event_id,
+                    node="action",
+                    action="execute_op_error",
+                    actor=ctx.actor,
+                    details={"op_type": op_type, "op_id": op_id, "error": error},
+                )
+                results.append(
+                    ActionResult(op_id=op_id, op_type=op_type, status="failed", error=error, op=op)
+                )
                 # Rollback already-executed operations
                 await self._rollback(ctx, results)
                 break
@@ -88,14 +131,24 @@ class ActionDispatcher:
         return [r.to_dict() for r in results]
 
     async def _rollback(self, ctx: ActionContext, results: list[ActionResult]) -> None:
-        """Best-effort rollback of successfully executed operations (reverse order)."""
+        """Best-effort rollback of successfully executed operations (reverse order).
+
+        P1-EXEC-03 (2026-07-20): use the original op dict (with params) stored
+        on each ActionResult. The previous version only forwarded {"type":
+        r.op_type}, which made rollback a no-op for any connector that needs
+        params (e.g. dns_block needs the domain to unblock it).
+        """
         for r in reversed(results):
             if r.status != "success":
                 continue
             connector = self._registry.get(r.op_type)
             if connector:
+                # Prefer the full op (with params) stored on the result.
+                # Fall back to {"type": op_type} for backward compat with any
+                # code path that didn't populate r.op.
+                op_for_rollback = r.op if r.op else {"type": r.op_type}
                 try:
-                    await connector.rollback({"type": r.op_type}, ctx)
+                    await connector.rollback(op_for_rollback, ctx)
                 except Exception as exc:
                     logger.error("rollback_failed", op_type=r.op_type, error=str(exc))
 

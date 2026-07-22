@@ -1,10 +1,10 @@
 """Additional sanitization tests — Span resolution and engine edge cases."""
+import re
+
 from src.preprocessing.sanitization.engine import SanitizationEngine
 from src.preprocessing.sanitization.mask import Rule, Span, apply_mask, resolve_spans
 
 engine = SanitizationEngine()
-import re
-
 _rule = Rule(name="test", pattern=re.compile("."), type="pii", priority=1, mask="***")
 
 

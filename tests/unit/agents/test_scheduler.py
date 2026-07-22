@@ -73,9 +73,6 @@ class TestOfflineCheckLoop:
 class TestRulesSyncLoop:
     @pytest.mark.asyncio
     async def test_rules_sync_runs_once_then_cancelled(self):
-        import datetime
-        fixed_now = datetime.datetime(2026, 1, 1, 12, 0, 0)
-
         # Patch datetime.now so next_run is far in the future -> wait is long
         # But we cancel quickly
         with (

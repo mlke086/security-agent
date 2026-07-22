@@ -15,8 +15,24 @@ export default function LoginPage() {
       await login(values.username, values.password)
       message.success('登录成功')
       navigate('/')
-    } catch {
-      message.error('用户名或密码错误')
+    } catch (err: any) {
+      // F-login (2026-07-21): the previous blank `catch {}` showed the same
+      // "用户名或密码错误" toast for 401 (real wrong creds), 500 (server /
+      // PG / Redis unreachable), and network errors. Operators kept thinking
+      // they had typed the wrong password when in fact the backend was down
+      // or PG pool was exhausted. Surface the real reason so the next debug
+      // step is obvious.
+      const status = err?.response?.status
+      const detail = err?.response?.data?.detail || err?.message || ''
+      if (status === 401) {
+        message.error('用户名或密码错误')
+      } else if (status === 500 || status === 502 || status === 503) {
+        message.error(`后端服务异常 (HTTP ${status})：${detail || '请检查 PG / Redis / ES 是否可达'}`)
+      } else if (!status) {
+        message.error(`无法连接后端：${detail || '请确认 API 已启动并监听 8000 端口'}`)
+      } else {
+        message.error(`登录失败 (HTTP ${status})：${detail}`)
+      }
     } finally {
       setLoading(false)
     }

@@ -19,6 +19,7 @@ _TIMEOUT_RESPOND = 300
 async def investigate_node(state: MainGraphState) -> dict:
     """Run the real investigation subgraph with timeout."""
     from src.orchestration.subgraphs.investigation.graph import build_investigation_subgraph
+
     subgraph = build_investigation_subgraph()
     iocs = state.get("raw_event", {}).get("iocs", {})
     sub_state = {
@@ -37,6 +38,7 @@ async def investigate_node(state: MainGraphState) -> dict:
         result = await asyncio.wait_for(subgraph.ainvoke(sub_state), timeout=_TIMEOUT_INVESTIGATE)
         try:
             from src.common.audit.audit_logger import get_audit_logger
+
             await get_audit_logger().log(
                 event_id=state["event_id"],
                 node="investigate",
@@ -58,22 +60,42 @@ async def investigate_node(state: MainGraphState) -> dict:
         }
     except TimeoutError:
         logger.warning("investigation_timeout", event_id=state["event_id"])
-        return {"subgraph_result": {"final_verdict": "timeout", "confidence_score": 0.0, "evidence_summary": "Investigation timed out"}}
+        # P2-CORE-NEW-5 (2026-07-20): keep stage="investigate" so the
+        # aggregator can decide between vuln_check and archive (the
+        # investigation path is the canonical first-pass branch).
+        return {
+            "stage": "investigate",
+            "subgraph_result": {
+                "final_verdict": "timeout",
+                "confidence_score": 0.0,
+                "evidence_summary": "Investigation timed out",
+            },
+        }
     except Exception as exc:
         logger.error("investigation_error", event_id=state["event_id"], error=str(exc))
-        return {"subgraph_result": {"final_verdict": "error", "confidence_score": 0.0, "evidence_summary": f"Error: {exc}"}}
+        return {
+            "stage": "investigate",
+            "subgraph_result": {
+                "final_verdict": "error",
+                "confidence_score": 0.0,
+                "evidence_summary": f"Error: {exc}",
+            },
+        }
 
 
 async def vuln_check_node(state: MainGraphState) -> dict:
     """Run the real vuln-hunter subgraph with timeout."""
     from src.orchestration.subgraphs.vuln_hunter.graph import build_vuln_hunter_subgraph
     from src.orchestration.subgraphs.vuln_hunter.memory import VulnHunterMemory
+
     subgraph = build_vuln_hunter_subgraph()
     sub_state = {
         "event_id": state["event_id"],
         "raw_event": state.get("raw_event", {}),
         "target": state.get("raw_event", {}).get("sanitized_text", "")[:500],
-        "memory": VulnHunterMemory(target_info=state.get("raw_event", {}).get("sanitized_text", "")[:200]),
+        "memory": VulnHunterMemory(
+            target_info=state.get("raw_event", {}).get("sanitized_text", "")[:200]
+        ),
         "cve_info": {},
         "exploit_chain": None,
         "current_poc": "",
@@ -92,6 +114,7 @@ async def vuln_check_node(state: MainGraphState) -> dict:
         )
         try:
             from src.common.audit.audit_logger import get_audit_logger
+
             await get_audit_logger().log(
                 event_id=state["event_id"],
                 node="vuln_check",
@@ -103,22 +126,46 @@ async def vuln_check_node(state: MainGraphState) -> dict:
         return {
             "stage": "verify",
             "subgraph_result": {
+                # P1-CORE-NEW-2: derive final_verdict from is_vulnerable so
+                # aggregator/runner store "true_positive" (not "unknown") and
+                # the responder's playbook_matcher can match cve_exploit.yaml
+                # (whose trigger requires verdict=="true_positive"). Without
+                # this, confirmed-vuln events were stored as verdict="unknown"
+                # and fell back to the LLM playbook path.
+                "final_verdict": "true_positive"
+                if result.get("is_vulnerable")
+                else "false_positive",
+                "confidence_score": 0.95 if result.get("is_vulnerable") else 0.2,
                 "final_poc": result.get("final_poc", ""),
                 "is_vulnerable": result.get("is_vulnerable", False),
                 "exploit_chain": result.get("exploit_chain", ""),
-            }
+            },
         }
     except TimeoutError:
         logger.warning("vuln_hunter_timeout", event_id=state["event_id"])
-        return {"subgraph_result": {"final_verdict": "timeout", "confidence_score": 0.0}}
+        # P2-CORE-NEW-5 (2026-07-20): set stage="verify" so route_after_verdict
+        # takes the vuln-check branch. Without this the event silently falls
+        # back to the first-pass investigation logic (which then archives it).
+        return {
+            "stage": "verify",
+            "subgraph_result": {"final_verdict": "timeout", "confidence_score": 0.0},
+        }
     except Exception as exc:
         logger.error("vuln_hunter_error", event_id=state["event_id"], error=str(exc))
-        return {"subgraph_result": {"final_verdict": "error", "confidence_score": 0.0, "evidence_summary": f"Error: {exc}"}}
+        return {
+            "stage": "verify",
+            "subgraph_result": {
+                "final_verdict": "error",
+                "confidence_score": 0.0,
+                "evidence_summary": f"Error: {exc}",
+            },
+        }
 
 
 async def respond_node(state: MainGraphState) -> dict:
     """Run the responder subgraph with timeout."""
     from src.orchestration.subgraphs.responder.graph import build_responder_subgraph
+
     subgraph = build_responder_subgraph()
     sub = state.get("subgraph_result") or {}
     sub_state = {
@@ -135,10 +182,19 @@ async def respond_node(state: MainGraphState) -> dict:
     }
     try:
         result = await asyncio.wait_for(subgraph.ainvoke(sub_state), timeout=_TIMEOUT_RESPOND)
-        return {"pending_action": {
-            "approval_id": result.get("approval_id"),
-            "execution_summary": result.get("execution_result"),
-        }}
+        # P1-CORE-NEW-1: surface approval_status so runner can derive the
+        # correct event status. Previously only approval_id was passed back,
+        # and runner treated "approval_id present" as "pending_approval" --
+        # but by now hitl_approval_node has already waited for a terminal
+        # decision, so every L3+ event was mis-stored as pending_approval
+        # (even after approved+executed or rejected/timeout).
+        return {
+            "pending_action": {
+                "approval_id": result.get("approval_id"),
+                "approval_status": result.get("approval_status"),
+                "execution_summary": result.get("execution_result"),
+            }
+        }
     except TimeoutError:
         logger.warning("responder_timeout", event_id=state["event_id"])
         return {"error": "responder_timeout"}
@@ -198,19 +254,27 @@ def build_main_graph():
 
     graph.add_edge(START, "entry")
     graph.add_edge("entry", "orchestrator")
-    graph.add_conditional_edges("orchestrator", route_decision, {
-        "investigate": "investigate",
-        "vuln_check": "vuln_check",
-        "ignore": "ignore",
-    })
+    graph.add_conditional_edges(
+        "orchestrator",
+        route_decision,
+        {
+            "investigate": "investigate",
+            "vuln_check": "vuln_check",
+            "ignore": "ignore",
+        },
+    )
     graph.add_edge("investigate", "aggregator")
     graph.add_edge("vuln_check", "aggregator")
     # aggregator 后按置信度分流（≥0.8→响应、0.5–0.8→漏洞验证、<0.5→归档）
-    graph.add_conditional_edges("aggregator", route_after_verdict, {
-        "respond": "respond",
-        "vuln_check": "vuln_check",
-        "done": END,
-    })
+    graph.add_conditional_edges(
+        "aggregator",
+        route_after_verdict,
+        {
+            "respond": "respond",
+            "vuln_check": "vuln_check",
+            "done": END,
+        },
+    )
     graph.add_edge("respond", END)
     graph.add_edge("ignore", END)
 

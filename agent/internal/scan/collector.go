@@ -2,11 +2,13 @@
 package scan
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // CollectedItem holds raw system information collected during a scan.
@@ -47,26 +49,63 @@ func (c *Collector) CollectBaseline() ([]CollectedItem, error) {
 	var items []CollectedItem
 
 	// Account checks
-	accounts := c.collectAccounts()
-	items = append(items, accounts...)
+	items = append(items, c.collectAccounts()...)
 
-	// Port checks
-	ports := c.collectPorts()
-	items = append(items, ports...)
+	// Listening ports
+	items = append(items, c.collectPorts()...)
 
-	// Password policy
-	pwdPolicy := c.collectPasswordPolicy()
-	items = append(items, pwdPolicy...)
+	// Config-file content (SSH config, login.defs, auditd, limits, iptables, rsyslog).
+	// The matcher reads each rule's check.file/path to find the matching item
+	// and applies check.pattern as a regex over the file content. P0 (2026-07-19):
+	// previous version only stat()'d these files which made every config_check
+	// rule fire with "Config not found" even on hardened hosts.
+	items = append(items, c.collectConfigFiles()...)
 
-	// File permissions
-	filePerms := c.collectFilePerms()
-	items = append(items, filePerms...)
-
-	// Logging config
-	logConfig := c.collectLogConfig()
-	items = append(items, logConfig...)
+	// File permissions (stat only -- separate from config_file content above)
+	items = append(items, c.collectFilePerms()...)
 
 	return items, nil
+}
+
+// configFileTargets is the set of files we slurp for config_check rules.
+// Each entry maps a logical label to the on-disk path; baseline rules in
+// rules_sync.default_rules.yaml carry check.file paths that must match
+// exactly. The matcher uses path as the join key.
+var configFileTargets = []struct{ label, path string }{
+	{"sshd_config", "/etc/ssh/sshd_config"},
+	{"login_defs", "/etc/login.defs"},
+	{"auditd_conf", "/etc/audit/auditd.conf"},
+	{"limits_conf", "/etc/security/limits.conf"},
+	{"iptables_names", "/proc/net/ip_tables_names"},
+	{"rsyslog_conf", "/etc/rsyslog.conf"},
+}
+
+// collectConfigFiles reads each known config file and emits one item per
+// file. The matcher reads content with regex (check.pattern) and a substring
+// expectation (check.expect, case-insensitive). Missing files are silently
+// skipped -- they are not findings on their own; the rule decides whether
+// a missing file is a problem.
+func (c *Collector) collectConfigFiles() []CollectedItem {
+	if runtime.GOOS == "windows" {
+		return nil // baseline config files are Linux-only today
+	}
+	var items []CollectedItem
+	for _, t := range configFileTargets {
+		data, err := os.ReadFile(t.path)
+		if err != nil {
+			continue // file absent -- let the rule decide
+		}
+		items = append(items, CollectedItem{
+			Category: "baseline",
+			Type:     "config_file",
+			Data: map[string]string{
+				"path":    t.path,
+				"label":   t.label,
+				"content": string(data),
+			},
+		})
+	}
+	return items
 }
 
 func (c *Collector) collectPackages() ([]CollectedItem, error) {
@@ -79,8 +118,23 @@ func (c *Collector) collectPackages() ([]CollectedItem, error) {
 func (c *Collector) collectPackagesLinux() ([]CollectedItem, error) {
 	var items []CollectedItem
 
+	// P1 (2026-07-19): guard each exec with exec.LookPath + a 5s context so a
+	// WSL/distro without dpkg-query OR rpm (e.g. docker-desktop WSL where
+	// the package manager is not installed but the binary may exist as a
+	// placeholder that hangs) does not block the entire scan. Without this
+	// guard, the test target in WSL2 hangs forever in collectPackages and
+	// the scan never finishes.
+	tryRun := func(name string, args ...string) ([]byte, error) {
+		if _, err := exec.LookPath(name); err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, name, args...).Output()
+	}
+
 	// Try dpkg (Debian/Ubuntu)
-	output, err := exec.Command("dpkg-query", "-W", "-f=${Package}\t${Version}\n").Output()
+	output, err := tryRun("dpkg-query", "-W", "-f=${Package}\t${Version}\n")
 	if err == nil {
 		for _, line := range strings.Split(string(output), "\n") {
 			line = strings.TrimSpace(line)
@@ -262,34 +316,6 @@ func (c *Collector) collectPorts() []CollectedItem {
 	return items
 }
 
-func (c *Collector) collectPasswordPolicy() []CollectedItem {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-
-	var items []CollectedItem
-	// Read /etc/login.defs for password policy
-	data, err := os.ReadFile("/etc/login.defs")
-	if err != nil {
-		return items
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			items = append(items, CollectedItem{
-				Category: "baseline",
-				Type:     "password_policy",
-				Data:     map[string]string{"key": parts[0], "value": parts[1]},
-			})
-		}
-	}
-	return items
-}
-
 func (c *Collector) collectFilePerms() []CollectedItem {
 	paths := []string{"/etc/passwd", "/etc/shadow", "/etc/ssh/sshd_config", "/root/.ssh"}
 	if runtime.GOOS == "windows" {
@@ -312,26 +338,6 @@ func (c *Collector) collectFilePerms() []CollectedItem {
 				"uid":         fmt.Sprintf("%d", getUID(info)),
 			},
 		})
-	}
-	return items
-}
-
-func (c *Collector) collectLogConfig() []CollectedItem {
-	var items []CollectedItem
-
-	if runtime.GOOS == "windows" {
-		return items
-	}
-
-	// Check if rsyslog or journald configs exist
-	for _, p := range []string{"/etc/rsyslog.conf", "/etc/systemd/journald.conf"} {
-		if _, err := os.Stat(p); err == nil {
-			items = append(items, CollectedItem{
-				Category: "baseline",
-				Type:     "log_config",
-				Data:     map[string]string{"config_file": p, "present": "true"},
-			})
-		}
 	}
 	return items
 }

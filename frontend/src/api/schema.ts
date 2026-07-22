@@ -73,6 +73,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/sse-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue Sse Token
+         * @description Mint a short-lived SSE token scoped to one channel.
+         *
+         *     P1-API-04 (2026-07-20): the regular user JWT is too long-lived (120
+         *     minutes default) to be passed as a query string. Frontend calls this
+         *     right before opening an EventSource and uses the returned token in
+         *     the URL -- even if the URL lands in an access log the token expires
+         *     in 60 seconds and only carries permission for one channel.
+         */
+        post: operations["issue_sse_token_api_v1_auth_sse_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/events/{event_id}": {
         parameters: {
             query?: never;
@@ -198,6 +224,810 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/enroll-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Create Enroll Token
+         * @description Create an enrollment token (admin only).
+         */
+        post: operations["api_create_enroll_token_api_v1_agents_enroll_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Install Script
+         * @description Return the install script for the given token and OS.
+         *
+         *     The script is a self-contained bootstrap. The recommended flow is the two-
+         *     step approach (download-as-file, then execute) so the operator can review
+         *     the script before it runs and so the token never appears in shell history
+         *     beyond the ``curl`` invocation:
+         *
+         *         curl -fsSL "<console>/api/v1/agents/install?token=...&os=linux"              -o secagent-install.sh
+         *         sudo bash secagent-install.sh
+         *
+         *     We also set Content-Disposition so ``curl -O`` saves to a sensible name.
+         */
+        get: operations["api_install_script_api_v1_agents_install_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/install-helper": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Install Helper
+         * @description Return a single shell snippet the operator can copy-paste.
+         *
+         *     This is the recommended UX: the snippet is a **two-step** command (download
+         *     as a file, then execute) so the operator can ``cat secagent-install.sh``
+         *     to review before running, and so the token does not end up embedded in
+         *     a piped shell that could be replayed from history.
+         *
+         *     Example response body (linux)::
+         *
+         *         curl -fsSL "http://console/api/v1/agents/install?token=...&os=linux" \
+         *              -o secagent-install.sh \
+         *           && chmod +x secagent-install.sh \
+         *           && sudo bash secagent-install.sh
+         */
+        get: operations["api_install_helper_api_v1_agents_install_helper_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Enroll Host
+         * @description Register a new agent host using an enrollment token.
+         *
+         *     P1 (2026-07-17): if the request IP already has a host row (operator
+         *     re-ran the installer), the old row is decommissioned first so the new
+         *     registration replaces it cleanly. This keeps the host list de-duplicated
+         *     by IP and prevents stale offline rows from accumulating.
+         *
+         *     P1-6 修复：IP 去重用服务端可信 IP（X-Forwarded-For 或 request.client.host），
+         *     不信任请求体里的 req.ip -- 否则攻击者用合法 enroll token 伪造 ip 即可
+         *     decommission_host_by_ip(任意ip) 下线任意在产主机。req.ip 仅作为展示用
+         *     Host.ip 字段保留（agent 上报的真实内网 IP，NAT 后服务端看不到）。
+         */
+        post: operations["api_enroll_host_api_v1_agents_enroll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/binary/{os}/{arch}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Download Binary
+         * @description Download the agent binary for ``os``/``arch``.
+         *
+         *     The enrollment token is accepted via either the ``token`` query param (legacy,
+         *     kept for backward compatibility with older install scripts) or the
+         *     ``Authorization: Bearer <token>`` header. Header-based auth is preferred
+         *     because query params leak into proxy / shell logs.
+         */
+        get: operations["api_download_binary_api_v1_agents_binary__os___arch__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/ca": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Download Ca
+         * @description Download the console CA certificate.
+         *
+         *     Token accepted via Authorization header (preferred) or ``token`` query param.
+         */
+        get: operations["api_download_ca_api_v1_agents_ca_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/console-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Console Url
+         * @description Return the canonical console URL the frontend should embed in install
+         *     commands.
+         *
+         *     Priority:
+         *       1. ``settings.agent_console_external_url`` -- the configured, deployable
+         *          URL (set via .env). Use this in production so copy-paste commands work
+         *          from any network the operator might be on.
+         *       2. The current request's origin (``window.location.origin``-equivalent) --
+         *          only when the setting is empty.
+         *
+         *     Public endpoint (no auth) so the login page can also call it.
+         */
+        get: operations["api_console_url_api_v1_agents_console_url_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api List Hosts
+         * @description List enrolled hosts.
+         */
+        get: operations["api_list_hosts_api_v1_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api List Groups
+         * @description List host groups with member counts.
+         */
+        get: operations["api_list_groups_api_v1_agents_groups_get"];
+        put?: never;
+        /**
+         * Api Create Group
+         * @description Create a new host group (admin only).
+         */
+        post: operations["api_create_group_api_v1_agents_groups_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/groups/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Api Delete Group
+         * @description Delete a host group (admin only).
+         *
+         *     P1-4 修复：组内仍有主机时拒绝删除（返回 409），避免 hosts.group_name
+         *     引用已删组变成 legacy 孤儿。操作员需先迁移或下线组内主机。
+         */
+        delete: operations["api_delete_group_api_v1_agents_groups__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Get Host
+         * @description Get a specific host.
+         */
+        get: operations["api_get_host_api_v1_agents__agent_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Api Delete Host
+         * @description Delete a host (admin only).
+         *
+         *     需求1.4：purge=True 时物理删除（仅 decommissioned 主机允许），purge=False 时软删除（下线）。
+         */
+        delete: operations["api_delete_host_api_v1_agents__agent_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Api Update Host
+         * @description Move a host to a different group (admin only).
+         */
+        patch: operations["api_update_host_api_v1_agents__agent_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/upgrade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Upgrade Agent
+         * @description Trigger an agent_upgrade command via the WS gateway.
+         */
+        post: operations["api_upgrade_agent_api_v1_agents__agent_id__upgrade_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Api Update Agent Config
+         * @description Trigger a config_update command via the WS gateway.
+         */
+        patch: operations["api_update_agent_config_api_v1_agents__agent_id__config_patch"];
+        trace?: never;
+    };
+    "/api/v1/vulnscan/tasks/parse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Parse Intent */
+        post: operations["api_parse_intent_api_v1_vulnscan_tasks_parse_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api List Tasks */
+        get: operations["api_list_tasks_api_v1_vulnscan_tasks_get"];
+        put?: never;
+        /**
+         * Api Create Task
+         * @description Enqueue a vulnscan task. Returns ``{task_id, status: "queued"}`` immediately.
+         *
+         *     P2: the actual subgraph execution runs in a background ``TaskWorker``
+         *     subscribed to the Redis Stream. Multiple uvicorn workers spread the
+         *     load automatically through the consumer group. The legacy in-process
+         *     path is kept behind ``?sync=1`` for tests / debugging.
+         */
+        post: operations["api_create_task_api_v1_vulnscan_tasks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Get Task
+         * @description Return task record from ES. P2 also consults the Redis side-channel
+         *     so callers see ``queued`` / ``running`` before the subgraph has finished
+         *     writing the canonical record.
+         */
+        get: operations["api_get_task_api_v1_vulnscan_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/tasks/{task_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Task Stream */
+        get: operations["api_task_stream_api_v1_vulnscan_tasks__task_id__stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/tasks/{task_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Cancel Task */
+        post: operations["api_cancel_task_api_v1_vulnscan_tasks__task_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api List Results */
+        get: operations["api_list_results_api_v1_vulnscan_results_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/reports/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Get Report */
+        get: operations["api_get_report_api_v1_vulnscan_reports__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/reports/{task_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Export Report
+         * @description 导出扫描报告为可下载文件。
+         *
+         *     需求6：扫描任务完成后，监控页提供"下载报告"按钮，调用本接口。
+         *     当前支持 HTML（自包含模板渲染，无外部依赖）；PDF 留待后续批次。
+         */
+        get: operations["api_export_report_api_v1_vulnscan_reports__task_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/vulns/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Get Vuln */
+        get: operations["api_get_vuln_api_v1_vulnscan_vulns__finding_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Api Update Vuln Status */
+        patch: operations["api_update_vuln_status_api_v1_vulnscan_vulns__finding_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/vulnscan/queue/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Queue Stats
+         * @description Return queue depth and pending counts. Diagnostic only.
+         */
+        get: operations["api_queue_stats_api_v1_vulnscan_queue_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/queue/status/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Queue Status
+         * @description Read the short-lived side-channel status. Useful when the canonical
+         *     ES record hasn't been written yet.
+         */
+        get: operations["api_queue_status_api_v1_vulnscan_queue_status__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api List Rules
+         * @description 规则列表查询（分页）。
+         *
+         *     需求7：规则管理页浏览/搜索具体规则条目。纯查询当前版本 RulePack，无侵入。
+         *     若尚未同步过规则库（version 为 "0" 或无 pack），返回空列表。
+         */
+        get: operations["api_list_rules_api_v1_rules_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Sync Rules */
+        post: operations["api_sync_rules_api_v1_rules_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/sync-to-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Sync To Agents
+         * @description 需求2.1：手动同步当前规则包到所有在线 agent（强制下发，不依赖心跳）。
+         *
+         *     返回 {synced, total, agents: [{agent_id, sent}]}。
+         */
+        post: operations["api_sync_to_agents_api_v1_rules_sync_to_agents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Import Rules
+         * @description 离线导入规则库 zip（需求2.2）。
+         *
+         *     支持三种来源的 zip（自动识别）：
+         *       1. 本系统 rulepack：zip 内含 rulepack.json（{rules:[...]}）
+         *       2. NVD 导出：zip 内含 NVD API 导出的 json（{vulnerabilities:[...]}）
+         *       3. GitHub advisory-database：从 github/advisory-database 下载的 zip，
+         *          内含多个 GHSA-*.json（每个是一个 advisory）
+         *     导入时用服务端签名密钥重新签名（agent 用同一密钥验签）。
+         */
+        post: operations["api_import_rules_api_v1_rules_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Current Version */
+        get: operations["api_current_version_api_v1_rules_version_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/pack/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Download Pack
+         * @description 下载规则包。支持两种鉴权：
+         *       1. 人类用户：Authorization: Bearer <JWT>（admin/analyst）
+         *       2. agent：?agent_id=&token=<agent_token>（复用 validate_agent_token）
+         *
+         *     返回的 body 字节必须与 trigger_update_if_outdated 用 sign_bytes 签名的
+         *     body 完全一致，否则 agent Ed25519 验签失败，故统一用 get_rule_pack_body。
+         *
+         *     鉴权先于资源存在性检查：无凭证 401、角色不足 403，避免通过 404 探测资源存在。
+         */
+        get: operations["api_download_pack_api_v1_rules_pack__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api List Models */
+        get: operations["api_list_models_api_v1_models_get"];
+        put?: never;
+        /** Api Create Model */
+        post: operations["api_create_model_api_v1_models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Api Delete Model */
+        delete: operations["api_delete_model_api_v1_models__model_id__delete"];
+        options?: never;
+        head?: never;
+        /** Api Update Model */
+        patch: operations["api_update_model_api_v1_models__model_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Set Default */
+        post: operations["api_set_default_api_v1_models__model_id__default_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Test Model
+         * @description 测试模型连通性：用该模型发一条简单 prompt，返回是否成功及响应。
+         */
+        post: operations["api_test_model_api_v1_models__model_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api List Conversations */
+        get: operations["api_list_conversations_api_v1_vulnscan_conversations_get"];
+        put?: never;
+        /** Api Create Conversation */
+        post: operations["api_create_conversation_api_v1_vulnscan_conversations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnscan/conversations/{conv_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Get Conversation */
+        get: operations["api_get_conversation_api_v1_vulnscan_conversations__conv_id__get"];
+        put?: never;
+        post?: never;
+        /** Api Delete Conversation */
+        delete: operations["api_delete_conversation_api_v1_vulnscan_conversations__conv_id__delete"];
+        options?: never;
+        head?: never;
+        /** Api Update Conversation */
+        patch: operations["api_update_conversation_api_v1_vulnscan_conversations__conv_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/vulnscan/conversations/{conv_id}/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Chat
+         * @description 多轮对话。把历史 + 用户新消息发给 LLM（可选切换模型），回复追加进会话。
+         */
+        post: operations["api_chat_api_v1_vulnscan_conversations__conv_id__chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/events/{event_id}/stream": {
         parameters: {
             query?: never;
@@ -253,6 +1083,18 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentConfigRequest */
+        AgentConfigRequest: {
+            /** Heartbeat Interval */
+            heartbeat_interval?: number | null;
+            /**
+             * Log Level
+             * @description debug|info|warn|error
+             */
+            log_level?: string | null;
+            /** Resource Limit */
+            resource_limit?: Record<string, never> | null;
+        };
         /** ApprovalActionResponse */
         ApprovalActionResponse: {
             /** Status */
@@ -284,6 +1126,95 @@ export interface components {
         ApprovalListResponse: {
             /** Items */
             items: Record<string, never>[];
+        };
+        /** Body_api_import_rules_api_v1_rules_import_post */
+        Body_api_import_rules_api_v1_rules_import_post: {
+            /**
+             * File
+             * Format: binary
+             * @description 规则库 zip 压缩包
+             */
+            file: string;
+        };
+        /** ChatRequest */
+        ChatRequest: {
+            /** Message */
+            message: string;
+            /** Model Id */
+            model_id?: number | null;
+            /**
+             * Parse Intent
+             * @default false
+             */
+            parse_intent: boolean;
+        };
+        /** CreateConversationRequest */
+        CreateConversationRequest: {
+            /**
+             * Title
+             * @default 新对话
+             */
+            title: string;
+            /** Model Id */
+            model_id?: number | null;
+        };
+        /** EnrollRequest */
+        EnrollRequest: {
+            /** Token */
+            token: string;
+            /** Hostname */
+            hostname: string;
+            /** Os */
+            os: string;
+            /** Arch */
+            arch: string;
+            /** Ip */
+            ip: string;
+            /** Kernel */
+            kernel: string;
+        };
+        /** EnrollResponse */
+        EnrollResponse: {
+            /** Agent Id */
+            agent_id: string;
+            /** Agent Token */
+            agent_token: string;
+            /** Ws Url */
+            ws_url: string;
+            /** Heartbeat Interval */
+            heartbeat_interval: number;
+            /**
+             * Server Public Key
+             * @default
+             */
+            server_public_key: string;
+            /**
+             * Rule Version
+             * @default
+             */
+            rule_version: string;
+        };
+        /** EnrollTokenRequest */
+        EnrollTokenRequest: {
+            /** Group */
+            group?: string | null;
+            /**
+             * Ttl Hours
+             * @default 24
+             */
+            ttl_hours: number;
+            /**
+             * Uses
+             * @default 1
+             */
+            uses: number;
+        };
+        /** EnrollTokenResponse */
+        EnrollTokenResponse: {
+            /** Token */
+            token: string;
+            /** Expires */
+            expires: string;
         };
         /** EventListResponse */
         EventListResponse: {
@@ -365,6 +1296,8 @@ export interface components {
             pending_approval_id?: string | null;
             /** Duration Ms */
             duration_ms?: number | null;
+            /** Execution Summary */
+            execution_summary?: Record<string, never> | unknown[] | null;
         };
         /** EventSubmitRequest */
         EventSubmitRequest: {
@@ -387,11 +1320,80 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** GroupCreateRequest */
+        GroupCreateRequest: {
+            /**
+             * Name
+             * @description 组名
+             */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** Host */
+        Host: {
+            /** Agent Id */
+            agent_id: string;
+            /** Hostname */
+            hostname: string;
+            /** Ip */
+            ip: string;
+            /** Os */
+            os: string;
+            /** Arch */
+            arch: string;
+            /** Kernel */
+            kernel: string;
+            /** @default online */
+            status: components["schemas"]["HostStatus"];
+            /**
+             * Agent Version
+             * @default
+             */
+            agent_version: string;
+            /**
+             * Rule Version
+             * @default
+             */
+            rule_version: string;
+            /**
+             * Last Heartbeat
+             * @default
+             */
+            last_heartbeat: string;
+            /** Group */
+            group?: string | null;
+            /** Owner */
+            owner?: string | null;
+            /** Env */
+            env?: string | null;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+        };
+        /** HostGroupUpdateRequest */
+        HostGroupUpdateRequest: {
+            /**
+             * Group
+             * @description 目标组名，传 null 清空
+             */
+            group?: string | null;
+        };
+        /**
+         * HostStatus
+         * @enum {string}
+         */
+        HostStatus: "online" | "offline" | "decommissioned";
         /** LoginRequest */
         LoginRequest: {
             /** Username */
@@ -415,6 +1417,89 @@ export interface components {
             pending_approvals: number;
             /** Avg Duration Ms */
             avg_duration_ms: number;
+        };
+        /** ModelCreateRequest */
+        ModelCreateRequest: {
+            /** Name */
+            name: string;
+            /**
+             * Provider
+             * @description openai | claude | vllm
+             */
+            provider: string;
+            /** Model Name */
+            model_name: string;
+            /**
+             * Api Key
+             * @default
+             */
+            api_key: string;
+            /**
+             * Base Url
+             * @default
+             */
+            base_url: string;
+            /**
+             * Temperature
+             * @default 0.1
+             */
+            temperature: number;
+            /**
+             * Max Tokens
+             * @default 4096
+             */
+            max_tokens: number;
+            /**
+             * Supports Structured
+             * @default true
+             */
+            supports_structured: boolean;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+        };
+        /** ModelUpdateRequest */
+        ModelUpdateRequest: {
+            /** Name */
+            name?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Model Name */
+            model_name?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+            /** Base Url */
+            base_url?: string | null;
+            /** Temperature */
+            temperature?: number | null;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Supports Structured */
+            supports_structured?: boolean | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
+        /** SseTokenRequest */
+        SseTokenRequest: {
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "events" | "events_list" | "metrics" | "approval";
+        };
+        /** SseTokenResponse */
+        SseTokenResponse: {
+            /** Token */
+            token: string;
+            /** Expires In */
+            expires_in: number;
         };
         /** TimelinePoint */
         TimelinePoint: {
@@ -474,6 +1559,26 @@ export interface components {
              * @default {}
              */
             details: Record<string, never>;
+        };
+        /** UpdateConversationRequest */
+        UpdateConversationRequest: {
+            /** Title */
+            title?: string | null;
+            /** Model Id */
+            model_id?: number | null;
+        };
+        /** UpgradeRequest */
+        UpgradeRequest: {
+            /**
+             * Version
+             * @description Target agent binary version, e.g. v0.2.0
+             */
+            version: string;
+            /**
+             * Download Url
+             * @description HTTPS URL the agent downloads the new binary from
+             */
+            download_url: string;
         };
         /** UserResponse */
         UserResponse: {
@@ -644,6 +1749,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+        };
+    };
+    issue_sse_token_api_v1_auth_sse_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SseTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SseTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -831,6 +1969,1470 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    api_create_enroll_token_api_v1_agents_enroll_tokens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_install_script_api_v1_agents_install_get: {
+        parameters: {
+            query: {
+                token: string;
+                os?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_install_helper_api_v1_agents_install_helper_get: {
+        parameters: {
+            query: {
+                token: string;
+                os?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_enroll_host_api_v1_agents_enroll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_download_binary_api_v1_agents_binary__os___arch__get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                os: string;
+                arch: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_download_ca_api_v1_agents_ca_get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_console_url_api_v1_agents_console_url_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    api_list_hosts_api_v1_agents_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                group?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_list_groups_api_v1_agents_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    api_create_group_api_v1_agents_groups_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_delete_group_api_v1_agents_groups__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_get_host_api_v1_agents__agent_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Host"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_delete_host_api_v1_agents__agent_id__delete: {
+        parameters: {
+            query?: {
+                /** @description True=物理删除(仅已下线主机允许); False=软删除(下线) */
+                purge?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_update_host_api_v1_agents__agent_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HostGroupUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_upgrade_agent_api_v1_agents__agent_id__upgrade_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpgradeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_update_agent_config_api_v1_agents__agent_id__config_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_parse_intent_api_v1_vulnscan_tasks_parse_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_list_tasks_api_v1_vulnscan_tasks_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_create_task_api_v1_vulnscan_tasks_post: {
+        parameters: {
+            query?: {
+                /** @description Synchronous path; bypass queue */
+                sync?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_get_task_api_v1_vulnscan_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_task_stream_api_v1_vulnscan_tasks__task_id__stream_get: {
+        parameters: {
+            query: {
+                token: string;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_cancel_task_api_v1_vulnscan_tasks__task_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_list_results_api_v1_vulnscan_results_get: {
+        parameters: {
+            query?: {
+                task_id?: string | null;
+                hostname?: string | null;
+                severity?: string | null;
+                status?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_get_report_api_v1_vulnscan_reports__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_export_report_api_v1_vulnscan_reports__task_id__export_get: {
+        parameters: {
+            query?: {
+                /** @description 导出格式：html */
+                format?: string;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_get_vuln_api_v1_vulnscan_vulns__finding_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_update_vuln_status_api_v1_vulnscan_vulns__finding_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_queue_stats_api_v1_vulnscan_queue_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    api_queue_status_api_v1_vulnscan_queue_status__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_list_rules_api_v1_rules_list_get: {
+        parameters: {
+            query?: {
+                /** @description 按分类过滤：sys_vuln / baseline */
+                category?: string | null;
+                /** @description 按严重等级过滤：critical/high/medium/low/info */
+                severity?: string | null;
+                /** @description 按规则名称 / CVE 模糊搜索 */
+                q?: string | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_sync_rules_api_v1_rules_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_sync_to_agents_api_v1_rules_sync_to_agents_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    api_import_rules_api_v1_rules_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_api_import_rules_api_v1_rules_import_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_current_version_api_v1_rules_version_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    api_download_pack_api_v1_rules_pack__version__get: {
+        parameters: {
+            query?: {
+                /** @description agent 下载时传，配合 token 鉴权 */
+                agent_id?: string | null;
+                /** @description agent_token（agent 下载专用，避免与 JWT 冲突） */
+                token?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_list_models_api_v1_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    api_create_model_api_v1_models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_delete_model_api_v1_models__model_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_update_model_api_v1_models__model_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_set_default_api_v1_models__model_id__default_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_test_model_api_v1_models__model_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_list_conversations_api_v1_vulnscan_conversations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    api_create_conversation_api_v1_vulnscan_conversations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateConversationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_get_conversation_api_v1_vulnscan_conversations__conv_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conv_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_delete_conversation_api_v1_vulnscan_conversations__conv_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conv_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_update_conversation_api_v1_vulnscan_conversations__conv_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conv_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConversationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_chat_api_v1_vulnscan_conversations__conv_id__chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conv_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -3,19 +3,55 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-ALLOWED_IMPORTS = frozenset([
-    "requests", "json", "re", "time", "sys",
-    "struct", "hashlib", "base64", "urllib", "http",
-    "ssl", "threading", "itertools", "functools", "string",
-    "collections", "math", "random", "binascii", "hmac",
-])
+# P1-SUB-2 (2026-07-20): "socket" added so the linter matches the prompt
+# in poc_generator.py (''requests,socket,json,re,time,sys,struct,hashlib,base64'').
+# Without this every iteration that uses `import socket` is rejected by the
+# linter and the LLM burns budget retrying with no progress.
+ALLOWED_IMPORTS = frozenset(
+    [
+        "requests",
+        "json",
+        "re",
+        "time",
+        "sys",
+        "struct",
+        "hashlib",
+        "base64",
+        "urllib",
+        "http",
+        "ssl",
+        "threading",
+        "itertools",
+        "functools",
+        "string",
+        "collections",
+        "math",
+        "random",
+        "binascii",
+        "hmac",
+        "socket",
+    ]
+)
 
-DANGEROUS_CALLS = frozenset([
-    "os.system", "os.popen", "os.execv", "os.execvp",
-    "subprocess.run", "subprocess.Popen", "subprocess.call", "subprocess.check_output",
-    "eval", "exec", "compile", "__import__",
-    "open", "builtins.open", "getattr",
-])
+DANGEROUS_CALLS = frozenset(
+    [
+        "os.system",
+        "os.popen",
+        "os.execv",
+        "os.execvp",
+        "subprocess.run",
+        "subprocess.Popen",
+        "subprocess.call",
+        "subprocess.check_output",
+        "eval",
+        "exec",
+        "compile",
+        "__import__",
+        "open",
+        "builtins.open",
+        "getattr",
+    ]
+)
 
 
 class LinterResult(BaseModel):
@@ -84,7 +120,9 @@ class PoCLinter:
                     )
         return LinterResult(passed=True)
 
-    def _dangerous_call_check(self, code: str, alias_map: dict[str, str] | None = None) -> LinterResult:
+    def _dangerous_call_check(
+        self, code: str, alias_map: dict[str, str] | None = None
+    ) -> LinterResult:
         try:
             tree = ast.parse(code)
         except SyntaxError:

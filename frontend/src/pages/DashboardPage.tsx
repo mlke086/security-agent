@@ -1,14 +1,15 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Card, Row, Col, Statistic, Typography, Spin, Empty } from "antd"
 import { AlertOutlined, CheckCircleOutlined, ClockCircleOutlined, ThunderboltOutlined } from "@ant-design/icons"
 import { Pie, Column, Line } from "@ant-design/charts"
-import { getMetrics, getMetricsTimeline } from "../api/client"
+import api, { getMetrics, getMetricsTimeline, getSseToken } from "../api/client"
 import type { Metrics, TimelinePoint } from "../types"
 
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [timeline, setTimeline] = useState<TimelinePoint[]>([])
   const [loading, setLoading] = useState(true)
+  const sseRef = useRef<EventSource | null>(null)
 
   const fetchData = async () => {
     try {
@@ -20,12 +21,38 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchData()
-    const token = localStorage.getItem("token")
-    const host = window.location.hostname
-    const base = (host === "localhost" || host === "127.0.0.1") ? "" : `http://${host}:8000`
-    const source = new EventSource(`${base}/api/v1/metrics/stream?token=${token}`)
-    source.onmessage = (e) => { if (e.data && e.data !== ": heartbeat") fetchData() }
-    return () => source.close()
+    // F2 (2026-07-21): exchange the long-lived JWT for a 60s scoped SSE
+    // token; reuse api.defaults.baseURL so reverse-proxy / k8s ingress
+    // still work. Without this, the long-lived JWT leaks into nginx
+    // access logs and browser history, and the EventSource keeps
+    // reconnecting forever once the JWT expires (no refresh path).
+    if (!localStorage.getItem("token")) return  // P2-FE-07 guard
+    let cancelled = false
+    ;(async () => {
+      try {
+        const shortToken = await getSseToken("metrics")
+        if (cancelled) return
+        const base = (api.defaults.baseURL || "").replace(/\/+$/, "")
+        // base 已含 /api/v1，只拼 /metrics/stream（不能重复 /api/v1，否则 404
+        // 致 EventSource 无限重连，占满浏览器同域连接数致所有请求阻塞）。
+        const source = new EventSource(`${base}/metrics/stream?token=${shortToken}`)
+        // 立即存 ref，确保 cleanup（即便快速离开页面）也能 close，避免泄漏。
+        sseRef.current = source
+        source.onmessage = (e) => { if (e.data && e.data !== ": heartbeat") fetchData() }
+        // 防止 EventSource 重连风暴：404/网络错误后 readyState=CLOSED，
+        // 浏览器会无限重连占满同域连接数（6个）致所有请求阻塞。CLOSED 时主动 close。
+        source.onerror = () => {
+          if (source && source.readyState === EventSource.CLOSED) {
+            source.close()
+            if (sseRef.current === source) sseRef.current = null
+          }
+        }
+      } catch (err) { console.warn("dashboard_sse_token_failed", err) }
+    })()
+    return () => {
+      cancelled = true
+      if (sseRef.current) { sseRef.current.close(); sseRef.current = null }
+    }
   }, [])
 
   if (loading) return <Spin size="large" style={{ display: "block", margin: "100px auto" }} />

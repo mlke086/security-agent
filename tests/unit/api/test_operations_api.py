@@ -1,7 +1,6 @@
 ﻿"""API tests for /api/v1/operations (events, approvals, metrics) and /api/v1/rules endpoints."""
-from unittest.mock import AsyncMock, PropertyMock, patch
+from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
@@ -175,6 +174,20 @@ class TestRules:
         assert resp.status_code == 403
 
     def test_download_pack_not_found(self):
+        # P1-API-02 (2026-07-20): the endpoint now requires admin/analyst
+        # auth, so authenticate before exercising the 404 branch.
+        headers = _auth_headers("admin")
         with patch("src.api.routers.rules.get_rule_pack", AsyncMock(return_value=None)):
-            resp = client.get("/api/v1/rules/pack/v99")
+            resp = client.get("/api/v1/rules/pack/v99", headers=headers)
             assert resp.status_code == 404
+
+    def test_download_pack_unauthenticated_401(self):
+        # P1-API-02 (2026-07-20): pack download requires admin/analyst.
+        resp = client.get("/api/v1/rules/pack/v1")
+        assert resp.status_code == 401
+
+    def test_download_pack_as_viewer_403(self):
+        # P1-API-02 (2026-07-20): pack download rejects viewer.
+        headers = _auth_headers("viewer")
+        resp = client.get("/api/v1/rules/pack/v1", headers=headers)
+        assert resp.status_code == 403

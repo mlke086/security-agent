@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     api_refresh_token_expire_days: int = 7
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # P1-API-03: comma-separated CORS allowlist. Empty falls back to
+    # defaults (console URL + localhost dev origins). Set to "*" only
+    # when also disabling credentials.
+    allowed_origins: str = ""
 
     # Sandbox
     sandbox_container_pool_size: int = 5
@@ -97,12 +101,36 @@ class Settings(BaseSettings):
     agent_tls_cert: str = ""
     agent_tls_key: str = ""
     agent_ca_cert: str = ""
+    # P2-1 修复：Ed25519 私钥（64 hex），用于签 WS 敏感命令 + 规则包 body。
     agent_signing_key: str = ""
+    # P2-1 修复：规则包 HMAC-SHA256 密钥（任意串），与 Ed25519 私钥分离。
+    # 留空时回退到 agent_signing_key（向后兼容旧部署），但推荐单独配置。
+    agent_hmac_key: str = ""
+    # V4.1 (P0-2): agent-side debug toggle. Mirrors the Go-side
+    # AGENT_DEBUG=1 env var -- when True, the Python signing layer
+    # logs the canonical signed payload (otherwise silent so the
+    # raw payload never lands in INFO-level journalctl / ES audit).
+    agent_debug: bool = False
     agent_heartbeat_interval: int = 60
     agent_binary_dir: str = "deployments/agent/dist"
     rules_sync_source: str = "nvd"
     rules_sync_cron: str = "0 3 * * *"
+    # 需求2.2：规则数据源。nvd=NVD API(国外,带key); github=GitHub advisory-database
+    # (国内可访问 GitHub)。离线导入另支持 NVD json / advisory zip / rulepack。
+    nvd_api_key: str = ""  # NVD API key，提升限速(50req/30s)，留空走匿名(5req/30s)
+    nvd_proxy: str = ""  # NVD 代理(国内访问超时时配，如 http://192.168.254.121:7897)
+    # GitHub Advisory 在线同步：拉取近 N 天的 reviewed advisory，避免全量 28530 条。
+    advisory_lookback_days: int = 30
 
+    # P1-SEC-05/06 (2026-07-20): env-driven seed passwords. Production
+    # deployments MUST set all four to >=12 char non-trivial values; the
+    # seeder refuses to start otherwise. ``dev_mode=true`` relaxes the
+    # check and issues a random per-process password logged at startup.
+    dev_mode: bool = False
+    default_admin_password: str = ""
+    default_analyst_password: str = ""
+    default_viewer_password: str = ""
+    default_responder_password: str = ""
 
     @model_validator(mode="after")
     def _validate_api_secret_key(self) -> "Settings":

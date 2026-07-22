@@ -1,0 +1,7 @@
+﻿src\orchestration\task_queue\dequeue.py:177: error: Unpacked dict entry 0 has incompatible type "dict[str, Any]"; expected "SupportsKeysAndGetItem[bytes | memoryview[int] | str | int | float, bytes | memoryview[int] | str | int | float]"  [dict-item]
+src\knowledge\tools\virustotal.py:34: error: Name "urllib" is not defined  [name-defined]
+src\execution\sandbox\executor.py:91: error: Too many positional arguments for "ExecutionResult"  [misc]
+src\api\store.py:199: error: Module "src.api.store" has no attribute "_CLEAR"  [attr-defined]
+src\knowledge\models\adapter.py:205: error: "Runnable[PromptValue | str | Sequence[BaseMessage | list[str] | tuple[str, str] | str | dict[str, Any]], BaseMessage]" has no attribute "with_structured_output"  [attr-defined]
+src\orchestration\task_queue\worker.py:129: error: Assignment to variable "exc" outside except: block  [misc]
+Found 6 errors in 6 files (checked 116 source files)

@@ -1,11 +1,12 @@
 """Pydantic models for the vulnerability scanning subsystem."""
-from enum import Enum
+
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel
 
 
-class HostStatus(str, Enum):
+class HostStatus(StrEnum):
     ONLINE = "online"
     OFFLINE = "offline"
     DECOMMISSIONED = "decommissioned"
@@ -28,7 +29,7 @@ class Host(BaseModel):
     created_at: str = ""
 
 
-class ScanModule(str, Enum):
+class ScanModule(StrEnum):
     SYS_VULN = "sys_vuln"
     BASELINE = "baseline"
 
@@ -42,12 +43,27 @@ class ScanPolicy(BaseModel):
 
 class ScanTask(BaseModel):
     task_id: str
-    source: Literal["dialog", "manual"]
+    # Default to "manual" so callers (tests, internal builders) don't have to
+    # pass it explicitly. "dialog" is still accepted when the orchestrator
+    # starts a scan from a natural-language intent.
+    source: Literal["dialog", "manual"] = "manual"
     intent_text: str | None = None
     targets: list[str] = []
     policy: ScanPolicy = ScanPolicy()
     rule_version: str = ""
-    status: Literal["queued","dispatching","scanning","analyzing","completed","failed"] = "queued"
+
+    # P0 (2026-07-18): engine selector for nuclei integration.
+    engine: Literal["matcher", "nuclei"] = "matcher"
+
+    # Nuclei-only knobs. Ignored when engine == "matcher".
+    nuclei_severity: list[str] = []  # ["critical","high",...]
+    nuclei_tags: list[str] = []  # ["rce","auth-bypass",...]
+    nuclei_templates: list[str] = []  # ["cves/2024/CVE-...","exposures/..."]
+    nuclei_timeout_sec: int = 0  # 0 = runner default (600s)
+
+    status: Literal["queued", "dispatching", "scanning", "analyzing", "completed", "failed"] = (
+        "queued"
+    )
     stats: dict = {"total": 0, "done": 0, "failed": 0}
     created_at: str = ""
     finished_at: str | None = None
@@ -124,12 +140,13 @@ class EnrollResponse(BaseModel):
     ws_url: str
     heartbeat_interval: int
     # P0-GO-1: server Ed25519 public key (hex).
-    server_public_key: str = ''
+    server_public_key: str = ""
     # P1 (2026-07-17): current rule_version the agent should bootstrap with.
     # Without this the host UI shows "-" until the server pushes a
     # rule_update command (which may never happen if the agent never gets
     # that command).
-    rule_version: str = ''
+    rule_version: str = ""
+
 
 class RulesSyncRequest(BaseModel):
     source: str = "nvd"
@@ -153,6 +170,7 @@ class ScanStep(BaseModel):
     step: str
     status: str
     message: str = ""
+
 
 class RuleCheck(BaseModel):
     type: str

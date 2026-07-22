@@ -13,6 +13,7 @@ import ScanMonitorPage from './pages/ScanMonitorPage'
 import VulnListPage from './pages/VulnListPage'
 import ScanReportPage from './pages/ScanReportPage'
 import RulesPage from './pages/RulesPage'
+import ModelsPage from './pages/ModelsPage'
 import { Spin } from 'antd'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -38,6 +39,7 @@ export default function App() {
             <Route path="/vulns" element={<VulnListPage />} />
             <Route path="/report" element={<ScanReportPage />} />
             <Route path="/rules" element={<RulesPage />} />
+            <Route path="/models" element={<ModelsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

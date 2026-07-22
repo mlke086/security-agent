@@ -1,6 +1,9 @@
 package scan
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestMatcherPackageVersion(t *testing.T) {
 	m := NewMatcher()
@@ -62,5 +65,115 @@ func TestCompareVersions(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("versionCompare(%q, %q, %q) = %v, want %v", tc.a, tc.op, tc.b, got, tc.want)
 		}
+	}
+}
+
+
+// --- config_check / config_file tests (P0 2026-07-19) ---
+
+func TestMatcherConfigCheck_HardenedPasses(t *testing.T) {
+	m := NewMatcher()
+	rule := RuleDef{
+		ID: "BL-001", Category: "baseline",
+		Name: "SSH root login not disabled", Severity: "high",
+		Check: RuleCheck{Type: "config_check", File: "/etc/ssh/sshd_config",
+			Pattern: "^PermitRootLogin", Expect: "no"},
+	}
+	items := []CollectedItem{{
+		Category: "baseline", Type: "config_file",
+		Data: map[string]string{
+			"path":    "/etc/ssh/sshd_config",
+			"content": "# SSH config\nPermitRootLogin no\nPasswordAuthentication no\n",
+		},
+	}}
+	if got := m.Match(items, []RuleDef{rule}); len(got) != 0 {
+		t.Fatalf("hardened host should produce 0 findings, got %d: %+v", len(got), got)
+	}
+}
+
+func TestMatcherConfigCheck_RuleLineMissing(t *testing.T) {
+	m := NewMatcher()
+	rule := RuleDef{
+		ID: "BL-001", Category: "baseline",
+		Name: "SSH root login not disabled", Severity: "high",
+		Check: RuleCheck{Type: "config_check", File: "/etc/ssh/sshd_config",
+			Pattern: "^PermitRootLogin", Expect: "no"},
+	}
+	items := []CollectedItem{{
+		Category: "baseline", Type: "config_file",
+		Data: map[string]string{
+			"path":    "/etc/ssh/sshd_config",
+			"content": "# PermitRootLogin yes\nPasswordAuthentication no\n",
+		},
+	}}
+	got := m.Match(items, []RuleDef{rule})
+	if len(got) != 1 {
+		t.Fatalf("expected 1 finding (rule line missing), got %d", len(got))
+	}
+	if !strings.Contains(got[0].Evidence, "not found") {
+		t.Errorf("evidence should say rule not found, got %q", got[0].Evidence)
+	}
+}
+
+func TestMatcherConfigCheck_ValueMismatch(t *testing.T) {
+	m := NewMatcher()
+	rule := RuleDef{
+		ID: "BL-002", Category: "baseline",
+		Name: "PASS_MIN_LEN too short", Severity: "medium",
+		Check: RuleCheck{Type: "config_check", File: "/etc/login.defs",
+			Pattern: "^PASS_MIN_LEN", Expect: "8"},
+	}
+	items := []CollectedItem{{
+		Category: "baseline", Type: "config_file",
+		Data: map[string]string{
+			"path":    "/etc/login.defs",
+			"content": "PASS_MIN_LEN 5\n",
+		},
+	}}
+	got := m.Match(items, []RuleDef{rule})
+	if len(got) != 1 {
+		t.Fatalf("expected 1 finding (value mismatch), got %d", len(got))
+	}
+	if !strings.Contains(got[0].Evidence, "PASS_MIN_LEN 5") {
+		t.Errorf("evidence should quote the offending line, got %q", got[0].Evidence)
+	}
+}
+
+func TestMatcherConfigCheck_WrongFilePathIgnored(t *testing.T) {
+	m := NewMatcher()
+	rule := RuleDef{
+		ID: "BL-001", Category: "baseline",
+		Check: RuleCheck{Type: "config_check", File: "/etc/ssh/sshd_config",
+			Pattern: "^PermitRootLogin", Expect: "no"},
+	}
+	items := []CollectedItem{{
+		Category: "baseline", Type: "config_file",
+		Data: map[string]string{
+			"path":    "/etc/login.defs",
+			"content": "PermitRootLogin no\n",
+		},
+	}}
+	if got := m.Match(items, []RuleDef{rule}); len(got) != 0 {
+		t.Errorf("path mismatch must not match, got %d findings", len(got))
+	}
+}
+
+func TestMatcherConfigCheck_CommentedLineNotCounted(t *testing.T) {
+	m := NewMatcher()
+	rule := RuleDef{
+		ID: "BL-001", Category: "baseline",
+		Check: RuleCheck{Type: "config_check", File: "/etc/ssh/sshd_config",
+			Pattern: "^PermitRootLogin", Expect: "no"},
+	}
+	items := []CollectedItem{{
+		Category: "baseline", Type: "config_file",
+		Data: map[string]string{
+			"path":    "/etc/ssh/sshd_config",
+			"content": "# PermitRootLogin no\n",
+		},
+	}}
+	got := m.Match(items, []RuleDef{rule})
+	if len(got) != 1 {
+		t.Fatalf("commented rule should be reported as missing, got %d findings", len(got))
 	}
 }

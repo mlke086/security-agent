@@ -43,6 +43,40 @@ cat > "$CONFIG_DIR/config.json" << EOFCFG
   "resource_limit": {"cpu_percent": 30, "mem_percent": 30}
 }
 EOFCFG
+# P0 (2026-07-18): Install the nuclei CLI alongside the agent so the
+# "nuclei" scan engine can run. The agent itself falls back to its own
+# matcher when nuclei is absent, so a download failure here is
+# non-fatal -- matcher-only mode still works.
+install_nuclei() {
+  if [ -x "$INSTALL_DIR/bin/nuclei" ]; then
+    echo "[secagent] nuclei already present"
+    return 0
+  fi
+  echo "[secagent] Downloading nuclei CLI for $OS/$ARCH..."
+  mkdir -p "$INSTALL_DIR/bin"
+  local NUCLEI_VER="${NUCLEI_VER:-v3.4.5}"
+  local TARBALL="nuclei_${NUCLEI_VER#v}_${OS}_${ARCH}.tar.gz"
+  local URL="https://github.com/projectdiscovery/nuclei/releases/download/${NUCLEI_VER}/${TARBALL}"
+  local TMP_TGZ
+  TMP_TGZ="$(mktemp --suffix=.tgz)"
+  if curl -fsSL -o "$TMP_TGZ" "$URL"; then
+    if tar -xzf "$TMP_TGZ" -C "$INSTALL_DIR/bin" 2>/dev/null; then
+      chmod +x "$INSTALL_DIR/bin/nuclei" 2>/dev/null || true
+      if [ -x "$INSTALL_DIR/bin/nuclei" ]; then
+        echo "[secagent] nuclei installed: $("$INSTALL_DIR/bin/nuclei" -version 2>/dev/null | head -1)"
+      else
+        echo "[secagent] Warning: nuclei tarball extracted but binary not found"
+      fi
+    else
+      echo "[secagent] Warning: failed to extract nuclei tarball; matcher-only mode"
+    fi
+  else
+    echo "[secagent] Warning: nuclei download failed; matcher-only mode"
+  fi
+  rm -f "$TMP_TGZ"
+}
+install_nuclei || true
+
 
 # Install systemd service
 cat > /etc/systemd/system/secagent.service << EOFSVC

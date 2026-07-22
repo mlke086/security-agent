@@ -1,4 +1,5 @@
 """Host enrollment: token generation, validation, install script rendering, registration."""
+
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -88,10 +89,70 @@ EOF
     exit 1
 fi
 chmod 0750 "$INSTALL_DIR/agent"
+install_nuclei || true
+install_nuclei_templates || true
 
 # --- 4. Optional CA cert (best-effort) ----------------------------------------
 curl -fsSL --fail -H "Authorization: Bearer $TOKEN" "$CONSOLE/api/v1/agents/ca" -o "$CONFIG_DIR/ca.pem" 2>/dev/null \
     || log "CA cert not available (continuing without)."
+
+# --- 4b. Best-effort nuclei CLI download (P0 / 2026-07-18) ---------------------
+# The Go agent ships a runNuclei() path that shells out to /opt/secagent/bin/nuclei.
+# We download it from the official projectdiscovery/nuclei release. The download
+# is best-effort: matcher-only mode still works without nuclei, so we swallow
+# failures with `|| true` and never abort the install.
+install_nuclei() {
+    mkdir -p "$INSTALL_DIR/bin"
+    log "Downloading nuclei CLI (best-effort) from GitHub release..."
+    local NUCLEI_VERSION="v3.3.0"
+    local NUCLEI_TARBALL="nuclei_${NUCLEI_VERSION}_linux_${ARCH}.zip"
+    local TMPDIR_NUC=$(mktemp -d)
+    if curl -fsSL --fail -o "$TMPDIR_NUC/$NUCLEI_TARBALL" \
+        "https://github.com/projectdiscovery/nuclei/releases/download/${NUCLEI_VERSION}/${NUCLEI_TARBALL}" 2>/dev/null; then
+        (cd "$TMPDIR_NUC" && (command -v unzip >/dev/null && unzip -o "$NUCLEI_TARBALL" || python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('.')" "$NUCLEI_TARBALL")) >/dev/null 2>&1
+        if [ -x "$TMPDIR_NUC/nuclei" ]; then
+            install -m 0755 "$TMPDIR_NUC/nuclei" "$INSTALL_DIR/bin/nuclei"
+            log "nuclei installed at $INSTALL_DIR/bin/nuclei"
+        else
+            log "nuclei tarball downloaded but binary not found -- matcher-only mode will be used"
+        fi
+    else
+        log "nuclei download failed -- matcher-only mode will be used"
+    fi
+    rm -rf "$TMPDIR_NUC"
+}
+
+# --- 4c. Best-effort nuclei templates sync (P1-GO-4 / 2026-07-19) ------------
+# The Go agent's nuclei runner reads templates from $INSTALL_DIR/templates.
+# nuclei ships its own -update flag, but the bundled templates are huge
+# (multi-thousand templates) so we skip them here and instead drop a small
+# "critical" subset pulled from nuclei-templates (the official repo) so the
+# scanner has something to work with on a fresh host. Best-effort: failure
+# here just means matcher-only mode until the next console-driven
+# rule_update delivers a fresh manifest.
+install_nuclei_templates() {
+    mkdir -p "$INSTALL_DIR/templates"
+    log "Downloading nuclei templates subset (best-effort)..."
+    local TEMPLATES_VERSION="v9.6.0"
+    local TARBALL="nuclei-templates-${TEMPLATES_VERSION}.tar.gz"
+    local TMPDIR_TPL=$(mktemp -d)
+    if curl -fsSL --fail -o "$TMPDIR_TPL/$TARBALL" \
+        "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/${TEMPLATES_VERSION}.tar.gz" 2>/dev/null; then
+        (cd "$TMPDIR_TPL" && tar -xzf "$TARBALL" 2>/dev/null) || true
+        # Copy just the cves/ + exposures/ subsets -- enough for "real CVE scan"
+        # without bloating install from tens of thousands of templates.
+        if [ -d "$TMPDIR_TPL/nuclei-templates-${TEMPLATES_VERSION#v}/cves" ]; then
+            cp -r "$TMPDIR_TPL/nuclei-templates-${TEMPLATES_VERSION#v}/cves" "$INSTALL_DIR/templates/" 2>/dev/null || true
+        fi
+        if [ -d "$TMPDIR_TPL/nuclei-templates-${TEMPLATES_VERSION#v}/exposures" ]; then
+            cp -r "$TMPDIR_TPL/nuclei-templates-${TEMPLATES_VERSION#v}/exposures" "$INSTALL_DIR/templates/" 2>/dev/null || true
+        fi
+        log "nuclei templates installed at $INSTALL_DIR/templates/"
+    else
+        log "nuclei templates download failed -- matcher-only mode will be used until server pushes templates"
+    fi
+    rm -rf "$TMPDIR_TPL"
+}
 
 # --- 5. systemd unit (enable now, start later once config has credentials) ---
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOFSVC
@@ -144,10 +205,17 @@ else
         # P1 (2026-07-17): also pull rule_version so the host UI shows a real
         # value immediately instead of "-" until the server pushes rule_update.
         RULE_VERSION=$(printf '%s' "$REG_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('rule_version',''))")
+
+        # P0-GO-1 (2026-07-19): pull the server Ed25519 public key too. Without
+        # it in config.json the agent skips SetPublicKey (AgentID already set),
+        # crypto.PublicKey stays nil, and the first signed scan_command panics
+        # in ed25519.Verify -> crash loop.
+        SERVER_PUBKEY=$(printf '%s' "$REG_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('server_public_key',''))")
     else
         AGENT_ID=$(printf '%s' "$REG_RESP" | grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
         AGENT_TOKEN=$(printf '%s' "$REG_RESP" | grep -o '"agent_token"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
         RULE_VERSION=$(printf '%s' "$REG_RESP" | grep -o '"rule_version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
+        SERVER_PUBKEY=$(printf '%s' "$REG_RESP" | grep -o '"server_public_key"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
     fi
 fi
 
@@ -161,7 +229,7 @@ fi
 # (PG-backed via validate_agent_token). File mode 0600 keeps the token
 # readable by root only.
 cat > "$CONFIG_DIR/config.json" <<EOFCFG
-{"console_url": "$CONSOLE", "ca_path": "$CONFIG_DIR/ca.pem", "agent_id": "$AGENT_ID", "agent_token": "$AGENT_TOKEN", "rule_version": "$RULE_VERSION"}
+{"console_url": "$CONSOLE", "ca_path": "$CONFIG_DIR/ca.pem", "agent_id": "$AGENT_ID", "agent_token": "$AGENT_TOKEN", "rule_version": "$RULE_VERSION", "server_public_key": "$SERVER_PUBKEY"}
 EOFCFG
 chmod 0600 "$CONFIG_DIR/config.json"
 
@@ -197,18 +265,26 @@ Invoke-RestMethod -Uri "$CONSOLE/api/v1/agents/enroll" -Method Post -Body $BODY 
 """
 
 
-async def create_enroll_token(group: str | None = None, ttl_hours: int = 24, uses: int = 1, created_by: str = "system") -> tuple[str, str]:
+async def create_enroll_token(
+    group: str | None = None, ttl_hours: int = 24, uses: int = 1, created_by: str = "system"
+) -> tuple[str, str]:
     """Generate an enrollment token (PG-backed). Returns (token, expires)."""
     from src.common.db.pg import get_pg_pool
+
     pool = await get_pg_pool()
     token = secrets.token_urlsafe(32)
     expires = datetime.now(UTC) + timedelta(hours=ttl_hours)
     await pool.execute(
         "INSERT INTO enroll_tokens (token, group_name, expires_at, uses_remaining, created_by) VALUES ($1, $2, $3, $4, $5)",
-        token, group, expires, uses, created_by,
+        token,
+        group,
+        expires,
+        uses,
+        created_by,
     )
     logger.info("enroll_token_created", token_preview=token[:8])
     return token, expires.isoformat()
+
 
 async def peek_enroll_token(token: str) -> dict | None:
     """Validate token WITHOUT consuming uses.  Returns {group} or None.
@@ -217,6 +293,7 @@ async def peek_enroll_token(token: str) -> dict | None:
     the enrollment token (only /enroll should decrement uses).
     """
     from src.common.db.pg import get_pg_pool
+
     pool = await get_pg_pool()
     row = await pool.fetchrow(
         "SELECT group_name, expires_at, uses_remaining FROM enroll_tokens WHERE token = $1",
@@ -233,10 +310,10 @@ async def peek_enroll_token(token: str) -> dict | None:
     return {"group": row["group_name"] or ""}
 
 
-
 async def validate_enroll_token(token: str) -> dict | None:
     """Validate token; decrement uses (PG). Returns {group} or None."""
     from src.common.db.pg import get_pg_pool
+
     pool = await get_pg_pool()
     row = await pool.fetchrow(
         "SELECT group_name, expires_at, uses_remaining FROM enroll_tokens WHERE token = $1",
@@ -268,32 +345,32 @@ def get_install_script_content(token: str, os_type: str, console_url: str | None
     """
     url = console_url or get_settings().agent_console_external_url
     template = INSTALL_PS1 if os_type == "windows" else INSTALL_SH
-    return (
-        template
-        .replace("__SECAGENT_TOKEN__", token)
-        .replace("__SECAGENT_CONSOLE_URL__", url)
-    )
+    return template.replace("__SECAGENT_TOKEN__", token).replace("__SECAGENT_CONSOLE_URL__", url)
 
 
 async def register_enroll_token(agent_id: str, agent_token: str, ttl_days: int = 365) -> None:
     """Store agent auth token hash in PG for WS authentication."""
     from src.common.db.pg import get_pg_pool
+
     pool = await get_pg_pool()
     token_hash = hashlib.sha256(agent_token.encode()).hexdigest()
     await pool.execute(
         "INSERT INTO agent_tokens (agent_id, token_hash) VALUES ($1, $2) "
         "ON CONFLICT (agent_id) DO UPDATE SET token_hash = $2, issued_at = NOW(), revoked_at = NULL",
-        agent_id, token_hash,
+        agent_id,
+        token_hash,
     )
 
 
 async def validate_agent_token(agent_id: str, token: str) -> bool:
     """Validate agent token against PG (for WS gateway auth)."""
     from src.common.db.pg import get_pg_pool
+
     pool = await get_pg_pool()
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     row = await pool.fetchrow(
         "SELECT 1 FROM agent_tokens WHERE agent_id = $1 AND token_hash = $2 AND revoked_at IS NULL",
-        agent_id, token_hash,
+        agent_id,
+        token_hash,
     )
     return row is not None

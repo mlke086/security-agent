@@ -26,9 +26,7 @@ class Neo4jGraphClient:
             auth=(settings.neo4j_user, settings.neo4j_password),
         )
 
-    async def query_neighbours(
-        self, ioc_values: list[str], hops: int = 2
-    ) -> list[dict]:
+    async def query_neighbours(self, ioc_values: list[str], hops: int = 2) -> list[dict]:
         rel_pattern = f"*1..{hops}"
         query = _NEIGHBOUR_QUERY.replace("%rel_var%", rel_pattern)
         async with self._driver.session() as session:
@@ -41,6 +39,28 @@ class Neo4jGraphClient:
             except Exception as exc:
                 logger.error("neo4j_query_failed", error=str(exc))
                 return []
+
+    async def delete_by_event(self, event_id: str) -> int:
+        """Delete every Evidence node linked to ``Event {event_id}`` (and the
+        HAS_EVIDENCE relationship). Returns rows deleted.
+
+        P1-CORE-2: MemoryManager.cleanup() now calls this so Neo4j does not
+        grow forever with orphan evidence nodes from old sessions.
+        """
+        query = (
+            "MATCH (e:Event {event_id: $event_id})-[r:HAS_EVIDENCE]->(ev:Evidence) " "DELETE r, ev"
+        )
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(query, event_id=event_id)
+                # result.consume() drains the cursor; counters are on summary
+                summary = await result.consume()
+                deleted = summary.counters.relationships_deleted + summary.counters.nodes_deleted
+                logger.info("neo4j_event_deleted", event_id=event_id, deleted=deleted)
+                return deleted
+        except Exception as exc:
+            logger.warning("neo4j_event_delete_failed", event_id=event_id, error=str(exc))
+            return 0
 
     async def close(self) -> None:
         await self._driver.close()

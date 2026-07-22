@@ -1,13 +1,14 @@
-﻿import { useState } from "react"
-import { Layout, Menu, Button, Typography, theme, message } from "antd"
+import { useState } from "react"
+import { Layout, Menu, Button, Typography, theme, message, Select, Space } from "antd"
 import {
   DashboardOutlined, ProfileOutlined, AuditOutlined,
   LogoutOutlined, SecurityScanOutlined, BugOutlined,
   CloudServerOutlined, EyeOutlined, FileSearchOutlined,
-  SyncOutlined,
+  SyncOutlined, SkinOutlined, RobotOutlined,
 } from "@ant-design/icons"
 import { useNavigate, useLocation, Outlet } from "react-router-dom"
 import { useAuth } from "../context/AuthContext"
+import { useTheme, THEMES, type ThemeKey } from "../context/ThemeContext"
 import { seedDemo } from "../api/client"
 
 const { Header, Sider, Content } = Layout
@@ -19,6 +20,7 @@ export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false)
   const [seeding, setSeeding] = useState(false)
   const { token: themeToken } = theme.useToken()
+  const { profile, setThemeKey, themeKey } = useTheme()
   const role = user?.role || ""
 
   const isAdmin = role === "admin"
@@ -31,33 +33,45 @@ export default function AppLayout() {
     { key: "/vulns", icon: <EyeOutlined />, label: "漏洞清单" },
     { key: "/report", icon: <FileSearchOutlined />, label: "扫描报告" },
     { key: "/rules", icon: <SyncOutlined />, label: "规则管理" },
+    { key: "/models", icon: <RobotOutlined />, label: "模型管理" },
     { key: "/events", icon: <ProfileOutlined />, label: "事件队列" },
     ...(canApprove ? [{ key: "/approvals", icon: <AuditOutlined />, label: "审批列表" }] : []),
   ]
 
+  const isDarkSider = profile.siderTheme === "dark"
+  const siderLogoColor = isDarkSider ? "#fff" : "#001529"
+
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} theme="dark">
-        <div style={{ height: 64, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: collapsed ? 14 : 16, fontWeight: "bold" }}>
+      <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} theme={profile.siderTheme}>
+        <div style={{ height: 64, display: "flex", alignItems: "center", justifyContent: "center", color: siderLogoColor, fontSize: collapsed ? 14 : 16, fontWeight: "bold" }}>
           <SecurityScanOutlined style={{ marginRight: collapsed ? 0 : 8 }} />
           {!collapsed && "SecAgent"}
         </div>
-        <Menu theme="dark" mode="inline" selectedKeys={[location.pathname]} items={items} onClick={({ key }) => navigate(key)} />
+        <Menu theme={profile.siderTheme} mode="inline" selectedKeys={[location.pathname]} items={items} onClick={({ key }) => navigate(key)} />
       </Sider>
       <Layout>
-        <Header style={{ background: themeToken.colorBgContainer, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid #f0f0f0" }}>
+        <Header style={{ background: themeToken.colorBgContainer, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `1px solid ${themeToken.colorBorderSecondary}` }}>
           <Typography.Text type="secondary">
             {role === "admin" ? "管理员" : role === "analyst" ? "分析师" : role === "responder" ? "响应员" : "观察者"}
           </Typography.Text>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Space size="middle" align="center">
+            <Select
+              size="small"
+              value={themeKey}
+              onChange={(v: ThemeKey) => setThemeKey(v)}
+              style={{ width: 110 }}
+              suffixIcon={<SkinOutlined />}
+              options={Object.values(THEMES).map((t) => ({ label: t.label, value: t.key }))}
+            />
             {isAdmin && (
               <Button size="small" icon={<BugOutlined />} loading={seeding} onClick={async () => {
                 setSeeding(true); try { await seedDemo(); message.success("演示数据已注入") } catch { message.error("注入失败") } finally { setSeeding(false) }
               }}>注入演示数据</Button>
             )}
-            <Typography.Text style={{ marginRight: 8 }}>{user?.username}</Typography.Text>
+            <Typography.Text>{user?.username}</Typography.Text>
             <Button type="text" icon={<LogoutOutlined />} onClick={logout}>退出</Button>
-          </div>
+          </Space>
         </Header>
         <Content style={{ margin: 24 }}>
           <Outlet />

@@ -87,7 +87,10 @@ async def test_emit_invokes_run_pipeline(monkeypatch):
 async def test_send_dlq_posts_to_dlq():
     c = AlertConsumer()
     c._dlq_producer = AsyncMock()
-    await c._send_dlq("raw payload", "some error")
+    c._dlq_producer.send.return_value = AsyncMock()
+    c._dlq_producer.flush.return_value = AsyncMock()
+    ok = await c._send_dlq("raw payload", "some error")
+    assert ok is True
     c._dlq_producer.send.assert_awaited_once()
     _, kwargs = c._dlq_producer.send.call_args
     assert kwargs["value"]["raw"] == "raw payload"
@@ -102,6 +105,11 @@ async def test_run_parse_failure_sends_dlq_and_commits(monkeypatch):
     fc = _FakeConsumer([_FakeMsg("garbage")])
     c._consumer = fc
     c._dlq_producer = AsyncMock()
+    # P1-PRE-01 (2026-07-19): _send_dlq now awaits the send future +
+    # flushes. AsyncMock's default send() return value is not awaitable,
+    # so we wrap it in a fresh AsyncMock to satisfy the second await.
+    c._dlq_producer.send.return_value = AsyncMock()
+    c._dlq_producer.flush.return_value = AsyncMock()
 
     def _boom(raw: str):
         raise ValueError("parse error")

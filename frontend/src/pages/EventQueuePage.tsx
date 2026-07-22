@@ -2,7 +2,7 @@
 import { Table, Tag, Button, Drawer, Form, Input, Select, message, Space, Typography, Badge, Progress } from "antd"
 import { PlusOutlined, EyeOutlined } from "@ant-design/icons"
 import { useNavigate } from "react-router-dom"
-import { getEvents, submitEvent, seedDemo } from "../api/client"
+import api, { getEvents, submitEvent, seedDemo, getSseToken } from "../api/client"
 import { useAuth } from "../context/AuthContext"
 import type { EventRecord } from "../types"
 
@@ -34,10 +34,49 @@ export default function EventQueuePage() {
     finally { setLoading(false) }
   }
 
+  // P2-FE-09 (2026-07-20): subscribe to the events list SSE stream instead
+  // of polling every 5s. The server publishes a message on
+  // `events:list` whenever an event is created/updated, so the page
+  // reflects new activity in <1s with no extra request load.
   useEffect(() => {
     fetchEvents()
-    intervalRef.current = setInterval(fetchEvents, 5000)
-    return () => clearInterval(intervalRef.current)
+    // F2 (2026-07-21): mint a 60s scoped token first so the long-lived
+    // JWT never lands in the EventSource URL (nginx access log / browser
+    // history / Referer). See getSseToken() in api/client.ts.
+    if (!localStorage.getItem("token")) return
+    let es: EventSource | null = null
+    let cancelled = false
+    ;(async () => {
+      try {
+        const shortToken = await getSseToken("events_list")
+        if (cancelled) return
+        const base = (api.defaults.baseURL || "").replace(/\/+$/, "")
+        // base 已含 /api/v1，只拼 /events/stream（不能重复 /api/v1，否则 404 致
+        // EventSource 无限重连占满连接数致所有请求阻塞）。
+        es = new EventSource(`${base}/events/stream?token=${shortToken}`)
+        // 竞态兜底：创建后若已取消（用户快速离开），立即关闭，避免泄漏。
+        if (cancelled) { es.close(); es = null; return }
+        wireEs(es)
+      } catch (err) { console.warn("event_queue_sse_token_failed", err) }
+    })()
+    function wireEs(es: EventSource) {
+    es.onmessage = () => {
+      // The server emits `{type, event_id, ...}` on every event update;
+      // we don't care about the payload -- just refetch the list.
+      fetchEvents()
+    }
+    // 防重连风暴：404/网络错误 readyState=CLOSED 时主动 close，避免无限重连
+    // 占满浏览器同域连接数致所有请求阻塞。
+    es.onerror = () => {
+      if (es.readyState === EventSource.CLOSED) es.close()
+    }
+    }
+    return () => {
+      cancelled = true
+      if (es) { es.close(); es = null }
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters])
 
   const columns = [

@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react"
-import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip } from "antd"
-import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined } from "@ant-design/icons"
-import type { Host } from "../api/client"
+import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty } from "antd"
+import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined } from "@ant-design/icons"
+import type { Host, HostGroup } from "../api/client"
 import {
   createEnrollToken,
   getConsoleUrl,
   getInstallHelper,
   getInstallScript,
   listHosts,
+  listGroups,
+  createGroup,
+  deleteGroup,
+  updateHostGroup,
   deleteHost,
 } from "../api/client"
 
@@ -42,6 +46,19 @@ export default function HostOnboardPage() {
   const [currentToken, setCurrentToken] = useState("")
   const [consoleBaseUrl, setConsoleBaseUrl] = useState<string>("")
 
+  const [groups, setGroups] = useState<HostGroup[]>([])
+  const [groupFilter, setGroupFilter] = useState<string | undefined>(undefined)
+  const [groupModalOpen, setGroupModalOpen] = useState(false)
+  // 需求1.3：主机列表搜索（前端过滤，debounce 300ms）
+  const [hostSearch, setHostSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
+  const [groupForm] = Form.useForm()
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(hostSearch.trim().toLowerCase()), 300)
+    return () => clearTimeout(t)
+  }, [hostSearch])
+
   // Resolve the canonical console URL once on mount so the install
   // snippets point at the deployable URL (not whatever the operator's
   // browser happens to hit -- reverse proxy / ingress could differ).
@@ -51,26 +68,74 @@ export default function HostOnboardPage() {
     return () => { alive = false }
   }, [])
 
-  const fetchHosts = async () => {
+  // P1-FE-04 (2026-07-20): fetch hosts on mount so the table isn't
+  // empty until the operator clicks the Refresh button.
+  useEffect(() => {
+    let alive = true
+    listHosts()
+      .then((res) => { if (alive) setHosts(res.items) })
+      .catch(() => { if (alive) message.error("加载主机列表失败") })
+    fetchGroups()
+    return () => { alive = false }
+  }, [])
+
+  const refreshHostsData = async () => {
     setLoading(true)
-    try { const res = await listHosts(); setHosts(res.items) }
+    try {
+      const res = await listHosts(groupFilter ? { group: groupFilter } : undefined)
+      setHosts(res.items)
+    }
     catch { message.error("加载主机列表失败") }
     finally { setLoading(false) }
   }
+
+  const fetchHosts = async () => {
+    await refreshHostsData()
+    // 需求2：点刷新主机列表时，隐藏令牌展示（令牌是一次性敏感凭证，展示后即应隐藏）
+    setShowToken(false)
+    setCurrentToken("")
+  }
+
+  const fetchGroups = async () => {
+    try {
+      const res = await listGroups()
+      setGroups(res.items || [])
+    } catch { /* 组列表加载失败不阻断主流程 */ }
+  }
+
+  // 主机列表与组筛选联动：切换筛选时重新拉取
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    listHosts(groupFilter ? { group: groupFilter } : undefined)
+      .then((res) => { if (alive) setHosts(res.items) })
+      .catch(() => { if (alive) message.error("加载主机列表失败") })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [groupFilter])
 
   const handleCreateToken = async (values: { group?: string; ttl_hours: number; uses: number }) => {
     try {
       const res = await createEnrollToken(values.group || null, values.ttl_hours, values.uses)
       setCurrentToken(res.token)
-      // Pre-warm install + helper endpoints (validate token + cache). We pull
-      // both the full script and the operator-friendly two-step snippet so the
-      // operator can either copy the snippet (recommended) or inspect the
-      // script before running it.
-      const linux = await getInstallScript(res.token, "linux"); setLinuxScript(linux)
-      const windows = await getInstallScript(res.token, "windows"); setWindowsScript(windows)
-      const linuxHelper = await getInstallHelper(res.token, "linux"); setLinuxHelper(linuxHelper)
-      const windowsHelper = await getInstallHelper(res.token, "windows"); setWindowsHelper(windowsHelper)
+      // P2-12 修复：先展示 token（已建成功），预热 4 个请求并行发起 + allSettled，
+      // 任一失败仅 warn 不影响 token 展示（原先串行 await 任一失败会进 catch
+      // 显示"生成令牌失败"，让用户误以为没建成、丢失已建 token）。
       setShowToken(true)
+      const results = await Promise.allSettled([
+        getInstallScript(res.token, "linux"),
+        getInstallScript(res.token, "windows"),
+        getInstallHelper(res.token, "linux"),
+        getInstallHelper(res.token, "windows"),
+      ])
+      if (results[0].status === "fulfilled") setLinuxScript(results[0].value)
+      if (results[1].status === "fulfilled") setWindowsScript(results[1].value)
+      if (results[2].status === "fulfilled") setLinuxHelper(results[2].value)
+      if (results[3].status === "fulfilled") setWindowsHelper(results[3].value)
+      const failed = results.filter((r) => r.status === "rejected").length
+      if (failed > 0) {
+        message.warning(`令牌已生成，但 ${failed} 个安装命令预拉失败，可手动复制安装命令`)
+      }
     } catch { message.error("生成令牌失败") }
   }
 
@@ -133,9 +198,70 @@ export default function HostOnboardPage() {
   }
 
   const handleDelete = async (agentId: string) => {
-    try { await deleteHost(agentId); message.success("主机已下线"); fetchHosts() }
+    try { await deleteHost(agentId); message.success("主机已下线"); refreshHostsData() }
     catch { message.error("操作失败") }
   }
+
+  const handlePurgeHost = async (agentId: string) => {
+    // 需求1.4：物理删除已下线主机（purge=true）
+    try {
+      await deleteHost(agentId, true)
+      message.success("主机已删除")
+      refreshHostsData()
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail
+      message.error(detail || "删除失败")
+    }
+  }
+
+  const handleChangeGroup = async (agentId: string, group: string | null) => {
+    try {
+      await updateHostGroup(agentId, group)
+      message.success("已更改所属组")
+      // 需求1.2：切换组后同时刷新主机列表和组列表（组 member_count 需更新，
+      // 否则立即删原组会用旧 count 误判"还存在主机"）。用 refreshHostsData 不清令牌。
+      await Promise.all([refreshHostsData(), fetchGroups()])
+    } catch { message.error("更改组失败") }
+  }
+
+  const handleCreateGroup = async () => {
+    try {
+      const v = await groupForm.validateFields()
+      await createGroup(v.name.trim(), v.description || "")
+      message.success("主机组已创建")
+      setGroupModalOpen(false)
+      groupForm.resetFields()
+      fetchGroups()
+    } catch (e: any) {
+      if (e?.errorFields) return // 表单校验失败，不提示
+      message.error("创建组失败")
+    }
+  }
+
+  const handleDeleteGroup = async (name: string) => {
+    // 需求1.2：去掉前端 member_count 拦截（旧 state 会误判），让服务端 409 兜底。
+    try {
+      await deleteGroup(name)
+      message.success("主机组已删除")
+      fetchGroups()
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail
+      if (detail) message.error(detail)
+      else message.error("删除组失败")
+    }
+  }
+
+  const groupOptions = groups.map((g) => ({ label: g.name, value: g.name }))
+
+  // 需求1.3：按 hostname/ip/agent_id/os 前端过滤
+  const filteredHosts = debouncedSearch
+    ? hosts.filter((h) =>
+        (h.hostname || "").toLowerCase().includes(debouncedSearch) ||
+        (h.ip || "").toLowerCase().includes(debouncedSearch) ||
+        (h.agent_id || "").toLowerCase().includes(debouncedSearch) ||
+        (h.os || "").toLowerCase().includes(debouncedSearch)
+      )
+    : hosts
 
   const columns = [
     { title: "主机名", dataIndex: "hostname", key: "hostname" },
@@ -145,10 +271,39 @@ export default function HostOnboardPage() {
     { title: "状态", dataIndex: "status", key: "status", render: (v: string) => <Tag color={getStatusColor(v)}>{getStatusLabel(v)}</Tag> },
     { title: "Agent版本", dataIndex: "agent_version", key: "agent_version" },
     { title: "规则版本", dataIndex: "rule_version", key: "rule_version" },
-    { title: "组", dataIndex: "group", key: "group", render: (v: string | null) => v || "-" },
+    { title: "组", key: "group", render: (_: unknown, r: Host) => (
+      <Select
+        size="small"
+        style={{ width: 140 }}
+        allowClear
+        placeholder="未分组"
+        value={r.group || undefined}
+        options={groupOptions}
+        onChange={(v) => handleChangeGroup(r.agent_id, v ?? null)}
+      />
+    )},
     { title: "操作", key: "action", render: (_: unknown, r: Host) => (
-      <Popconfirm title="确定下线该主机?" onConfirm={() => handleDelete(r.agent_id)}>
-        <Button size="small" danger>下线</Button>
+      r.status === "decommissioned" ? (
+        <Popconfirm title="确定物理删除该主机?" description="删除后不可恢复" onConfirm={() => handlePurgeHost(r.agent_id)}>
+          <Button size="small" danger>删除</Button>
+        </Popconfirm>
+      ) : (
+        <Popconfirm title="确定下线该主机?" onConfirm={() => handleDelete(r.agent_id)}>
+          <Button size="small" danger>下线</Button>
+        </Popconfirm>
+      )
+    )},
+  ]
+
+  const groupColumns = [
+    { title: "组名", dataIndex: "name", key: "name", render: (v: string, r: HostGroup) => (
+      <Space><Text strong>{v}</Text>{r.origin === "legacy" && <Tag color="orange">未纳管</Tag>}</Space>
+    )},
+    { title: "说明", dataIndex: "description", key: "description", render: (v: string | null) => v || "-" },
+    { title: "主机数", dataIndex: "member_count", key: "member_count", width: 90, render: (v: number) => <Tag color="blue">{v}</Tag> },
+    { title: "操作", key: "action", width: 90, render: (_: unknown, r: HostGroup) => (
+      <Popconfirm title="确定删除该组?" description="若组内仍有主机会拒绝删除" onConfirm={() => handleDeleteGroup(r.name)}>
+        <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
       </Popconfirm>
     )},
   ]
@@ -157,16 +312,28 @@ export default function HostOnboardPage() {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Button icon={<ReloadOutlined />} onClick={fetchHosts} loading={loading}>刷新</Button>
+        <Select
+          allowClear
+          placeholder="按组筛选主机"
+          style={{ width: 180 }}
+          value={groupFilter}
+          options={groupOptions}
+          onChange={(v) => setGroupFilter(v)}
+        />
+        <Input.Search
+          allowClear
+          placeholder="搜索 主机名/IP/AgentID/OS"
+          value={hostSearch}
+          onChange={(e) => setHostSearch(e.target.value)}
+          style={{ width: 240 }}
+        />
+        <Button icon={<TeamOutlined />} onClick={() => setGroupModalOpen(true)}>主机组管理</Button>
       </Space>
 
       <Card title="纳管令牌" id="token-form" style={{ marginBottom: 24 }}>
         <Form layout="inline" onFinish={handleCreateToken} initialValues={{ ttl_hours: 24, uses: 1 }}>
           <Form.Item name="group" label="组">
-            <Select style={{ width: 120 }} allowClear placeholder="默认">
-              <Select.Option value="prod">生产</Select.Option>
-              <Select.Option value="test">测试</Select.Option>
-              <Select.Option value="dev">开发</Select.Option>
-            </Select>
+            <Select style={{ width: 160 }} allowClear placeholder="默认(未分组)" options={groupOptions} />
           </Form.Item>
           <Form.Item name="ttl_hours" label="TTL(h)">
             <InputNumber min={1} max={720} style={{ width: 100 }} />
@@ -211,11 +378,33 @@ export default function HostOnboardPage() {
         )}
       </Card>
 
+      <Card title="主机组" style={{ marginBottom: 24 }}>
+        <Table
+          dataSource={groups}
+          columns={groupColumns}
+          rowKey="name"
+          pagination={false}
+          size="small"
+          locale={{ emptyText: <Empty description="暂无主机组" /> }}
+        />
+      </Card>
+
       <Card title={`主机列表 (${hosts.length})`}>
-        <Table dataSource={hosts} columns={columns} rowKey="agent_id" loading={loading} pagination={{ pageSize: 20 }}
+        <Table dataSource={filteredHosts} columns={columns} rowKey="agent_id" loading={loading} pagination={{ pageSize: 20 }}
           locale={{ emptyText: <div style={{ padding: 40 }}><CloudServerOutlined style={{ fontSize: 48, color: "#ccc" }} /><div style={{ marginTop: 16, color: "#999" }}>暂无纳管主机</div></div> }}
         />
       </Card>
+
+      <Modal title="新建主机组" open={groupModalOpen} onOk={handleCreateGroup} onCancel={() => { setGroupModalOpen(false); groupForm.resetFields() }} okText="创建" cancelText="取消">
+        <Form form={groupForm} layout="vertical">
+          <Form.Item name="name" label="组名" rules={[{ required: true, message: "请输入组名" }, { max: 128, message: "组名不超过 128 字符" }]}>
+            <Input placeholder="例如：生产环境、核心区" />
+          </Form.Item>
+          <Form.Item name="description" label="说明">
+            <Input.TextArea rows={2} placeholder="可选" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

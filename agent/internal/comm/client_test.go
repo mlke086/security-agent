@@ -1,6 +1,7 @@
-﻿package comm
+package comm
 
 import (
+
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +10,9 @@ import (
 	"github.com/security-agent/agent/internal/config"
 	"github.com/security-agent/agent/internal/crypto"
 	"github.com/security-agent/agent/internal/queue"
+
+	"os"
+	"bytes"
 )
 // signTestMessage creates a real Ed25519 signature over the canonical
 // "<type>|<ts>|<payload>" envelope used by crypto.Verify. Tests that exercise
@@ -22,7 +26,16 @@ func signTestMessage(t *testing.T, msgType, ts string, payload []byte) string {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 	crypto.PublicKey = pub
-	canonical := string(msgType) + "|" + ts + "|" + string(payload)
+	// Decode the payload bytes back into a map so we can rebuild the
+	// canonical form with the same spacing the Verify path uses
+	// internally (Python json.dumps style: ", " and ": "). The wire
+	// payload itself is still the unsorted json.Marshal output --
+	// Verify re-canonicalises on its side.
+	var payloadMap map[string]interface{}
+	if err := json.Unmarshal(payload, &payloadMap); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	canonical := string(msgType) + "|" + ts + "|" + crypto.CanonicalJSONForTest(payloadMap)
 	sig := ed25519.Sign(priv, []byte(canonical))
 	return base64.StdEncoding.EncodeToString(sig)
 }
@@ -266,4 +279,27 @@ func TestProcessQueue_ReplaysMessages(t *testing.T) {
 func TestProcessQueue_EmptyQueue(t *testing.T) {
 	client, _ := NewClient(&config.Config{})
 	client.processQueue()
+}
+
+// TestFWSL_Connect_ClosesOnReadDeadline locks the fix for the
+// `panic: repeated read on failed websocket connection` we hit on the
+// WSL agent: after SetReadDeadline fires, the previous loop did
+// `continue` and called ReadMessage AGAIN on the same conn, which
+// gorilla/websocket rejects with a panic. The fix closes the conn
+// and jumps to the reconnect label so the outer dial loop takes
+// over with backoff.
+func TestFWSL_Connect_ClosesOnReadDeadline(t *testing.T) {
+	body, err := os.ReadFile("client.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	for _, want := range []string{
+		"read deadline reached, closing and reconnecting",
+		"goto reconnect",
+		"conn.Close()",
+	} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Errorf("client.go missing %q -- deadline branch may still call continue", want)
+		}
+	}
 }

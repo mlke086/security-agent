@@ -1,4 +1,5 @@
 """CTI analyst node — external intel queries + GraphRAG local retrieval + LLM analysis."""
+
 from typing import Any, Literal
 
 import httpx
@@ -46,20 +47,27 @@ async def _query_graphrag(ioc_values: list[str]) -> str:
     """
     from src.knowledge.graphrag.engine import GraphRAGEngine
     from src.knowledge.graphrag.vector.embedding import embed
+
     engine = GraphRAGEngine()
     try:
         mock_embedding = embed(" ".join(ioc_values))
         result = await engine.search(query_vector=mock_embedding, ioc_values=ioc_values, top_k=5)
         parts = []
         if result.get("vector_hits"):
-            parts.append("Vector matches:\n" + "\n".join(
-                f"  [{h['source']}] {h['content'][:200]}" for h in result["vector_hits"]
-            ))
+            parts.append(
+                "Vector matches:\n"
+                + "\n".join(
+                    f"  [{h['source']}] {h['content'][:200]}" for h in result["vector_hits"]
+                )
+            )
         if result.get("graph_relations"):
-            parts.append("Graph relations:\n" + "\n".join(
-                f"  [{r.get('node_type','?')}] {r.get('name','')} {r.get('cve_id','')}"
-                for r in result["graph_relations"][:10]
-            ))
+            parts.append(
+                "Graph relations:\n"
+                + "\n".join(
+                    f"  [{r.get('node_type','?')}] {r.get('name','')} {r.get('cve_id','')}"
+                    for r in result["graph_relations"][:10]
+                )
+            )
         return "\n\n".join(parts) if parts else ""
     except Exception as exc:
         logger.debug("graphrag_unavailable", error=str(exc))
@@ -69,15 +77,16 @@ async def _query_graphrag(ioc_values: list[str]) -> str:
             await engine.close()
         except Exception:
             pass
+
+
 async def cti_analyst_node(state: InvestigationSubState) -> dict[str, Any]:
     settings = get_settings()
     iocs = state.get("iocs", {})
-    all_ioc_values = (
-        iocs.get("ips", []) + iocs.get("domains", []) + iocs.get("hashes", [])
-    )
+    all_ioc_values = iocs.get("ips", []) + iocs.get("domains", []) + iocs.get("hashes", [])
 
     # Parallel external intelligence queries
     import asyncio
+
     vt_results = await asyncio.gather(
         *[_query_virustotal(ioc, settings.virustotal_api_key) for ioc in all_ioc_values[:5]],
         return_exceptions=True,
@@ -100,15 +109,35 @@ async def cti_analyst_node(state: InvestigationSubState) -> dict[str, Any]:
     )
 
     adapter = get_model_adapter()
-    intel_card = await adapter.chat_completion(
-        messages=[{"role": "user", "content": prompt}],
-        schema=IntelCard,
-    )
+    # P1-SUB-3 (2026-07-19): wrap LLM call in try/except. If the model is
+    # down or rate-limited, fall back to a degraded intel card with risk=unknown
+    # so the rest of the investigation subgraph (playbook_matcher, route)
+    # keeps moving instead of crashing the whole node.
+    try:
+        intel_card = await adapter.chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            schema=IntelCard,
+        )
+    except Exception as exc:
+        logger.warning("cti_llm_failed", error=str(exc))
+        intel_card = IntelCard(
+            risk_level="unknown",
+            related_apt=[],
+            campaigns=[],
+            ttps=[],
+            recommendations=["CTI LLM unavailable -- manual review required"],
+            raw_evidence=evidence[:5],
+        )
 
     log_entry = f"CTI: risk={intel_card.risk_level} apt={intel_card.related_apt}"
     try:
         mm = get_memory_manager()
-        await mm.store_evidence(event_id=state.get("event_id","unknown"), node="cti_analyst", content=f"Risk: {intel_card.risk_level}", metadata=intel_card.model_dump())
+        await mm.store_evidence(
+            event_id=state.get("event_id", "unknown"),
+            node="cti_analyst",
+            content=f"Risk: {intel_card.risk_level}",
+            metadata=intel_card.model_dump(),
+        )
     except Exception as mem_err:
         logger.warning("memory_store_failed", error=str(mem_err))
     return {

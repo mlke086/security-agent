@@ -1,14 +1,14 @@
 """Unit tests for rules_sync module."""
-import json
-import pytest
-from unittest.mock import patch, AsyncMock
-
-from src.agents.rules_sync import (
-    _sign_pack, verify_pack_signature, _transform_cves_to_rules,
-    diff_versions, current_rule_version,
-)
-from src.agents.models import RulePack, RuleItem, RuleCheck
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
+
+from src.agents.models import RuleCheck, RuleItem, RulePack
+from src.agents.rules_sync import (
+    _sign_pack,
+    _transform_cves_to_rules,
+    diff_versions,
+    verify_pack_signature,
+)
 
 
 class TestRuleTransform:

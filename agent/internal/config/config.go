@@ -19,6 +19,11 @@ type Config struct {
 	// verify sensitive commands against. P0-GO-1. It can be provisioned
 	// either by the /enroll response or via config.json.
 	ServerPublicKey string `json:"server_public_key"`
+	// RuleVersion is the rule-pack version this agent last loaded. Heartbeat
+	// reports it so the server knows whether to push a rule_update. Provisioned
+	// by /enroll (enroll.py writes it into config.json) and updated in place
+	// whenever HandleRuleUpdate hot-loads a new pack.
+	RuleVersion     string `json:"rule_version"`
 	HeartbeatSec    int    `json:"heartbeat_sec"`
 	ResourceLimit   struct {
 		CPUPercent int `json:"cpu_percent"`
@@ -27,7 +32,17 @@ type Config struct {
 }
 
 // DefaultConfigPath returns the OS-specific config file path.
+//
+// F-WSL (2026-07-21): respect SECAGENT_HOME so a non-root dev / WSL
+// install can run without sudo. SECAGENT_HOME wins over the legacy
+// OS-specific hardcoded paths.
 func DefaultConfigPath() string {
+	if h := os.Getenv("SECAGENT_HOME"); h != "" {
+		return filepath.Join(h, "config.json")
+	}
+	if p := os.Getenv("CONFIG_PATH"); p != "" {
+		return p
+	}
 	if runtime.GOOS == "windows" {
 		return filepath.Join(os.Getenv("ProgramData"), "secagent", "config", "config.json")
 	}

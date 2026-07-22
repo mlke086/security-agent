@@ -78,15 +78,18 @@ async def playbook_matcher_node(state: ResponderSubState) -> dict[str, Any]:
         if (
             trigger.get("verdict") == verdict
             and confidence >= trigger.get("confidence_min", 0.0)
-            and (not trigger.get("event_tags")
-                 or any(t in event_tags for t in trigger["event_tags"]))
+            and (
+                not trigger.get("event_tags") or any(t in event_tags for t in trigger["event_tags"])
+            )
         ):
             matched = pb
             break
 
     if matched:
-        operations = [Operation(type=op["type"], level=op.get("level", "L1"), params=op.get("params", {}))
-                      for op in matched.get("operations", [])]
+        operations = [
+            Operation(type=op["type"], level=op.get("level", "L1"), params=op.get("params", {}))
+            for op in matched.get("operations", [])
+        ]
     else:
         # LLM-generated playbook
         adapter = get_model_adapter()
@@ -96,18 +99,32 @@ async def playbook_matcher_node(state: ResponderSubState) -> dict[str, Any]:
             "(each with type and params). Use only these operation types: "
             "firewall_block, isolate_host, siem_tag, edr_policy, notify_analyst, dns_block"
         )
-        generated: GeneratedPlaybook = await adapter.chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            schema=GeneratedPlaybook,
-        )
-        operations = [
-            Operation(
-                type=op["type"],
-                level=_infer_level(op["type"]),
-                params=op.get("params", {}),
+        # P1-SUB-3 (2026-07-19): wrap LLM in try/except. If the model is
+        # unavailable, fall back to a single siem_tag L1 op so the event
+        # still reaches a terminal status (instead of crashing the
+        # responder and leaving the event in pending_approval forever).
+        try:
+            generated: GeneratedPlaybook = await adapter.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                schema=GeneratedPlaybook,
             )
-            for op in generated.operations
-        ]
+            operations = [
+                Operation(
+                    type=op["type"],
+                    level=_infer_level(op["type"]),
+                    params=op.get("params", {}),
+                )
+                for op in generated.operations
+            ]
+        except Exception as exc:
+            logger.warning("playbook_llm_failed", error=str(exc))
+            operations = [
+                Operation(
+                    type="siem_tag",
+                    level="L1",
+                    params={"note": "LLM unavailable; manual triage required"},
+                )
+            ]
 
     max_level: OpLevel = "L1"
     level_rank = {"L1": 1, "L2": 2, "L3": 3, "L4": 4, "L5": 5}
@@ -117,7 +134,9 @@ async def playbook_matcher_node(state: ResponderSubState) -> dict[str, Any]:
 
     playbook = Playbook(
         playbook_id=(matched.get("playbook_id") if matched else None) or str(uuid.uuid4())[:8],
-        description=matched.get("description", "Auto-generated playbook") if matched else "LLM generated",
+        description=matched.get("description", "Auto-generated playbook")
+        if matched
+        else "LLM generated",
         operations=operations,
         max_level=max_level,
     )

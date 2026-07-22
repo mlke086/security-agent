@@ -255,6 +255,53 @@
         ]
       }
     },
+    "/api/v1/auth/sse-token": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Issue Sse Token",
+        "description": "Mint a short-lived SSE token scoped to one channel.\n\nP1-API-04 (2026-07-20): the regular user JWT is too long-lived (120\nminutes default) to be passed as a query string. Frontend calls this\nright before opening an EventSource and uses the returned token in\nthe URL -- even if the URL lands in an access log the token expires\nin 60 seconds and only carries permission for one channel.",
+        "operationId": "issue_sse_token_api_v1_auth_sse_token_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SseTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SseTokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/events/{event_id}": {
       "get": {
         "tags": [
@@ -542,6 +589,2354 @@
         ]
       }
     },
+    "/api/v1/agents/enroll-tokens": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Create Enroll Token",
+        "description": "Create an enrollment token (admin only).",
+        "operationId": "api_create_enroll_token_api_v1_agents_enroll_tokens_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollTokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agents/install": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Install Script",
+        "description": "Return the install script for the given token and OS.\n\nThe script is a self-contained bootstrap. The recommended flow is the two-\nstep approach (download-as-file, then execute) so the operator can review\nthe script before it runs and so the token never appears in shell history\nbeyond the ``curl`` invocation:\n\n    curl -fsSL \"<console>/api/v1/agents/install?token=...&os=linux\"              -o secagent-install.sh\n    sudo bash secagent-install.sh\n\nWe also set Content-Disposition so ``curl -O`` saves to a sensible name.",
+        "operationId": "api_install_script_api_v1_agents_install_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          },
+          {
+            "name": "os",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "linux",
+              "title": "Os"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/install-helper": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Install Helper",
+        "description": "Return a single shell snippet the operator can copy-paste.\n\nThis is the recommended UX: the snippet is a **two-step** command (download\nas a file, then execute) so the operator can ``cat secagent-install.sh``\nto review before running, and so the token does not end up embedded in\na piped shell that could be replayed from history.\n\nExample response body (linux)::\n\n    curl -fsSL \"http://console/api/v1/agents/install?token=...&os=linux\" \\\n         -o secagent-install.sh \\\n      && chmod +x secagent-install.sh \\\n      && sudo bash secagent-install.sh",
+        "operationId": "api_install_helper_api_v1_agents_install_helper_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          },
+          {
+            "name": "os",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "linux",
+              "title": "Os"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/enroll": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Enroll Host",
+        "description": "Register a new agent host using an enrollment token.\n\nP1 (2026-07-17): if the request IP already has a host row (operator\nre-ran the installer), the old row is decommissioned first so the new\nregistration replaces it cleanly. This keeps the host list de-duplicated\nby IP and prevents stale offline rows from accumulating.\n\nP1-6 修复：IP 去重用服务端可信 IP（X-Forwarded-For 或 request.client.host），\n不信任请求体里的 req.ip -- 否则攻击者用合法 enroll token 伪造 ip 即可\ndecommission_host_by_ip(任意ip) 下线任意在产主机。req.ip 仅作为展示用\nHost.ip 字段保留（agent 上报的真实内网 IP，NAT 后服务端看不到）。",
+        "operationId": "api_enroll_host_api_v1_agents_enroll_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/binary/{os}/{arch}": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Download Binary",
+        "description": "Download the agent binary for ``os``/``arch``.\n\nThe enrollment token is accepted via either the ``token`` query param (legacy,\nkept for backward compatibility with older install scripts) or the\n``Authorization: Bearer <token>`` header. Header-based auth is preferred\nbecause query params leak into proxy / shell logs.",
+        "operationId": "api_download_binary_api_v1_agents_binary__os___arch__get",
+        "parameters": [
+          {
+            "name": "os",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Os"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Arch"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/ca": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Download Ca",
+        "description": "Download the console CA certificate.\n\nToken accepted via Authorization header (preferred) or ``token`` query param.",
+        "operationId": "api_download_ca_api_v1_agents_ca_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/console-url": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Console Url",
+        "description": "Return the canonical console URL the frontend should embed in install\ncommands.\n\nPriority:\n  1. ``settings.agent_console_external_url`` -- the configured, deployable\n     URL (set via .env). Use this in production so copy-paste commands work\n     from any network the operator might be on.\n  2. The current request's origin (``window.location.origin``-equivalent) --\n     only when the setting is empty.\n\nPublic endpoint (no auth) so the login page can also call it.",
+        "operationId": "api_console_url_api_v1_agents_console_url_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Api Console Url Api V1 Agents Console Url Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api List Hosts",
+        "description": "List enrolled hosts.",
+        "operationId": "api_list_hosts_api_v1_agents_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Api List Hosts Api V1 Agents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/groups": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api List Groups",
+        "description": "List host groups with member counts.",
+        "operationId": "api_list_groups_api_v1_agents_groups_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Create Group",
+        "description": "Create a new host group (admin only).",
+        "operationId": "api_create_group_api_v1_agents_groups_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agents/groups/{name}": {
+      "delete": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Delete Group",
+        "description": "Delete a host group (admin only).\n\nP1-4 修复：组内仍有主机时拒绝删除（返回 409），避免 hosts.group_name\n引用已删组变成 legacy 孤儿。操作员需先迁移或下线组内主机。",
+        "operationId": "api_delete_group_api_v1_agents_groups__name__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id}": {
+      "patch": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Update Host",
+        "description": "Move a host to a different group (admin only).",
+        "operationId": "api_update_host_api_v1_agents__agent_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostGroupUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Get Host",
+        "description": "Get a specific host.",
+        "operationId": "api_get_host_api_v1_agents__agent_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Host"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Delete Host",
+        "description": "Delete a host (admin only).\n\n需求1.4：purge=True 时物理删除（仅 decommissioned 主机允许），purge=False 时软删除（下线）。",
+        "operationId": "api_delete_host_api_v1_agents__agent_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "purge",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "True=物理删除(仅已下线主机允许); False=软删除(下线)",
+              "default": false,
+              "title": "Purge"
+            },
+            "description": "True=物理删除(仅已下线主机允许); False=软删除(下线)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id}/upgrade": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Upgrade Agent",
+        "description": "Trigger an agent_upgrade command via the WS gateway.",
+        "operationId": "api_upgrade_agent_api_v1_agents__agent_id__upgrade_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id}/config": {
+      "patch": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Update Agent Config",
+        "description": "Trigger a config_update command via the WS gateway.",
+        "operationId": "api_update_agent_config_api_v1_agents__agent_id__config_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/tasks/parse": {
+      "post": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Parse Intent",
+        "operationId": "api_parse_intent_api_v1_vulnscan_tasks_parse_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/vulnscan/tasks": {
+      "post": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Create Task",
+        "description": "Enqueue a vulnscan task. Returns ``{task_id, status: \"queued\"}`` immediately.\n\nP2: the actual subgraph execution runs in a background ``TaskWorker``\nsubscribed to the Redis Stream. Multiple uvicorn workers spread the\nload automatically through the consumer group. The legacy in-process\npath is kept behind ``?sync=1`` for tests / debugging.",
+        "operationId": "api_create_task_api_v1_vulnscan_tasks_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sync",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Synchronous path; bypass queue",
+              "default": false,
+              "title": "Sync"
+            },
+            "description": "Synchronous path; bypass queue"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api List Tasks",
+        "operationId": "api_list_tasks_api_v1_vulnscan_tasks_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/tasks/{task_id}": {
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Get Task",
+        "description": "Return task record from ES. P2 also consults the Redis side-channel\nso callers see ``queued`` / ``running`` before the subgraph has finished\nwriting the canonical record.",
+        "operationId": "api_get_task_api_v1_vulnscan_tasks__task_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/tasks/{task_id}/stream": {
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Task Stream",
+        "operationId": "api_task_stream_api_v1_vulnscan_tasks__task_id__stream_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/tasks/{task_id}/cancel": {
+      "post": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Cancel Task",
+        "operationId": "api_cancel_task_api_v1_vulnscan_tasks__task_id__cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/results": {
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api List Results",
+        "operationId": "api_list_results_api_v1_vulnscan_results_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "hostname",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hostname"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Severity"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/reports/{task_id}": {
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Get Report",
+        "operationId": "api_get_report_api_v1_vulnscan_reports__task_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/reports/{task_id}/export": {
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Export Report",
+        "description": "导出扫描报告为可下载文件。\n\n需求6：扫描任务完成后，监控页提供\"下载报告\"按钮，调用本接口。\n当前支持 HTML（自包含模板渲染，无外部依赖）；PDF 留待后续批次。",
+        "operationId": "api_export_report_api_v1_vulnscan_reports__task_id__export_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "导出格式：html",
+              "default": "html",
+              "title": "Format"
+            },
+            "description": "导出格式：html"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/vulns/{finding_id}": {
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Get Vuln",
+        "operationId": "api_get_vuln_api_v1_vulnscan_vulns__finding_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "finding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Finding Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Update Vuln Status",
+        "operationId": "api_update_vuln_status_api_v1_vulnscan_vulns__finding_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "finding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Finding Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/queue/stats": {
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Queue Stats",
+        "description": "Return queue depth and pending counts. Diagnostic only.",
+        "operationId": "api_queue_stats_api_v1_vulnscan_queue_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/vulnscan/queue/status/{task_id}": {
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Queue Status",
+        "description": "Read the short-lived side-channel status. Useful when the canonical\nES record hasn't been written yet.",
+        "operationId": "api_queue_status_api_v1_vulnscan_queue_status__task_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rules/list": {
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Api List Rules",
+        "description": "规则列表查询（分页）。\n\n需求7：规则管理页浏览/搜索具体规则条目。纯查询当前版本 RulePack，无侵入。\n若尚未同步过规则库（version 为 \"0\" 或无 pack），返回空列表。",
+        "operationId": "api_list_rules_api_v1_rules_list_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按分类过滤：sys_vuln / baseline",
+              "title": "Category"
+            },
+            "description": "按分类过滤：sys_vuln / baseline"
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按严重等级过滤：critical/high/medium/low/info",
+              "title": "Severity"
+            },
+            "description": "按严重等级过滤：critical/high/medium/low/info"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按规则名称 / CVE 模糊搜索",
+              "title": "Q"
+            },
+            "description": "按规则名称 / CVE 模糊搜索"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rules/sync": {
+      "post": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Api Sync Rules",
+        "operationId": "api_sync_rules_api_v1_rules_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "title": "Body",
+                "default": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules/sync-to-agents": {
+      "post": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Api Sync To Agents",
+        "description": "需求2.1：手动同步当前规则包到所有在线 agent（强制下发，不依赖心跳）。\n\n返回 {synced, total, agents: [{agent_id, sent}]}。",
+        "operationId": "api_sync_to_agents_api_v1_rules_sync_to_agents_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules/import": {
+      "post": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Api Import Rules",
+        "description": "离线导入规则库 zip（需求2.2）。\n\n支持三种来源的 zip（自动识别）：\n  1. 本系统 rulepack：zip 内含 rulepack.json（{rules:[...]}）\n  2. NVD 导出：zip 内含 NVD API 导出的 json（{vulnerabilities:[...]}）\n  3. GitHub advisory-database：从 github/advisory-database 下载的 zip，\n     内含多个 GHSA-*.json（每个是一个 advisory）\n导入时用服务端签名密钥重新签名（agent 用同一密钥验签）。",
+        "operationId": "api_import_rules_api_v1_rules_import_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_api_import_rules_api_v1_rules_import_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules/version": {
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Api Current Version",
+        "operationId": "api_current_version_api_v1_rules_version_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules/pack/{version}": {
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Api Download Pack",
+        "description": "下载规则包。支持两种鉴权：\n  1. 人类用户：Authorization: Bearer <JWT>（admin/analyst）\n  2. agent：?agent_id=&token=<agent_token>（复用 validate_agent_token）\n\n返回的 body 字节必须与 trigger_update_if_outdated 用 sign_bytes 签名的\nbody 完全一致，否则 agent Ed25519 验签失败，故统一用 get_rule_pack_body。\n\n鉴权先于资源存在性检查：无凭证 401、角色不足 403，避免通过 404 探测资源存在。",
+        "operationId": "api_download_pack_api_v1_rules_pack__version__get",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "agent 下载时传，配合 token 鉴权",
+              "title": "Agent Id"
+            },
+            "description": "agent 下载时传，配合 token 鉴权"
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "agent_token（agent 下载专用，避免与 JWT 冲突）",
+              "title": "Token"
+            },
+            "description": "agent_token（agent 下载专用，避免与 JWT 冲突）"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Api List Models",
+        "operationId": "api_list_models_api_v1_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Api Create Model",
+        "operationId": "api_create_model_api_v1_models_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/models/{model_id}": {
+      "patch": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Api Update Model",
+        "operationId": "api_update_model_api_v1_models__model_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Model Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Api Delete Model",
+        "operationId": "api_delete_model_api_v1_models__model_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Model Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/{model_id}/default": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Api Set Default",
+        "operationId": "api_set_default_api_v1_models__model_id__default_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Model Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/{model_id}/test": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Api Test Model",
+        "description": "测试模型连通性：用该模型发一条简单 prompt，返回是否成功及响应。",
+        "operationId": "api_test_model_api_v1_models__model_id__test_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Model Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/conversations": {
+      "get": {
+        "tags": [
+          "scan-chat"
+        ],
+        "summary": "Api List Conversations",
+        "operationId": "api_list_conversations_api_v1_vulnscan_conversations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "scan-chat"
+        ],
+        "summary": "Api Create Conversation",
+        "operationId": "api_create_conversation_api_v1_vulnscan_conversations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConversationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/vulnscan/conversations/{conv_id}": {
+      "get": {
+        "tags": [
+          "scan-chat"
+        ],
+        "summary": "Api Get Conversation",
+        "operationId": "api_get_conversation_api_v1_vulnscan_conversations__conv_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conv_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conv Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "scan-chat"
+        ],
+        "summary": "Api Update Conversation",
+        "operationId": "api_update_conversation_api_v1_vulnscan_conversations__conv_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conv_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conv Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConversationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "scan-chat"
+        ],
+        "summary": "Api Delete Conversation",
+        "operationId": "api_delete_conversation_api_v1_vulnscan_conversations__conv_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conv_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conv Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vulnscan/conversations/{conv_id}/chat": {
+      "post": {
+        "tags": [
+          "scan-chat"
+        ],
+        "summary": "Api Chat",
+        "description": "多轮对话。把历史 + 用户新消息发给 LLM（可选切换模型），回复追加进会话。",
+        "operationId": "api_chat_api_v1_vulnscan_conversations__conv_id__chat_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conv_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conv Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/{event_id}/stream": {
       "get": {
         "tags": [
@@ -674,6 +3069,48 @@
   },
   "components": {
     "schemas": {
+      "AgentConfigRequest": {
+        "properties": {
+          "heartbeat_interval": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3600.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat Interval"
+          },
+          "log_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log Level",
+            "description": "debug|info|warn|error"
+          },
+          "resource_limit": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Limit"
+          }
+        },
+        "type": "object",
+        "title": "AgentConfigRequest"
+      },
       "ApprovalActionResponse": {
         "properties": {
           "status": {
@@ -750,6 +3187,193 @@
           "items"
         ],
         "title": "ApprovalListResponse"
+      },
+      "Body_api_import_rules_api_v1_rules_import_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File",
+            "description": "规则库 zip 压缩包"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_api_import_rules_api_v1_rules_import_post"
+      },
+      "ChatRequest": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "parse_intent": {
+            "type": "boolean",
+            "title": "Parse Intent",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "ChatRequest"
+      },
+      "CreateConversationRequest": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "default": "新对话"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          }
+        },
+        "type": "object",
+        "title": "CreateConversationRequest"
+      },
+      "EnrollRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "hostname": {
+            "type": "string",
+            "title": "Hostname"
+          },
+          "os": {
+            "type": "string",
+            "title": "Os"
+          },
+          "arch": {
+            "type": "string",
+            "title": "Arch"
+          },
+          "ip": {
+            "type": "string",
+            "title": "Ip"
+          },
+          "kernel": {
+            "type": "string",
+            "title": "Kernel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "hostname",
+          "os",
+          "arch",
+          "ip",
+          "kernel"
+        ],
+        "title": "EnrollRequest"
+      },
+      "EnrollResponse": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "agent_token": {
+            "type": "string",
+            "title": "Agent Token"
+          },
+          "ws_url": {
+            "type": "string",
+            "title": "Ws Url"
+          },
+          "heartbeat_interval": {
+            "type": "integer",
+            "title": "Heartbeat Interval"
+          },
+          "server_public_key": {
+            "type": "string",
+            "title": "Server Public Key",
+            "default": ""
+          },
+          "rule_version": {
+            "type": "string",
+            "title": "Rule Version",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "agent_token",
+          "ws_url",
+          "heartbeat_interval"
+        ],
+        "title": "EnrollResponse"
+      },
+      "EnrollTokenRequest": {
+        "properties": {
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "ttl_hours": {
+            "type": "integer",
+            "title": "Ttl Hours",
+            "default": 24
+          },
+          "uses": {
+            "type": "integer",
+            "title": "Uses",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "title": "EnrollTokenRequest"
+      },
+      "EnrollTokenResponse": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "expires": {
+            "type": "string",
+            "title": "Expires"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "expires"
+        ],
+        "title": "EnrollTokenResponse"
       },
       "EventListResponse": {
         "properties": {
@@ -941,6 +3565,21 @@
               }
             ],
             "title": "Duration Ms"
+          },
+          "execution_summary": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Summary"
           }
         },
         "type": "object",
@@ -996,6 +3635,27 @@
         ],
         "title": "EventSubmitResponse"
       },
+      "GroupCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "description": "组名"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "GroupCreateRequest"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1008,6 +3668,128 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "Host": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "hostname": {
+            "type": "string",
+            "title": "Hostname"
+          },
+          "ip": {
+            "type": "string",
+            "title": "Ip"
+          },
+          "os": {
+            "type": "string",
+            "title": "Os"
+          },
+          "arch": {
+            "type": "string",
+            "title": "Arch"
+          },
+          "kernel": {
+            "type": "string",
+            "title": "Kernel"
+          },
+          "status": {
+            "$ref": "#/components/schemas/HostStatus",
+            "default": "online"
+          },
+          "agent_version": {
+            "type": "string",
+            "title": "Agent Version",
+            "default": ""
+          },
+          "rule_version": {
+            "type": "string",
+            "title": "Rule Version",
+            "default": ""
+          },
+          "last_heartbeat": {
+            "type": "string",
+            "title": "Last Heartbeat",
+            "default": ""
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "hostname",
+          "ip",
+          "os",
+          "arch",
+          "kernel"
+        ],
+        "title": "Host"
+      },
+      "HostGroupUpdateRequest": {
+        "properties": {
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group",
+            "description": "目标组名，传 null 清空"
+          }
+        },
+        "type": "object",
+        "title": "HostGroupUpdateRequest"
+      },
+      "HostStatus": {
+        "type": "string",
+        "enum": [
+          "online",
+          "offline",
+          "decommissioned"
+        ],
+        "title": "HostStatus"
       },
       "LoginRequest": {
         "properties": {
@@ -1065,6 +3847,219 @@
           "avg_duration_ms"
         ],
         "title": "MetricsResponse"
+      },
+      "ModelCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "description": "openai | claude | vllm"
+          },
+          "model_name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Model Name"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key",
+            "default": ""
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url",
+            "default": ""
+          },
+          "temperature": {
+            "type": "number",
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Temperature",
+            "default": 0.1
+          },
+          "max_tokens": {
+            "type": "integer",
+            "maximum": 200000.0,
+            "minimum": 1.0,
+            "title": "Max Tokens",
+            "default": 4096
+          },
+          "supports_structured": {
+            "type": "boolean",
+            "title": "Supports Structured",
+            "default": true
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "model_name"
+        ],
+        "title": "ModelCreateRequest"
+      },
+      "ModelUpdateRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 200000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          },
+          "supports_structured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supports Structured"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "title": "ModelUpdateRequest"
+      },
+      "SseTokenRequest": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "events",
+              "events_list",
+              "metrics",
+              "approval"
+            ],
+            "title": "Scope"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope"
+        ],
+        "title": "SseTokenRequest"
+      },
+      "SseTokenResponse": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "expires_in"
+        ],
+        "title": "SseTokenResponse"
       },
       "TimelinePoint": {
         "properties": {
@@ -1209,6 +4204,56 @@
           "timestamp"
         ],
         "title": "TraceStep"
+      },
+      "UpdateConversationRequest": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          }
+        },
+        "type": "object",
+        "title": "UpdateConversationRequest"
+      },
+      "UpgradeRequest": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Version",
+            "description": "Target agent binary version, e.g. v0.2.0"
+          },
+          "download_url": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Download Url",
+            "description": "HTTPS URL the agent downloads the new binary from"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "download_url"
+        ],
+        "title": "UpgradeRequest"
       },
       "UserResponse": {
         "properties": {

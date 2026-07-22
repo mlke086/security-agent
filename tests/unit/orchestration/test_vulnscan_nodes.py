@@ -65,6 +65,104 @@ class TestDefaultState:
         assert state["modules"] == ["sys_vuln", "baseline"]
 
 
+class TestNucleiParams:
+    """V4.1 (P1-7): regression test for the engine selector + nuclei knobs
+    added to vulnscan/graph.py::run_vulnscan. Each must propagate through
+    _default_state so dispatch() and the WS scan_command payload see them.
+    Without this test the new parameters could be silently dropped (e.g.
+    a future refactor forgetting to thread them into _default_state).
+    """
+
+    def test_default_engine_is_matcher(self):
+        state = _default_state("manual", targets=["host-a"])
+        assert state["engine"] == "matcher"
+        assert state["nuclei_severity"] == []
+        assert state["nuclei_tags"] == []
+        assert state["nuclei_templates"] == []
+        assert state["nuclei_timeout_sec"] == 0
+
+    def test_nuclei_engine_propagates_all_knobs(self):
+        state = _default_state(
+            "manual",
+            targets=["host-a"],
+            engine="nuclei",
+            nuclei_severity=["critical", "high"],
+            nuclei_tags=["cve", "rce"],
+            nuclei_templates=["cves/2024/CVE-2024-0001.yaml"],
+            nuclei_timeout_sec=120,
+        )
+        assert state["engine"] == "nuclei"
+        assert state["nuclei_severity"] == ["critical", "high"]
+        assert state["nuclei_tags"] == ["cve", "rce"]
+        assert state["nuclei_templates"] == ["cves/2024/CVE-2024-0001.yaml"]
+        assert state["nuclei_timeout_sec"] == 120
+
+    def test_nuclei_knobs_default_to_empty(self):
+        # Engine=nuclei but no knobs -- state still well-formed (empty lists),
+        # never raises (a previous draft crashed when nuclei_severity=None).
+        state = _default_state("manual", targets=["host-a"], engine="nuclei")
+        assert state["engine"] == "nuclei"
+        assert state["nuclei_severity"] == []
+        assert state["nuclei_tags"] == []
+        assert state["nuclei_templates"] == []
+        assert state["nuclei_timeout_sec"] == 0
+
+
+def _host(agent_id, hostname, ip, group=None):
+    from src.agents.models import Host
+    return Host(agent_id=agent_id, hostname=hostname, ip=ip, group=group,
+                os="linux", arch="amd64", kernel="5.x")
+
+
+class TestResolveTargets:
+    """Covers P1-VULN-02: a group target must expand to ALL agents in the
+    group, not just the first match."""
+
+    @pytest.mark.asyncio
+    async def test_group_target_returns_all_group_members(self):
+        hosts = [
+            _host("agent-1", "web-01", "10.0.0.1", group="prod"),
+            _host("agent-2", "web-02", "10.0.0.2", group="prod"),
+            _host("agent-3", "db-01", "10.0.0.3", group="db"),
+            _host("agent-4", "web-03", "10.0.0.4", group="prod"),
+        ]
+        mock_store = AsyncMock()
+        mock_store.list_hosts = AsyncMock(return_value=hosts)
+        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+            result = await _resolve_targets(["prod"])
+        assert sorted(result) == ["agent-1", "agent-2", "agent-4"]
+
+    @pytest.mark.asyncio
+    async def test_hostname_target_returns_single(self):
+        hosts = [_host("agent-1", "web-01", "10.0.0.1", group="prod")]
+        mock_store = AsyncMock()
+        mock_store.list_hosts = AsyncMock(return_value=hosts)
+        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+            result = await _resolve_targets(["web-01"])
+        assert result == ["agent-1"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_targets_dedup(self):
+        """agent_id + its group should not double-count the same agent."""
+        hosts = [
+            _host("agent-1", "web-01", "10.0.0.1", group="prod"),
+            _host("agent-2", "web-02", "10.0.0.2", group="prod"),
+        ]
+        mock_store = AsyncMock()
+        mock_store.list_hosts = AsyncMock(return_value=hosts)
+        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+            result = await _resolve_targets(["agent-1", "prod"])
+        assert sorted(result) == ["agent-1", "agent-2"]
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_targets_as_is(self):
+        mock_store = AsyncMock()
+        mock_store.list_hosts = AsyncMock(return_value=[])
+        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+            result = await _resolve_targets(["unknown-agent-id"])
+        assert result == ["unknown-agent-id"]
+
+
 class TestParseIntent:
     @pytest.mark.asyncio
     async def test_manual_source_passes_through(self):
@@ -99,7 +197,7 @@ class TestParseIntent:
             result = await parse_intent(state)
             assert result["status"] == "dispatching"
             assert result["targets"] == ["web-01", "web-02"]
-            assert result["modules"] == ["ScanModule.SYS_VULN"]
+            assert result["modules"] == ["sys_vuln"]
 
     @pytest.mark.asyncio
     async def test_dialog_llm_fails_gracefully(self):
@@ -119,6 +217,7 @@ class TestDispatch:
         state = _default_state("manual", targets=["host-a"])
         mock_store = AsyncMock()
         mock_store.save_task = AsyncMock()
+        mock_store.update_task = AsyncMock()
         mock_gateway = MagicMock()
 
         with (
@@ -131,9 +230,94 @@ class TestDispatch:
             result = await dispatch(state)
             assert result["status"] == "failed"
             assert "No target agents" in result["error"]
+            assert result["total_targets"] == 0
+            # P1-VULN-01: failure must be persisted to ES so /tasks/{id}
+            # sees "failed" instead of polling collect for 30 minutes.
+            failed_updates = [
+                c for c in mock_store.update_task.call_args_list
+                if c.kwargs.get("status") == "failed"
+            ]
+            assert failed_updates, "expected an update_task(status=failed) call"
+            assert failed_updates[0].kwargs.get("error") == "No target agents found"
+
+
+
+    # F1.4a (2026-07-21): regression test for the silent 30-minute timeout.
+    # The previous collect() read stats["failed"] from the in-memory task
+    # (always 0) and overwrote the dispatch-time failure count back to 0.
+    # Real path: task 141217b6 sat in "scanning" for 1800s because no
+    # agent ever responded and the dispatch-time failed=1 was lost.
+    @pytest.mark.asyncio
+    async def test_collect_fails_fast_when_dispatch_reported_failed(self):
+        state = _default_state("manual", targets=["host-a"])
+        state["total_targets"] = 1
+        state["task"] = ScanTask(
+            task_id=state["task_id"], source="manual", targets=["host-a"],
+            policy=ScanPolicy(timeout_sec=1800), status="scanning",
+            stats={"total": 1, "done": 0, "failed": 0},
+        )
+        result = _result(task_id=state["task_id"], is_final=False)
+        mock_store = AsyncMock()
+        mock_store.list_results.return_value = [result]
+        mock_store.update_task = AsyncMock()
+        mock_store.get_task = AsyncMock(return_value=ScanTask(
+            task_id=state["task_id"], source="manual", targets=["host-a"],
+            policy=ScanPolicy(), status="scanning",
+            stats={"total": 1, "done": 0, "failed": 1},
+        ))
+        with (
+            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
+            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+        ):
+            new_state = await collect(state)
+        assert new_state["status"] == "analyzing"
+        assert new_state["received_results"] == 0
+
+    # F1.4c: dispatch must publish to vulnscan:task:{id} so SSE pushes the
+    # failure event (no 30-min "waiting for agent" stall on the frontend).
+    @pytest.mark.asyncio
+    async def test_dispatch_no_agents_publishes_sse(self):
+        state = _default_state("manual", targets=["host-a"])
+        mock_store = AsyncMock()
+        mock_store.save_task = AsyncMock()
+        mock_store.update_task = AsyncMock()
+        mock_gateway = MagicMock()
+        fake_redis = AsyncMock()
+        fake_redis.publish = AsyncMock()
+        with (
+            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
+            patch("src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway", return_value=mock_gateway),
+            patch("src.orchestration.subgraphs.vulnscan.nodes._resolve_targets", return_value=[]),
+            patch("redis.asyncio.from_url", return_value=fake_redis),
+            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+        ):
+            await dispatch(state)
+        published = [c for c in fake_redis.publish.call_args_list
+                     if c.args and c.args[0] == f"vulnscan:task:{state['task_id']}"]
+        assert published, "dispatch failure must publish to vulnscan:task SSE channel"
 
 
 class TestCollect:
+    @pytest.mark.asyncio
+    async def test_collect_short_circuits_on_failed_dispatch(self):
+        """P1-VULN-01: when dispatch already failed, collect must NOT poll ES
+        for 30 minutes -- it returns failed immediately."""
+        state = _default_state("manual", targets=["host-a"])
+        state["total_targets"] = 0
+        state["status"] = "failed"
+        state["task"] = ScanTask(
+            task_id=state["task_id"], source="manual", targets=[],
+            policy=ScanPolicy(), status="failed",
+            stats={"total": 0, "done": 0, "failed": 0},
+        )
+        mock_store = AsyncMock()  # list_results must NOT be called
+        mock_store.get_task = AsyncMock(return_value=None)
+        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+            new_state = await collect(state)
+        assert new_state["status"] == "failed"
+        mock_store.list_results.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_collect_with_final_result(self):
         state = _default_state("manual", targets=["host-a"])
@@ -147,6 +331,11 @@ class TestCollect:
         mock_store = AsyncMock()
         mock_store.list_results.return_value = [result]
         mock_store.update_task = AsyncMock()
+        # F1.2: collect re-reads stats from ES via store.get_task().
+        mock_store.get_task = AsyncMock(return_value=None)
+        # F1.2 (2026-07-21): collect now re-reads stats from ES via
+        # store.get_task() so dispatch-time failure counts are not lost.
+        mock_store.get_task = AsyncMock(return_value=None)
 
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
@@ -159,25 +348,44 @@ class TestCollect:
 
     @pytest.mark.asyncio
     async def test_collect_not_all_done_yet(self):
+        """Partial results (1/2 done) must not block forever.
+
+        The collect node either returns "analyzing" (all done, or deadline
+        passed with partial results) or keeps polling. It no longer returns
+        "scanning". We simulate the deadline passing on the first poll so the
+        node returns "analyzing" with the partial count -- the previously
+        asserted "scanning" return value was removed by the P1-VS-3 fix.
+        """
         state = _default_state("manual", targets=["host-a"])
         state["total_targets"] = 2  # waiting for 2 agents, only 1 done
         state["task"] = ScanTask(
             task_id=state["task_id"], source="manual", targets=["agent-a", "agent-b"],
-            policy=ScanPolicy(), status="scanning",
+            policy=ScanPolicy(timeout_sec=1800), status="scanning",
             stats={"total": 2, "done": 0, "failed": 0},
         )
         result = _result(task_id=state["task_id"], is_final=True)
         mock_store = AsyncMock()
         mock_store.list_results.return_value = [result]
         mock_store.update_task = AsyncMock()
+        # F1.2: collect re-reads stats from ES via store.get_task().
+        mock_store.get_task = AsyncMock(return_value=None)
+
+        # First loop.time() call computes deadline = t0 + 1800; subsequent
+        # calls (the deadline check) return a time past it so the timeout
+        # branch fires immediately with the partial result.
+        loop_times = iter([0, 9999, 9999, 9999])
+        fake_loop = MagicMock()
+        fake_loop.time = lambda: next(loop_times)
 
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
             patch("redis.asyncio.from_url", return_value=AsyncMock()),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch("asyncio.get_running_loop", return_value=fake_loop),
+            patch("asyncio.sleep", new=AsyncMock()),
         ):
             new_state = await collect(state)
-            assert new_state["status"] == "scanning"
+            assert new_state["status"] == "analyzing"
             assert new_state["received_results"] == 1
 
 

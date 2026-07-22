@@ -1,8 +1,7 @@
 """Unit tests for enrollment module (PG-backed token generation, validation, script rendering)."""
-import pytest
 from unittest.mock import patch
 
-from src.agents.enroll import create_enroll_token, validate_enroll_token, get_install_script_content
+from src.agents.enroll import create_enroll_token, get_install_script_content, validate_enroll_token
 
 
 class TestEnrollToken:

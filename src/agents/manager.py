@@ -1,4 +1,5 @@
 """Agent host manager: online/offline tracking, heartbeat, host CRUD."""
+
 import redis.asyncio as aioredis
 
 from src.agents.models import Host
@@ -14,12 +15,24 @@ def _redis() -> aioredis.Redis:
 
 
 async def register_online(agent_id: str, worker_id: str) -> None:
-    """Mark agent as online on this worker after WS connect."""
+    """Mark agent as online on this worker after WS connect.
+
+    We refresh ``last_heartbeat`` to now alongside ``status`` so the very next
+    ``mark_offline_expired`` sweep (cutoff = now - 2*heartbeat - 30s) does not
+    immediately re-flag this freshly-connected agent offline using a stale
+    heartbeat left over from a previous console session -- that race kept
+    ``_resolve_targets`` (which filters status=online) from ever seeing the
+    agent and aborted every dispatch with "No target agents found".
+    """
+    from datetime import UTC, datetime
+
     r = _redis()
     heartbeat_interval = get_settings().agent_heartbeat_interval
     await r.setex(f"agent:online:{agent_id}", heartbeat_interval * 2 + 30, "1")
     await r.set(f"agent:conn:{agent_id}", worker_id)
-    await get_vulnscan_store().update_host(agent_id, status="online")
+    await get_vulnscan_store().update_host(
+        agent_id, status="online", last_heartbeat=datetime.now(UTC).isoformat()
+    )
 
 
 async def heartbeat(agent_id: str, payload: dict) -> None:
@@ -35,16 +48,33 @@ async def heartbeat(agent_id: str, payload: dict) -> None:
         updates["rule_version"] = payload["rule_version"]
     await get_vulnscan_store().update_host(agent_id, **updates)
 
-    # Check if agent needs rule update
-    agent_rule_version = payload.get("rule_version", "")
-    if agent_rule_version:
-        try:
-            import asyncio
+    # Check if agent needs rule update.
+    # 修复(需求7)：原 `if agent_rule_version:` 在 agent 上报空版本时短路，
+    # 永不触发更新 -- 而 agent 首次连接/未持久化规则版本时恰好上报空串，
+    # 导致规则永远分发不下去、matcher 扫描产出 0 findings。改为：空版本
+    # 视为 "0"，触发全量更新检查（diff_versions 内部会判断服务端是否有
+    # pack 可下发、版本是否已最新，幂等安全）。
+    agent_rule_version = payload.get("rule_version", "") or "0"
+    # P2-6 修复：fire-and-forget 但用 done_callback 记录异常，避免规则推送
+    # 失败被静默吞掉（仅产生 "Task exception was never retrieved" 警告）。
+    # 不 await 以免心跳路径被规则下发（含 WS 发送）拖慢。
+    try:
+        import asyncio
 
-            from src.agents.rules_sync import trigger_update_if_outdated
-            asyncio.create_task(trigger_update_if_outdated(agent_id, agent_rule_version))
-        except Exception:
-            pass
+        from src.agents.rules_sync import trigger_update_if_outdated
+
+        task = asyncio.create_task(trigger_update_if_outdated(agent_id, agent_rule_version))
+
+        def _on_done(t: asyncio.Task) -> None:
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc:
+                logger.warning("rule_update_failed", agent_id=agent_id, error=str(exc))
+
+        task.add_done_callback(_on_done)
+    except Exception as exc:
+        logger.warning("rule_update_schedule_failed", agent_id=agent_id, error=str(exc))
 
 
 async def mark_offline_expired() -> int:
@@ -73,6 +103,53 @@ async def decommission_host(agent_id: str) -> None:
     r = _redis()
     await r.delete(f"agent:online:{agent_id}", f"agent:conn:{agent_id}", f"agent:token:{agent_id}")
     logger.info("host_decommissioned", agent_id=agent_id)
+
+
+async def delete_host_permanently(agent_id: str) -> bool:
+    """Physically delete a host (PG + ES + Redis).
+
+    需求1.4：仅允许删除已下线（decommissioned）的主机，避免误删在线主机。
+    返回 True 表示已删除，False 表示主机不存在或仍在线（不允许删）。
+    """
+    host = await get_host(agent_id)
+    if not host:
+        return False
+    if host.status != "decommissioned":
+        return False
+    await get_vulnscan_store().delete_host(agent_id)
+    r = _redis()
+    await r.delete(f"agent:online:{agent_id}", f"agent:conn:{agent_id}", f"agent:token:{agent_id}")
+    logger.info("host_deleted_permanently", agent_id=agent_id)
+    return True
+
+
+async def list_groups() -> list[dict]:
+    """List host groups with member counts."""
+    return await get_vulnscan_store().list_groups()
+
+
+async def create_group(name: str, description: str = "") -> None:
+    """Create a new host group. Raises asyncpg.UniqueViolationError on dup."""
+    await get_vulnscan_store().create_group(name, description)
+    logger.info("host_group_created", group=name)
+
+
+async def delete_group(name: str) -> int:
+    """Delete a host group; returns remaining member count."""
+    remaining = await get_vulnscan_store().delete_group(name)
+    logger.info("host_group_deleted", group=name, remaining_members=remaining)
+    return remaining
+
+
+async def update_host_group(agent_id: str, group: str | None) -> Host | None:
+    """Move a host to a different group (None clears it)."""
+    host = await get_host(agent_id)
+    if not host:
+        return None
+    await get_vulnscan_store().update_host(agent_id, group_name=group)
+    logger.info("host_group_changed", agent_id=agent_id, group=group)
+    return await get_host(agent_id)
+
 
 async def decommission_host_by_ip(ip: str) -> int:
     """Decommission every host row whose ``ip`` equals the given value.

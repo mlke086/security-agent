@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"time"
 	"syscall"
 
 	"github.com/security-agent/agent/internal/comm"
@@ -225,11 +226,15 @@ func main() {
 			client.SendUpdateAck("agent", "", false, err.Error())
 			return
 		}
+		req.AgentID = cfg.AgentID
+		req.AgentToken = cfg.AgentToken
+		req.CAPath = cfg.CAPath
 		if err := updater.HandleUpgrade(req); err != nil {
 			log.Printf("[agent] upgrade failed: %v", err)
 			client.SendUpdateAck("agent", req.Version, false, err.Error())
+			return
 		}
-		client.SendUpdateAck("agent", req.Version, true, "")
+		// HandleUpgrade success os.Exit before reaching here
 	}
 
 	// Gap-4: config_update -> heartbeat interval + resource limit
@@ -258,6 +263,9 @@ func main() {
 	}
 
 	log.Println("[agent] engine wired, connecting to server...")
+
+	// 启动资源 Monitor（采集 CPU/Mem，支持节流 + 配置热更新）
+	engine.Monitor.Start(5 * time.Second)
 
 	if err := client.Connect(ctx); err != nil {
 		log.Printf("[agent] connection error: %v", err)

@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
+	"os/exec"
+	"strings"
 )
 
 // EnrollResponse is returned by the server after successful enrollment.
@@ -77,14 +80,25 @@ func DoEnroll(consoleURL, enrollToken string) (*EnrollResponse, error) {
 }
 
 func getLocalIP() string {
-	// Simple local IP detection
-	hostname, _ := os.Hostname()
-	return hostname
+	addrs, err := net.InterfaceAddrs()
+	if err == nil {
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+				return ipn.IP.String()
+			}
+		}
+	}
+	h, _ := os.Hostname()
+	return h
 }
 
 func getKernelVersion() string {
 	if runtime.GOOS == "windows" {
 		return "Windows"
+	}
+	out, err := exec.Command("uname", "-r").Output()
+	if err == nil {
+		return strings.TrimSpace(string(out))
 	}
 	return "Linux"
 }

@@ -26,6 +26,10 @@ type UpgradeRequest struct {
 	Version     string `json:"version"`
 	DownloadURL string `json:"download_url"`
 	Signature   string `json:"signature"`
+	// AgentID / AgentToken / CAPath are filled by main.go (json:"-")
+	AgentID     string `json:"-"`
+	AgentToken  string `json:"-"`
+	CAPath      string `json:"-"`
 }
 
 // HandleUpgrade downloads, verifies, and applies a new agent binary.
@@ -38,7 +42,11 @@ func HandleUpgrade(req UpgradeRequest) error {
 		tmpFile += ".exe"
 	}
 
-	resp, err := http.Get(req.DownloadURL)
+	httpReq, _ := http.NewRequest("GET", req.DownloadURL, nil)
+	if req.AgentID != "" && req.AgentToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+req.AgentToken)
+	}
+	resp, err := httpClient(req.CAPath).Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}

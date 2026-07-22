@@ -264,7 +264,8 @@ func main() {
 
 	log.Println("[agent] engine wired, connecting to server...")
 
-	// 启动资源 Monitor（采集 CPU/Mem，支持节流 + 配置热更新）
+	// Start resource Monitor if configured (nil-safe)
+	if engine.Monitor != nil { engine.Monitor.Start(5 * time.Second) }
 	engine.Monitor.Start(5 * time.Second)
 
 	if err := client.Connect(ctx); err != nil {

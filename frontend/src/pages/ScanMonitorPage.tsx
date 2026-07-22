@@ -112,16 +112,15 @@ export default function ScanMonitorPage() {
         }
       }
     }
+    }
 
+    // useEffect cleanup（修复：原 return 在 wireEs 内部被丢弃，EventSource 永不关闭）
     return () => {
       cancelled = true
-      // 关 ref 里的 EventSource（async 可能在此之后才创建 source，
-      // 但 cancelled 检查会阻止创建；若已创建则 ref 有值，close 之）。
       if (eventSourceRef.current) {
         eventSourceRef.current.close()
         eventSourceRef.current = null
       }
-    }
     }
   }, [taskId])
 

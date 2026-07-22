@@ -25,9 +25,8 @@ export default function VulnListPage() {
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [batchModal, setBatchModal] = useState(false)
 
-  // P1-FE-03 (2026-07-20): fetch on mount so the page doesn't show an
-  // empty table until the user clicks "Refresh".
-  useEffect(() => { fetchData() }, [])
+  // mount + 筛选器变化时自动刷新（修复: 筛选onChange只设state不触发请求）
+  useEffect(() => { fetchData() }, [filterSev, filterStatus])
 
   const fetchData = async () => {
     setLoading(true)

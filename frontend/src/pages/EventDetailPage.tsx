@@ -64,10 +64,11 @@ export default function EventDetailPage() {
     source.onerror = () => {
       if (source.readyState === EventSource.CLOSED) source.close()
     }
+    }
+    // useEffect cleanup（修复：原 return 在 wireSource 内部被丢弃，EventSource 永不关闭）
     return () => {
       cancelled = true
       source?.close()
-    }
     }
   }, [eventId])
 

@@ -157,7 +157,7 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 	// P1-GO-06 (2026-07-19): wrap the whole scan in a cancellable context so
 	// the server can abort it mid-run via a scan_cancel command. The cancel
 	// funcs are kept in e.cancels so CancelScan(taskID) can find them.
-	_, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	e.cancelMu.Lock()
 	if e.cancels == nil {
 		e.cancels = make(map[string]context.CancelFunc)
@@ -222,6 +222,12 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 
 	// Step 1: System vulnerability collection
 	if modules["sys_vuln"] {
+		select {
+			case <-ctx.Done():
+				e.sendStep(taskID, "scan_cancelled", "done", "Scan cancelled by server")
+				return
+			default:
+			}
 		e.sendStep(taskID, "collect_packages", "running", "Collecting installed packages and kernel info")
 		log.Printf("[engine] %s: collect_packages starting", taskID)
 		log.Printf("[engine] %s: about to call CollectSysVuln", taskID)
@@ -260,6 +266,12 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 
 	// Step 3: Baseline collection
 	if modules["baseline"] {
+		select {
+			case <-ctx.Done():
+				e.sendStep(taskID, "scan_cancelled", "done", "Scan cancelled by server")
+				return
+			default:
+			}
 		e.sendStep(taskID, "baseline_check", "running", "Running security baseline checks")
 		items, err := e.collector.CollectBaseline()
 		if err != nil {

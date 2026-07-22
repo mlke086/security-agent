@@ -89,6 +89,10 @@ async def _ensure_es_indices():
         logger.warning("es_index_setup_failed", error=str(exc))
 
 
+# TaskWorker 句柄（lifespan shutdown 时需要停止）
+_task_worker_handle = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from src.agents.ws_gateway import _worker_id
@@ -109,8 +113,28 @@ async def lifespan(app: FastAPI):
     from src.agents.scheduler import start_background_tasks
 
     start_background_tasks()
+
+    # 启动 Vulnscan TaskWorker（消费 Redis Stream 异步扫描任务）
+    global _task_worker_handle
+    import os as _os
+    if not _os.environ.get("DISABLE_TASK_WORKER"):
+        try:
+            from src.orchestration.task_queue import TaskWorker
+            worker = TaskWorker()
+            _task_worker_handle = worker.start()
+            logger.info("vulnscan_task_worker_started",
+                        consumer=worker.consumer)
+        except Exception as exc:
+            logger.warning("vulnscan_task_worker_start_failed", error=str(exc))
+
     yield
-    # Shutdown: 停 Nacos 监听 + 关闭异步单例
+    # Shutdown: 先停 TaskWorker，再停 Nacos 监听 + 关闭异步单例
+    if _task_worker_handle is not None:
+        try:
+            await _task_worker_handle.stop(timeout=5.0)
+        except Exception as exc:
+            logger.warning("task_worker_shutdown_failed", error=str(exc))
+        _task_worker_handle = None
     from src.common.config.nacos_loader import stop_nacos_listener
 
     stop_nacos_listener()

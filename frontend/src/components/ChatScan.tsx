@@ -547,7 +547,7 @@ function IntentCard({
     nuclei_templates: (intent.nuclei_templates || []).join(", "),
     nuclei_timeout_sec: intent.nuclei_timeout_sec || 0,
   })
-  const [sync, setSync] = useState(true)
+  const [sync, setSync] = useState(false)
   const [advanced, setAdvanced] = useState(false)
   const canConfirm = (intent.targets?.length ?? 0) > 0
   return (

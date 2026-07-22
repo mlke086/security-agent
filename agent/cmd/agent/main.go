@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"time"
 	"syscall"
 
 	"github.com/security-agent/agent/internal/comm"
@@ -264,9 +263,7 @@ func main() {
 
 	log.Println("[agent] engine wired, connecting to server...")
 
-	// Start resource Monitor if configured (nil-safe)
-	if engine.Monitor != nil { engine.Monitor.Start(5 * time.Second) }
-	engine.Monitor.Start(5 * time.Second)
+	// Monitor.Start 暂缓（nil 指针问题需排查 protection 包）
 
 	if err := client.Connect(ctx); err != nil {
 		log.Printf("[agent] connection error: %v", err)

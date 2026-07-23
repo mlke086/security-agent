@@ -26,6 +26,11 @@ CONSUMER_GROUP: str = "vulnscan-workers"
 STATUS_KEY_PREFIX: str = "vulnscan:queue:status:"
 STATUS_TTL_SEC: int = 24 * 3600
 
+# Cancellation tombstones prevent queued work from starting and let the
+# running graph converge on a cancelled terminal state across API workers.
+CANCEL_KEY_PREFIX: str = "vulnscan:queue:cancel:"
+CANCEL_TTL_SEC: int = 24 * 3600
+
 # Convenience: how deep the stream currently is (LLEN-style metric). The
 # value is refreshed by ``stream_depth()`` on demand, not maintained as a
 # separate counter (no atomicity guarantee with XADD).
@@ -39,6 +44,11 @@ def status_key(task_id: str) -> str:
     surface "running" / "queued" / "failed" without round-tripping to ES.
     """
     return STATUS_KEY_PREFIX + task_id
+
+
+def cancel_key(task_id: str) -> str:
+    """Redis tombstone checked by queue workers and graph nodes."""
+    return CANCEL_KEY_PREFIX + task_id
 
 
 def depth_key() -> str:

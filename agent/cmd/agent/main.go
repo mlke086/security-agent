@@ -228,12 +228,22 @@ func main() {
 		req.AgentID = cfg.AgentID
 		req.AgentToken = cfg.AgentToken
 		req.CAPath = cfg.CAPath
+		// P2-UPGRADE-02 (2026-07-22): the previous version called os.Exit
+		// on success so the server never saw a confirmed ack. We now
+		// validate + swap the binary on disk, ack the server immediately,
+		// then ask the runtime to restart in the background.
 		if err := updater.HandleUpgrade(req); err != nil {
 			log.Printf("[agent] upgrade failed: %v", err)
 			client.SendUpdateAck("agent", req.Version, false, err.Error())
 			return
 		}
-		// HandleUpgrade success os.Exit before reaching here
+		client.SendUpdateAck("agent", req.Version, true, "")
+		go func(req updater.UpgradeRequest) {
+			if err := updater.ApplyStagedAndRestart(req, cfg); err != nil {
+				log.Printf("[agent] restart failed: %v", err)
+				client.SendUpdateAck("agent", req.Version, false, "restart failed: "+err.Error())
+			}
+		}(req)
 	}
 
 	// Gap-4: config_update -> heartbeat interval + resource limit

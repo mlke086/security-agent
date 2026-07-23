@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { Card, Progress, Tag, Descriptions, Button, Space, Spin, message } from "antd"
+import { Card, Progress, Tag, Descriptions, Button, Space, Spin, Popconfirm, message } from "antd"
 import { ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, ExclamationCircleOutlined, SyncOutlined, FileTextOutlined, DownloadOutlined } from "@ant-design/icons"
-import api, { getSseToken } from "../api/client"
+import api, { cancelScanTask, getSseToken } from "../api/client"
 
 const SEV_COLOR: Record<string, string> = { critical: "red", high: "volcano", medium: "gold", low: "green", info: "blue" }
 const SEV_LABEL: Record<string, string> = { critical: "严重", high: "高危", medium: "中危", low: "低危", info: "提示" }
@@ -14,6 +14,7 @@ export default function ScanMonitorPage() {
   const [events, setEvents] = useState<any[]>([])
   const [findings, setFindings] = useState<any[]>([])
   const [downloading, setDownloading] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
   const lastRefreshRef = useRef<number>(0)
   const doneRef = useRef<boolean>(false)  // SSE 收到 task_done(正常结束)标记
@@ -135,17 +136,39 @@ export default function ScanMonitorPage() {
     dispatching: { color: "processing", icon: <SyncOutlined spin /> },
     scanning: { color: "processing", icon: <SyncOutlined spin /> },
     analyzing: { color: "processing", icon: <ClockCircleOutlined /> },
+    cancelling: { color: "warning", icon: <SyncOutlined spin /> },
+    cancelled: { color: "warning", icon: <ExclamationCircleOutlined /> },
     completed: { color: "success", icon: <CheckCircleOutlined /> },
     failed: { color: "error", icon: <ExclamationCircleOutlined /> },
   }
   const sc = statusConfig[task?.status] || { color: "default" }
+  const terminalStates = new Set(["completed", "failed", "cancelled"])
 
   const statusLabel: Record<string, string> = {
     queued: "排队中", dispatching: "下发中", scanning: "扫描中",
     analyzing: "分析中", completed: "已完成", failed: "失败",
   }
 
-  const handleDownload = async () => {
+  const handleCancel = async () => {
+    if (!taskId) return
+    setCancelling(true)
+    try {
+      const r = await cancelScanTask(taskId)
+      if (r.status === "cancelled") {
+        message.success("????????Agent ???????????")
+      } else {
+        message.warning(`????????${r.status}`)
+      }
+      await refreshTask()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      message.error(detail || "????")
+    } finally {
+      setCancelling(false)
+    }
+  }
+
+    const handleDownload = async () => {
     if (!taskId) return
     setDownloading(true)
     try {
@@ -172,6 +195,17 @@ export default function ScanMonitorPage() {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
+        {!terminalStates.has(task?.status) && (
+          <Popconfirm
+            title="确认取消该扫描任务？"
+            description="将向所有目标 Agent 发送取消命令，已上报的漏洞仍会保留。"
+            okText="确认取消"
+            cancelText="继续扫描"
+            onConfirm={handleCancel}
+          >
+            <Button danger loading={cancelling}>取消扫描</Button>
+          </Popconfirm>
+        )}
         {isCompleted && (
           <>
             <Button type="primary" icon={<FileTextOutlined />} onClick={() => navigate(`/report?taskId=${taskId}`)}>查看报告</Button>

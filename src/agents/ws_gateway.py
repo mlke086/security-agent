@@ -27,12 +27,12 @@ _conns: dict[str, WebSocket] = {}
 
 
 class AgentGateway:
-
     # P1 (F4) -- agent_ids revoked by the server until the next reconnect.
     # Used by `authenticate` so a WS that was already open at revocation
     # time cannot continue to push commands under the old credentials.
     def __init__(self) -> None:
         self._revoked_conns: set[str] = set()
+
     """Manages persistent WebSocket connections to agents with multi-worker routing."""
 
     @property
@@ -55,15 +55,6 @@ class AgentGateway:
         if agent_id in self._revoked_conns:
             logger.warning("agent_auth_failed_revoked_locally", agent_id=agent_id)
             return False
-    async def drop_revoked_connection(self, agent_id: str) -> None:
-        """Close the local WebSocket for ``agent_id`` if we still hold it."""
-        self._revoked_conns.add(agent_id)
-        ws = _conns.pop(agent_id, None)
-        if ws is not None:
-            try:
-                await ws.close(code=1011, reason="server_revoked")
-            except Exception:
-                pass
 
         # Local import to avoid a circular import with src.agents.manager.
         from src.agents.enroll import validate_agent_token
@@ -73,6 +64,16 @@ class AgentGateway:
         except Exception as exc:
             logger.warning("auth_pg_lookup_failed", agent_id=agent_id, error=str(exc))
             return False
+
+    async def drop_revoked_connection(self, agent_id: str) -> None:
+        """Close the local WebSocket for ``agent_id`` if we still hold it."""
+        self._revoked_conns.add(agent_id)
+        ws = _conns.pop(agent_id, None)
+        if ws is not None:
+            try:
+                await ws.close(code=1011, reason="server_revoked")
+            except Exception:
+                pass
 
     async def connect(self, ws: WebSocket, agent_id: str) -> None:
         """Register connection and mark agent online.
@@ -214,6 +215,7 @@ class AgentGateway:
                 logger.info("update_ack", agent_id=agent_id, payload=payload)
                 try:
                     from src.agents.upgrade import record_upgrade_ack
+
                     await record_upgrade_ack(agent_id, payload)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(

@@ -39,7 +39,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f0f2f5' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '20%', background: '#f0f2f5' }}>
       <Card style={{ width: 400 }}>
         <Space direction="vertical" style={{ width: '100%', textAlign: 'center', marginBottom: 24 }}>
           <SecurityScanOutlined style={{ fontSize: 48, color: '#1677ff' }} />
@@ -57,7 +57,7 @@ export default function LoginPage() {
             <Button type="primary" htmlType="submit" loading={loading} block>登 录</Button>
           </Form.Item>
           <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', textAlign: 'center' }}>
-            demo: admin / admin123
+            demo: admin / Admin@2026
           </Typography.Text>
         </Form>
       </Card>

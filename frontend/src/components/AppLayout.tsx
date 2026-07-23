@@ -27,7 +27,7 @@ export default function AppLayout() {
   const canApprove = role === "admin" || role === "responder"
 
   const items = [
-    { key: "/", icon: <DashboardOutlined />, label: "运营大屏" },
+    { key: "/", icon: <DashboardOutlined />, label: "态势感知" },
     { key: "/hosts", icon: <CloudServerOutlined />, label: "主机纳管" },
     { key: "/scan", icon: <BugOutlined />, label: "扫描任务" },
     { key: "/vulns", icon: <EyeOutlined />, label: "漏洞清单" },

@@ -136,7 +136,13 @@ async def enqueue_task(
             await redis.set(
                 status_key(envelope.task_id),
                 json.dumps(
-                    {"status": "queued", "actor": actor, "submitted_at": envelope.submitted_at}
+                    {
+                        "status": "queued",
+                        "actor": actor,
+                        "source": envelope.source,
+                        "targets": envelope.targets,
+                        "submitted_at": envelope.submitted_at,
+                    }
                 ),
                 ex=STATUS_TTL_SEC,
             )

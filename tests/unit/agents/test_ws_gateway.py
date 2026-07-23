@@ -160,7 +160,7 @@ class TestSendToAgent:
         import src.agents.ws_gateway as gw_mod
         gw_mod._conns.clear()
         mock_redis = AsyncMock()
-        mock_redis.publish = AsyncMock()
+        mock_redis.publish = AsyncMock(return_value=1)
 
         msg = {"type": "scan_command", "payload": {}}
         with (
@@ -168,8 +168,22 @@ class TestSendToAgent:
             patch.object(gateway, "_redis", return_value=mock_redis),
         ):
             result = await gateway.send_to_agent("agent-1", msg)
-            assert result is False
+            assert result is True
             mock_redis.publish.assert_called_once()
+            mock_redis.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_send_to_disconnected_without_subscriber_fails(self, gateway):
+        import src.agents.ws_gateway as gw_mod
+        gw_mod._conns.clear()
+        mock_redis = AsyncMock()
+        mock_redis.publish = AsyncMock(return_value=0)
+        msg = {"type": "scan_command", "payload": {}}
+        with (
+            patch("src.agents.ws_gateway.sign_message", return_value=msg),
+            patch.object(gateway, "_redis", return_value=mock_redis),
+        ):
+            assert await gateway.send_to_agent("agent-1", msg) is False
 
     @pytest.mark.asyncio
     async def test_broadcast_counts_sent_and_failed(self, gateway):

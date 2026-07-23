@@ -115,6 +115,9 @@ async def dispatch(state: dict) -> dict:
     targets = state["targets"]
     modules = state["modules"]
 
+    if await _is_task_cancelled(task_id):
+        return {"status": "cancelled", "dispatched": False, "total_targets": 0}
+
     # Resolve targets to agent_ids
     agent_ids = await _resolve_targets(targets)
 
@@ -333,6 +336,8 @@ async def collect(state: dict) -> dict:
 
     task_id = state["task_id"]
     total = state.get("total_targets", 0)
+    if state.get("status") == "cancelled" or await _is_task_cancelled(task_id):
+        return {"status": "cancelled", "received_results": 0}
     if state.get("status") == "failed" or total == 0:
         return {"status": "failed", "received_results": 0}
 
@@ -354,6 +359,13 @@ async def collect(state: dict) -> dict:
 
     done_count = 0
     while True:
+        if await _is_task_cancelled(task_id):
+            await store.update_task(
+                task_id,
+                status="cancelled",
+                finished_at=datetime.now(UTC).isoformat(),
+            )
+            return {"status": "cancelled", "received_results": done_count}
         results = await store.list_results(task_id=task_id)
         is_final_batches = [r for r in results if r.is_final]
         done_count = len(set(r.agent_id for r in is_final_batches))
@@ -384,6 +396,8 @@ async def aggregate(state: dict) -> dict:
     """Aggregate findings from all agents, deduplicate, store as VulnFindings."""
     task_id = state["task_id"]
     store = get_vulnscan_store()
+    if state.get("status") == "cancelled" or await _is_task_cancelled(task_id):
+        return {"collected_findings": [], "status": "cancelled"}
 
     # Read all scan results for this task
     results = await store.list_results(task_id=task_id)
@@ -417,6 +431,8 @@ async def llm_analysis(state: dict) -> dict:
     """
     findings = state.get("collected_findings", [])
     task_id = state["task_id"]
+    if state.get("status") == "cancelled" or await _is_task_cancelled(task_id):
+        return {"status": "cancelled"}
     if not findings:
         return {"status": "reporting"}
 
@@ -584,10 +600,36 @@ async def _pub_progress(task_id: str, step: str, status: str, message: str) -> N
                 pass
 
 
+async def _is_task_cancelled(task_id: str) -> bool:
+    """Return the cross-worker cancellation tombstone state."""
+    redis = None
+    try:
+        import redis.asyncio as aioredis
+
+        from src.common.config.settings import get_settings
+        from src.orchestration.task_queue.keys import cancel_key
+
+        redis = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+        return bool(await redis.exists(cancel_key(task_id)))
+    except Exception:
+        return False
+    finally:
+        if redis is not None:
+            await redis.aclose()
+
+
 async def generate_report(state: dict) -> dict:
     """Generate the final ScanReport with AI-generated summary and publish completion."""
     task_id = state["task_id"]
     store = get_vulnscan_store()
+    if state.get("status") == "cancelled" or await _is_task_cancelled(task_id):
+        await store.update_task(
+            task_id,
+            status="cancelled",
+            finished_at=datetime.now(UTC).isoformat(),
+        )
+        await _pub_progress(task_id, "cancel", "done", "Scan cancelled")
+        return {"report": None, "status": "cancelled"}
 
     # Read final vulns
     vulns = await store.list_vulns(task_id=task_id, limit=10000)

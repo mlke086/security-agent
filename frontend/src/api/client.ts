@@ -363,13 +363,12 @@ export async function chatAssistant(
     conversation_id: conversationId,
   })
   const body = res.data as ChatAssistantResponse
-  // Step 3: persist this turn into the scan conversation history so the
-  // sidebar list / refresh keeps showing context.
-  try {
-    await chatConversation(conversationId, message, modelId, false)
-  } catch {
-    // best-effort -- the unified chat response is the source of truth
-  }
+  // F2 (2026-07-23): the unified /chat router already calls the LLM
+  // exactly once and the scan_conversation helpers persist the turn
+  // inside the scan_chat router. Calling /chat again from the SPA
+  // would double the model cost and could write a *second* assistant
+  // reply that differs from the one we just rendered. We simply
+  // trust the /chat response as the single source of truth.
   return body
 }
 

@@ -28,17 +28,26 @@ func NewCollector() *Collector {
 
 // CollectSysVuln collects system vulnerability information (packages + kernel).
 func (c *Collector) CollectSysVuln() ([]CollectedItem, error) {
+	return c.CollectSysVulnContext(context.Background())
+}
+
+// CollectSysVulnContext is the cancellable form used by ScanEngine.
+func (c *Collector) CollectSysVulnContext(ctx context.Context) ([]CollectedItem, error) {
 	var items []CollectedItem
 
 	// Collect installed packages
-	packages, err := c.collectPackages()
+	packages, err := c.collectPackages(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("collect packages: %w", err)
 	}
 	items = append(items, packages...)
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// Collect kernel version
-	kernel := c.collectKernel()
+	kernel := c.collectKernel(ctx)
 	items = append(items, kernel)
 
 	return items, nil
@@ -46,14 +55,28 @@ func (c *Collector) CollectSysVuln() ([]CollectedItem, error) {
 
 // CollectBaseline collects security baseline information.
 func (c *Collector) CollectBaseline() ([]CollectedItem, error) {
+	return c.CollectBaselineContext(context.Background())
+}
+
+// CollectBaselineContext checks cancellation between collection phases.
+func (c *Collector) CollectBaselineContext(ctx context.Context) ([]CollectedItem, error) {
 	var items []CollectedItem
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Account checks
 	items = append(items, c.collectAccounts()...)
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Listening ports
 	items = append(items, c.collectPorts()...)
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Config-file content (SSH config, login.defs, auditd, limits, iptables, rsyslog).
 	// The matcher reads each rule's check.file/path to find the matching item
 	// and applies check.pattern as a regex over the file content. P0 (2026-07-19):
@@ -61,6 +84,9 @@ func (c *Collector) CollectBaseline() ([]CollectedItem, error) {
 	// rule fire with "Config not found" even on hardened hosts.
 	items = append(items, c.collectConfigFiles()...)
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// File permissions (stat only -- separate from config_file content above)
 	items = append(items, c.collectFilePerms()...)
 
@@ -108,14 +134,14 @@ func (c *Collector) collectConfigFiles() []CollectedItem {
 	return items
 }
 
-func (c *Collector) collectPackages() ([]CollectedItem, error) {
+func (c *Collector) collectPackages(ctx context.Context) ([]CollectedItem, error) {
 	if runtime.GOOS == "windows" {
-		return c.collectPackagesWindows()
+		return c.collectPackagesWindows(ctx)
 	}
-	return c.collectPackagesLinux()
+	return c.collectPackagesLinux(ctx)
 }
 
-func (c *Collector) collectPackagesLinux() ([]CollectedItem, error) {
+func (c *Collector) collectPackagesLinux(ctx context.Context) ([]CollectedItem, error) {
 	var items []CollectedItem
 
 	// P1 (2026-07-19): guard each exec with exec.LookPath + a 5s context so a
@@ -128,9 +154,9 @@ func (c *Collector) collectPackagesLinux() ([]CollectedItem, error) {
 		if _, err := exec.LookPath(name); err != nil {
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		commandCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		return exec.CommandContext(ctx, name, args...).Output()
+		return exec.CommandContext(commandCtx, name, args...).Output()
 	}
 
 	// Try dpkg (Debian/Ubuntu)
@@ -154,7 +180,7 @@ func (c *Collector) collectPackagesLinux() ([]CollectedItem, error) {
 	}
 
 	// Try rpm (RHEL/CentOS/Fedora)
-	output, err = exec.Command("rpm", "-qa", "--queryformat=%{NAME}\t%{VERSION}-%{RELEASE}\n").Output()
+	output, err = tryRun("rpm", "-qa", "--queryformat=%{NAME}\t%{VERSION}-%{RELEASE}\n")
 	if err != nil {
 		return nil, fmt.Errorf("neither dpkg nor rpm available")
 	}
@@ -175,11 +201,11 @@ func (c *Collector) collectPackagesLinux() ([]CollectedItem, error) {
 	return items, nil
 }
 
-func (c *Collector) collectPackagesWindows() ([]CollectedItem, error) {
+func (c *Collector) collectPackagesWindows(ctx context.Context) ([]CollectedItem, error) {
 	var items []CollectedItem
 
 	// Use wmic to get installed hotfixes
-	output, err := exec.Command("wmic", "qfe", "get", "HotFixID", "/format:csv").Output()
+	output, err := exec.CommandContext(ctx, "wmic", "qfe", "get", "HotFixID", "/format:csv").Output()
 	if err == nil {
 		for _, line := range strings.Split(string(output), "\n") {
 			line = strings.TrimSpace(line)
@@ -195,7 +221,7 @@ func (c *Collector) collectPackagesWindows() ([]CollectedItem, error) {
 	return items, nil
 }
 
-func (c *Collector) collectKernel() CollectedItem {
+func (c *Collector) collectKernel(ctx context.Context) CollectedItem {
 	if runtime.GOOS == "windows" {
 		return CollectedItem{
 			Category: "sys_vuln",
@@ -204,7 +230,7 @@ func (c *Collector) collectKernel() CollectedItem {
 		}
 	}
 
-	output, err := exec.Command("uname", "-r").Output()
+	output, err := exec.CommandContext(ctx, "uname", "-r").Output()
 	version := "unknown"
 	if err == nil {
 		version = strings.TrimSpace(string(output))

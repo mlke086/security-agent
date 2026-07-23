@@ -10,7 +10,7 @@ async function login(page: import('@playwright/test').Page, username = 'admin', 
 test('login succeeds and shows the dashboard', async ({ page }) => {
   await login(page)
   await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByText('运营大屏')).toBeVisible()
+  await expect(page.getByText('态势感知')).toBeVisible()
 })
 
 test('login fails with the wrong password', async ({ page }) => {

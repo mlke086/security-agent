@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     agent_debug: bool = False
     agent_heartbeat_interval: int = 60
     agent_binary_dir: str = "deployments/agent/dist"
+    # Default Agent version stamped onto freshly built binaries. The actual
+    # upgrade payload reads deployments/agent/dist/VERSION first; this value
+    # is the fallback when that file is missing.
+    # Default Agent version stamped onto freshly built binaries. The actual
+    # upgrade payload reads deployments/agent/dist/VERSION first; this value
+    # is the fallback when that file is missing.
+    agent_binary_version: str = "0.1.0"
     rules_sync_source: str = "nvd"
     rules_sync_cron: str = "0 3 * * *"
     # 需求2.2：规则数据源。nvd=NVD API(国外,带key); github=GitHub advisory-database
@@ -127,6 +134,10 @@ class Settings(BaseSettings):
     # seeder refuses to start otherwise. ``dev_mode=true`` relaxes the
     # check and issues a random per-process password logged at startup.
     dev_mode: bool = False
+    # Version stamped onto freshly built Agent binaries. The actual upgrade
+    # payload reads deployments/agent/dist/VERSION first; this value is the
+    # fallback when that file is missing.
+    agent_binary_version: str = "0.1.0"
     default_admin_password: str = ""
     default_analyst_password: str = ""
     default_viewer_password: str = ""

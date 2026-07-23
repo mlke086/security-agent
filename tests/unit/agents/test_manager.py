@@ -128,7 +128,9 @@ class TestHostQueries:
         with patch("src.agents.manager.get_vulnscan_store", return_value=mock_store):
             result = await list_hosts(status_filter="online", group="prod")
             assert result == []
-            mock_store.list_hosts.assert_called_with(status="online", group="prod")
+            mock_store.list_hosts.assert_called_with(
+                status="online", group="prod", exclude_decommissioned=True
+            )
 
     @pytest.mark.asyncio
     async def test_get_host_found(self):

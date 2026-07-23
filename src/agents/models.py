@@ -61,9 +61,16 @@ class ScanTask(BaseModel):
     nuclei_templates: list[str] = []  # ["cves/2024/CVE-...","exposures/..."]
     nuclei_timeout_sec: int = 0  # 0 = runner default (600s)
 
-    status: Literal["queued", "dispatching", "scanning", "analyzing", "completed", "failed"] = (
-        "queued"
-    )
+    status: Literal[
+        "queued",
+        "dispatching",
+        "scanning",
+        "analyzing",
+        "cancelling",
+        "cancelled",
+        "completed",
+        "failed",
+    ] = "queued"
     stats: dict = {"total": 0, "done": 0, "failed": 0}
     created_at: str = ""
     finished_at: str | None = None

@@ -48,6 +48,16 @@ async def heartbeat(agent_id: str, payload: dict) -> None:
         updates["rule_version"] = payload["rule_version"]
     await get_vulnscan_store().update_host(agent_id, **updates)
 
+    # P2-UPGRADE-01 (2026-07-22): if the Agent re-announced its version
+    # (e.g. after a successful upgrade + restart), update the upgrade
+    # status row to confirm or report mismatch. This runs on every
+    # heartbeat; confirm_upgrade_from_heartbeat is idempotent.
+    agent_version = str(payload.get("agent_version") or "")
+    if agent_version:
+        from src.agents.upgrade import confirm_upgrade_from_heartbeat
+
+        await confirm_upgrade_from_heartbeat(agent_id, agent_version)
+
     # Check if agent needs rule update.
     # 修复(需求7)：原 `if agent_rule_version:` 在 agent 上报空版本时短路，
     # 永不触发更新 -- 而 agent 首次连接/未持久化规则版本时恰好上报空串，

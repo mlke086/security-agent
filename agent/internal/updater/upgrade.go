@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/security-agent/agent/internal/config"
 	"github.com/security-agent/agent/internal/crypto"
 	"github.com/security-agent/agent/internal/scan"
 )
@@ -27,23 +28,45 @@ type UpgradeRequest struct {
 	DownloadURL string `json:"download_url"`
 	Signature   string `json:"signature"`
 	// AgentID / AgentToken / CAPath are filled by main.go (json:"-")
-	AgentID     string `json:"-"`
-	AgentToken  string `json:"-"`
-	CAPath      string `json:"-"`
+	AgentID        string `json:"-"`
+	AgentToken     string `json:"-"`
+	CAPath         string `json:"-"`
+	ExecutablePath string `json:"-"` // tests/helpers; empty uses os.Executable
 }
 
 // HandleUpgrade downloads, verifies, and applies a new agent binary.
 func HandleUpgrade(req UpgradeRequest) error {
 	log.Printf("[updater] downloading agent v%s from %s", req.Version, req.DownloadURL)
 
-	tmpDir := os.TempDir()
-	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("secagent-%s-%s", req.Version, runtime.GOARCH))
-	if runtime.GOOS == "windows" {
-		tmpFile += ".exe"
+	if req.Signature == "" {
+		return fmt.Errorf("missing signature - agent_upgrade requires Ed25519 signature")
+	}
+	if crypto.PublicKey == nil {
+		return fmt.Errorf("server public key not configured - cannot verify upgrade")
 	}
 
-	httpReq, _ := http.NewRequest("GET", req.DownloadURL, nil)
-	if req.AgentID != "" && req.AgentToken != "" {
+	execPath := req.ExecutablePath
+	if execPath == "" {
+		var err error
+		execPath, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("find executable: %w", err)
+		}
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("in-process upgrade is not supported on Windows; use the service helper")
+		}
+	}
+
+	httpReq, err := http.NewRequest(http.MethodGet, req.DownloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("build download request: %w", err)
+	}
+	if req.AgentID != "" {
+		q := httpReq.URL.Query()
+		q.Set("agent_id", req.AgentID)
+		httpReq.URL.RawQuery = q.Encode()
+	}
+	if req.AgentToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+req.AgentToken)
 	}
 	resp, err := httpClient(req.CAPath).Do(httpReq)
@@ -51,66 +74,75 @@ func HandleUpgrade(req UpgradeRequest) error {
 		return fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download returned status %d", resp.StatusCode)
 	}
 
-	f, err := os.Create(tmpFile)
+	f, err := os.CreateTemp(filepath.Dir(execPath), ".secagent-upgrade-*")
 	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+		return fmt.Errorf("create staged binary: %w", err)
 	}
+	tmpFile := f.Name()
+	defer os.Remove(tmpFile)
 
 	hasher := sha256.New()
-	writer := io.MultiWriter(f, hasher)
-	if _, err := io.Copy(writer, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmpFile)
+	if _, err := io.Copy(io.MultiWriter(f, hasher), resp.Body); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("download write: %w", err)
 	}
-	f.Close()
-
-	hash := hasher.Sum(nil)
-	if req.Signature == "" {
-		os.Remove(tmpFile)
-		return fmt.Errorf("missing signature - agent_upgrade requires Ed25519 signature")
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close staged binary: %w", err)
 	}
+
 	sig, err := base64.StdEncoding.DecodeString(req.Signature)
 	if err != nil {
-		os.Remove(tmpFile)
 		return fmt.Errorf("invalid signature encoding: %w", err)
 	}
-	if crypto.PublicKey == nil {
-		os.Remove(tmpFile)
-		return fmt.Errorf("server public key not configured - cannot verify upgrade")
-	}
-	if !ed25519.Verify(crypto.PublicKey, hash, sig) {
-		os.Remove(tmpFile)
+	if !ed25519.Verify(crypto.PublicKey, hasher.Sum(nil), sig) {
 		return fmt.Errorf("Ed25519 signature verification failed - upgrade rejected")
 	}
-
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(tmpFile, 0o755); err != nil {
-			return fmt.Errorf("chmod: %w", err)
+			return fmt.Errorf("chmod staged binary: %w", err)
 		}
 	}
 
-	execPath, err := os.Executable()
-	if err != nil {
-		os.Remove(tmpFile)
-		return fmt.Errorf("find executable: %w", err)
-	}
-
+	// P2-UPGRADE-02 (2026-07-22): only apply the staged binary once we
+	// have validated everything. Returning an error here is recoverable:
+	// the old binary is untouched and the caller acks the server with
+	// "failed" instead of phantom-success.
 	oldPath := execPath + ".old"
-	if runtime.GOOS == "windows" {
-		os.Remove(oldPath)
+	if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove previous backup: %w", err)
 	}
-	os.Rename(execPath, oldPath)
-	os.Rename(tmpFile, execPath)
+	if err := os.Rename(execPath, oldPath); err != nil {
+		return fmt.Errorf("backup current executable: %w", err)
+	}
+	if err := os.Rename(tmpFile, execPath); err != nil {
+		rollbackErr := os.Rename(oldPath, execPath)
+		if rollbackErr != nil {
+			return fmt.Errorf("install new executable: %w (rollback failed: %v)", err, rollbackErr)
+		}
+		return fmt.Errorf("install new executable: %w", err)
+	}
 
-	log.Printf("[updater] upgrade to v%s complete, restarting...", req.Version)
-	os.Remove(oldPath)
-	os.Exit(0)
+	log.Printf("[updater] upgrade to v%s staged; backup kept at %s", req.Version, oldPath)
+	return nil
+}
+
+// ApplyStagedAndRestart asks the service manager (or, for dev runs,
+// exec.CommandContext) to swap in the new binary. It must NOT block the
+// ack path: the caller acks the server first and then invokes this in a
+// background goroutine.
+func ApplyStagedAndRestart(_ UpgradeRequest, _ *config.Config) error {
+	// F2-UPGRADE-01 (2026-07-22): in production this would shell out to
+	// `systemctl restart secagent-agent.service` (or `sc stop/start`
+	// on Windows). The dev binary simply execs itself again so the new
+	// build takes over; on Windows the function returns an explicit
+	// error so the service helper can do the swap instead.
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("apply staged binary on Windows requires the service helper")
+	}
 	return nil
 }
 
@@ -124,9 +156,9 @@ type RuleUpdateRequest struct {
 	// against /rules/pack/{version} (which requires a JWT or agent_token) and
 	// trust the server's TLS cert when a self-signed CA is in use.
 	// Left empty in unit tests (test server doesn't enforce auth / TLS).
-	AgentID     string `json:"-"`
-	AgentToken  string `json:"-"`
-	CAPath      string `json:"-"`
+	AgentID    string `json:"-"`
+	AgentToken string `json:"-"`
+	CAPath     string `json:"-"`
 }
 
 // httpClient builds an *http.Client that trusts the configured CA (so
@@ -163,11 +195,15 @@ func HandleRuleUpdate(req RuleUpdateRequest, sendAck func(kind, version string, 
 	log.Printf("[updater] downloading rule pack v%s", req.RuleVersion)
 
 	if req.Signature == "" {
-		if sendAck != nil { sendAck("rule", req.RuleVersion, false, "missing signature") }
+		if sendAck != nil {
+			sendAck("rule", req.RuleVersion, false, "missing signature")
+		}
 		return fmt.Errorf("missing signature - rule_update requires Ed25519 signature")
 	}
 	if crypto.PublicKey == nil {
-		if sendAck != nil { sendAck("rule", req.RuleVersion, false, "server public key not configured") }
+		if sendAck != nil {
+			sendAck("rule", req.RuleVersion, false, "server public key not configured")
+		}
 		return fmt.Errorf("server public key not configured - cannot verify rule update")
 	}
 
@@ -177,7 +213,9 @@ func HandleRuleUpdate(req RuleUpdateRequest, sendAck func(kind, version string, 
 	downloadURL := req.DownloadURL
 	httpReq, err := http.NewRequest("GET", downloadURL, nil)
 	if err != nil {
-		if sendAck != nil { sendAck("rule", req.RuleVersion, false, err.Error()) }
+		if sendAck != nil {
+			sendAck("rule", req.RuleVersion, false, err.Error())
+		}
 		return fmt.Errorf("build download request: %w", err)
 	}
 	if req.AgentID != "" {
@@ -190,40 +228,54 @@ func HandleRuleUpdate(req RuleUpdateRequest, sendAck func(kind, version string, 
 	}
 	resp, err := httpClient(req.CAPath).Do(httpReq)
 	if err != nil {
-		if sendAck != nil { sendAck("rule", req.RuleVersion, false, err.Error()) }
+		if sendAck != nil {
+			sendAck("rule", req.RuleVersion, false, err.Error())
+		}
 		return fmt.Errorf("download rule pack: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		if sendAck != nil { sendAck("rule", req.RuleVersion, false, fmt.Sprintf("HTTP %d", resp.StatusCode)) }
+		if sendAck != nil {
+			sendAck("rule", req.RuleVersion, false, fmt.Sprintf("HTTP %d", resp.StatusCode))
+		}
 		return fmt.Errorf("download returned status %d", resp.StatusCode)
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		if sendAck != nil { sendAck("rule", req.RuleVersion, false, err.Error()) }
+		if sendAck != nil {
+			sendAck("rule", req.RuleVersion, false, err.Error())
+		}
 		return fmt.Errorf("read rule pack: %w", err)
 	}
 
 	sig, err := base64.StdEncoding.DecodeString(req.Signature)
 	if err != nil {
-		if sendAck != nil { sendAck("rule", req.RuleVersion, false, "invalid signature encoding") }
+		if sendAck != nil {
+			sendAck("rule", req.RuleVersion, false, "invalid signature encoding")
+		}
 		return fmt.Errorf("invalid signature encoding: %w", err)
 	}
 	if !ed25519.Verify(crypto.PublicKey, data, sig) {
-		if sendAck != nil { sendAck("rule", req.RuleVersion, false, "Ed25519 verification failed") }
+		if sendAck != nil {
+			sendAck("rule", req.RuleVersion, false, "Ed25519 verification failed")
+		}
 		return fmt.Errorf("Ed25519 signature verification failed - rule pack rejected")
 	}
 
 	if err := scan.LoadRules(data); err != nil {
-		if sendAck != nil { sendAck("rule", req.RuleVersion, false, err.Error()) }
+		if sendAck != nil {
+			sendAck("rule", req.RuleVersion, false, err.Error())
+		}
 		return fmt.Errorf("load rules: %w", err)
 	}
 
 	log.Printf("[updater] rules v%s loaded", req.RuleVersion)
 	// F-WSL (2026-07-21): the caller (main.go) records the new version
 	// on the client so the next heartbeat reports it back.
-	if sendAck != nil { sendAck("rule", req.RuleVersion, true, "") }
+	if sendAck != nil {
+		sendAck("rule", req.RuleVersion, true, "")
+	}
 	return nil
 }

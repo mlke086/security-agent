@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty, Switch } from "antd"
-import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined } from "@ant-design/icons"
+import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined } from "@ant-design/icons"
 import type { Host, HostGroup } from "../api/client"
 import {
   createEnrollToken,
@@ -13,6 +13,9 @@ import {
   deleteGroup,
   updateHostGroup,
   deleteHost,
+  upgradeAgent,
+  getAgentUpgradeStatus,
+  type AgentUpgradeStatus,
 } from "../api/client"
 
 const { Text } = Typography
@@ -58,6 +61,8 @@ export default function HostOnboardPage() {
   // 删除 actually makes them disappear. Operators can flip this on to
   // see + physically purge old rows.
   const [showDecommissioned, setShowDecommissioned] = useState(false)
+  const [upgradeById, setUpgradeById] = useState<Record<string, AgentUpgradeStatus["upgrade"] | undefined>>({})
+  const [upgrading, setUpgrading] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(hostSearch.trim().toLowerCase()), 300)
@@ -84,6 +89,13 @@ export default function HostOnboardPage() {
     return () => { alive = false }
   }, [showDecommissioned])
 
+  // P2-UPGRADE-03 (2026-07-22): refresh upgrade status for every online
+  // host so the badge reflects the latest server-side state.
+  useEffect(() => {
+    if (!hosts) return
+    hosts.forEach((h) => { if (h.status !== "decommissioned") void refreshUpgrade(h.agent_id) })
+  }, [hosts])
+
   const refreshHostsData = async () => {
     setLoading(true)
     try {
@@ -98,7 +110,35 @@ export default function HostOnboardPage() {
     finally { setLoading(false) }
   }
 
-  const fetchHosts = async () => {
+  const refreshUpgrade = async (agentId: string) => {
+    try {
+      const r = await getAgentUpgradeStatus(agentId)
+      setUpgradeById((prev) => ({ ...prev, [agentId]: r.upgrade }))
+    } catch {
+      setUpgradeById((prev) => ({ ...prev, [agentId]: undefined }))
+    }
+  }
+
+  const handleUpgrade = async (agent: Host) => {
+    if (upgrading[agent.agent_id]) return
+    setUpgrading((prev) => ({ ...prev, [agent.agent_id]: true }))
+    try {
+      const r = await upgradeAgent(agent.agent_id)
+      if (r.delivered) {
+        message.success(`?? ${agent.hostname} ???? ${r.version} ??`)
+      } else {
+        message.warning("???????????????????????")
+      }
+      await refreshUpgrade(agent.agent_id)
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      message.error(detail || "????")
+    } finally {
+      setUpgrading((prev) => ({ ...prev, [agent.agent_id]: false }))
+    }
+  }
+
+    const fetchHosts = async () => {
     await refreshHostsData()
     // 需求2：点刷新主机列表时，隐藏令牌展示（令牌是一次性敏感凭证，展示后即应隐藏）
     setShowToken(false)
@@ -292,7 +332,18 @@ export default function HostOnboardPage() {
       />
     )},
     { title: "操作", key: "action", render: (_: unknown, r: Host) => (
-      r.status === "decommissioned" ? (
+    <Space size={4}>
+      {r.status !== "decommissioned" && (
+        <Button
+          size="small"
+          icon={<CloudUploadOutlined />}
+          loading={upgrading[r.agent_id]}
+          onClick={() => handleUpgrade(r)}
+        >
+          升级
+        </Button>
+      )}
+      {r.status === "decommissioned" ? (
         <Popconfirm title="确定物理删除该主机?" description="删除后不可恢复" onConfirm={() => handlePurgeHost(r.agent_id)}>
           <Button size="small" danger>删除</Button>
         </Popconfirm>
@@ -300,8 +351,26 @@ export default function HostOnboardPage() {
         <Popconfirm title="确定下线该主机?" onConfirm={() => handleDelete(r.agent_id)}>
           <Button size="small" danger>下线</Button>
         </Popconfirm>
-      )
-    )},
+      )}
+    </Space>
+  )},
+  { title: "升级状态", key: "upgrade", width: 170, render: (_: unknown, r: Host) => {
+    const u = upgradeById[r.agent_id]
+    if (!u || u.state === "idle") return <span style={{ color: "#999" }}>—</span>
+    const stateMap: Record<string, { color: string; label: string }> = {
+      sent: { color: "blue", label: "已下发升级" },
+      restarting: { color: "gold", label: "Agent 重启中" },
+      confirmed: { color: "green", label: `升级完成（${u.current_version || ""}）` },
+      failed: { color: "red", label: "升级失败" },
+      queued_for_delivery: { color: "default", label: "主机离线，待重连" },
+    }
+    const meta = stateMap[u.state] || { color: "default", label: u.state }
+    return (
+      <Tooltip title={u.message || u.error || ""}>
+        <Tag color={meta.color}>{meta.label}</Tag>
+      </Tooltip>
+    )
+  }},
   ]
 
   const groupColumns = [

@@ -69,7 +69,7 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <Typography.Title level={4}>运营大屏</Typography.Title>
+      <Typography.Title level={4}>态势感知</Typography.Title>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col span={6}><Card><Statistic title="总事件数" value={total} prefix={<AlertOutlined />} /></Card></Col>

@@ -8,7 +8,9 @@ API when the subgraph got slow. The actual execution now happens in the
 ``TaskWorker`` background process.
 """
 
+import json
 import uuid
+from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -26,6 +28,12 @@ from src.orchestration.task_queue import (
     enqueue_task,
     pending_count,
     stream_depth,
+)
+from src.orchestration.task_queue.keys import (
+    CANCEL_TTL_SEC,
+    STATUS_TTL_SEC,
+    cancel_key,
+    status_key,
 )
 
 router = APIRouter(prefix="/api/v1/vulnscan", tags=["vulnscan"])
@@ -141,9 +149,7 @@ async def api_get_task(
         try:
             r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
             try:
-                import json
-
-                payload = await r.get(f"vulnscan:queue:status:{task_id}")
+                payload = await r.get(status_key(task_id))
             finally:
                 await r.aclose()
             if payload:
@@ -151,6 +157,8 @@ async def api_get_task(
                 return {
                     "task_id": task_id,
                     "status": data.get("status", "queued"),
+                    "targets": data.get("targets", []),
+                    "error": data.get("error"),
                     "side_channel": True,
                     "worker": data.get("worker", ""),
                     "submitted_at": data.get("ts", ""),
@@ -188,7 +196,7 @@ async def api_task_stream(task_id: str, token: str = Query(...)):
                 # 每 10s 检查任务状态，终态则结束流
                 try:
                     task = await store.get_task(task_id)
-                    if task and task.status in ("completed", "failed"):
+                    if task and task.status in ("completed", "failed", "cancelled"):
                         if last_status != task.status:
                             import json as _json
 
@@ -214,12 +222,93 @@ async def api_task_stream(task_id: str, token: str = Query(...)):
 
 @router.post("/tasks/{task_id}/cancel")
 async def api_cancel_task(task_id: str, current_user=Depends(require_role("admin", "analyst"))):
+    """Cancel queued or running work and notify every assigned Agent."""
     store = get_vulnscan_store()
     task = await store.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    await store.update_task(task_id, status="failed", error="Cancelled by user")
-    return {"status": "ok"}
+    redis = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    queue_state: dict = {}
+    sent = 0
+    failed = 0
+    now = datetime.now(UTC).isoformat()
+
+    try:
+        if task is None:
+            raw = await redis.get(status_key(task_id))
+            if raw:
+                queue_state = json.loads(raw)
+            else:
+                raise HTTPException(status_code=404, detail="Task not found")
+
+        current_status = task.status if task is not None else queue_state.get("status", "queued")
+        if current_status == "cancelled":
+            return {"status": "cancelled", "sent": 0, "failed": 0}
+        if current_status in ("completed", "failed"):
+            raise HTTPException(status_code=409, detail=f"Task is already {current_status}")
+
+        await redis.set(
+            cancel_key(task_id),
+            json.dumps({"actor": current_user.username, "cancelled_at": now}),
+            ex=CANCEL_TTL_SEC,
+        )
+
+        if task is not None:
+            await store.update_task(task_id, status="cancelling")
+            agent_ids = list(dict.fromkeys(task.targets))
+            if agent_ids:
+                from src.agents.ws_gateway import get_agent_gateway
+
+                result = await get_agent_gateway().broadcast(
+                    agent_ids,
+                    {
+                        "v": 1,
+                        "type": "scan_cancel",
+                        "ts": now,
+                        "payload": {"task_id": task_id},
+                    },
+                )
+                sent = int(result.get("sent", 0))
+                failed = int(result.get("failed", 0))
+            await store.update_task(
+                task_id,
+                status="cancelled",
+                error=f"Cancelled by {current_user.username}",
+                finished_at=now,
+            )
+
+        side_channel = {
+            **queue_state,
+            "status": "cancelled",
+            "cancelled_at": now,
+            "actor": current_user.username,
+        }
+        await redis.set(
+            status_key(task_id),
+            json.dumps(side_channel, ensure_ascii=False),
+            ex=STATUS_TTL_SEC,
+        )
+        await redis.publish(
+            f"vulnscan:task:{task_id}",
+            json.dumps(
+                {
+                    "type": "task_done",
+                    "task_id": task_id,
+                    "status": "cancelled",
+                    "message": "Scan cancelled by operator",
+                },
+                ensure_ascii=False,
+            ),
+        )
+    finally:
+        await redis.aclose()
+
+    await get_audit_logger().log(
+        event_id=task_id,
+        node="vulnscan.router",
+        action="cancel_task",
+        actor=current_user.username,
+        details={"task_id": task_id, "sent": sent, "failed": failed},
+    )
+    return {"status": "cancelled", "sent": sent, "failed": failed}
 
 
 @router.delete("/tasks/{task_id}")

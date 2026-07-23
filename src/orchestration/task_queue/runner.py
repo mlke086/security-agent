@@ -15,7 +15,11 @@ import redis.asyncio as aioredis
 from src.common.config.settings import get_settings
 from src.common.logging.logger import get_logger
 from src.orchestration.task_queue.enqueue import TaskEnvelope
-from src.orchestration.task_queue.keys import STATUS_TTL_SEC, status_key
+from src.orchestration.task_queue.keys import (
+    STATUS_TTL_SEC,
+    cancel_key,
+    status_key,
+)
 
 logger = get_logger(__name__)
 
@@ -32,6 +36,15 @@ async def run_vulnscan_from_envelope(envelope: TaskEnvelope) -> dict:
     settings = get_settings()
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
+        if await redis.exists(cancel_key(envelope.task_id)):
+            await redis.set(
+                status_key(envelope.task_id),
+                _status_payload("cancelled", worker=_current_worker_name()),
+                ex=STATUS_TTL_SEC,
+            )
+            logger.info("cancelled_task_skipped", task_id=envelope.task_id)
+            return {"task_id": envelope.task_id, "status": "cancelled"}
+
         try:
             await redis.set(
                 status_key(envelope.task_id),
@@ -66,15 +79,18 @@ async def run_vulnscan_from_envelope(envelope: TaskEnvelope) -> dict:
             nuclei_templates=envelope.nuclei_templates,
             nuclei_timeout_sec=envelope.nuclei_timeout_sec,
         )
+        final_status = "completed"
+        if result.get("status") == "cancelled" or await redis.exists(cancel_key(envelope.task_id)):
+            final_status = "cancelled"
         try:
             await redis.set(
                 status_key(envelope.task_id),
-                _status_payload("completed", worker=_current_worker_name()),
+                _status_payload(final_status, worker=_current_worker_name()),
                 ex=STATUS_TTL_SEC,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "status_sidechannel_completed_failed", task_id=envelope.task_id, error=str(exc)
+                "status_sidechannel_final_failed", task_id=envelope.task_id, error=str(exc)
             )
         return result
     except Exception as exc:

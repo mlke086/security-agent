@@ -3,13 +3,14 @@ package scan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/security-agent/agent/internal/resource"
 	"github.com/security-agent/agent/internal/protection"
+	"github.com/security-agent/agent/internal/resource"
 	"github.com/security-agent/agent/internal/scan/nuclei"
 )
 
@@ -43,8 +44,8 @@ type ScanEngine struct {
 	// P1-GO-06 (2026-07-19): registry of in-flight scan cancel funcs so a
 	// scan_cancel command from the server can interrupt a long-running scan.
 	// Keyed by task_id. Acquire the cancel mutex before mutating.
-	cancels   map[string]context.CancelFunc
-	cancelMu  sync.Mutex
+	cancels  map[string]context.CancelFunc
+	cancelMu sync.Mutex
 }
 
 // NewScanEngine creates a new ScanEngine. nuclei is created lazily (only
@@ -74,22 +75,22 @@ const (
 
 // ScanCommand is the payload received from server for a scan_command.
 type ScanCommand struct {
-	TaskID         string            `json:"task_id"`
-	Modules        []string          `json:"modules"`
-	ResourceLimit  map[string]int    `json:"resource_limit"`
-	RuleVersion    string            `json:"rule_version"`
-	Rules          []RuleDef         `json:"rules"`
-	Policy         map[string]interface{} `json:"policy"`
+	TaskID        string                 `json:"task_id"`
+	Modules       []string               `json:"modules"`
+	ResourceLimit map[string]int         `json:"resource_limit"`
+	RuleVersion   string                 `json:"rule_version"`
+	Rules         []RuleDef              `json:"rules"`
+	Policy        map[string]interface{} `json:"policy"`
 
 	// Engine selects the scan backend. Empty == matcher.
 	Engine Engine `json:"engine,omitempty"`
 
 	// Nuclei-only fields, populated when Engine == EngineNuclei.
-	NucleiTargets   []string          `json:"nuclei_targets,omitempty"`
-	NucleiSeverity []string          `json:"nuclei_severity,omitempty"`
-	NucleiTags      []string          `json:"nuclei_tags,omitempty"`
-	NucleiTemplates []string          `json:"nuclei_templates,omitempty"`
-	NucleiTimeout   int               `json:"nuclei_timeout_sec,omitempty"`
+	NucleiTargets   []string `json:"nuclei_targets,omitempty"`
+	NucleiSeverity  []string `json:"nuclei_severity,omitempty"`
+	NucleiTags      []string `json:"nuclei_tags,omitempty"`
+	NucleiTemplates []string `json:"nuclei_templates,omitempty"`
+	NucleiTimeout   int      `json:"nuclei_timeout_sec,omitempty"`
 }
 
 // RuleDef is a single vulnerability detection rule.
@@ -148,7 +149,6 @@ func (e *ScanEngine) guardAgainstPressure(taskID string) (bool, protection.Reaso
 	return false, d.Reason
 }
 
-
 // Execute runs a scan. The dispatcher calls this in a goroutine.
 func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 	taskID := cmd.TaskID
@@ -192,7 +192,7 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 
 	// Branch 1: Nuclei
 	if cmd.Engine == EngineNuclei {
-		e.runNuclei(cmd, hostname)
+		e.runNuclei(ctx, cmd, hostname)
 		return
 	}
 
@@ -223,16 +223,20 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 	// Step 1: System vulnerability collection
 	if modules["sys_vuln"] {
 		select {
-			case <-ctx.Done():
-				e.sendStep(taskID, "scan_cancelled", "done", "Scan cancelled by server")
-				return
-			default:
-			}
+		case <-ctx.Done():
+			e.sendCancelled(taskID, hostname, batch)
+			return
+		default:
+		}
 		e.sendStep(taskID, "collect_packages", "running", "Collecting installed packages and kernel info")
 		log.Printf("[engine] %s: collect_packages starting", taskID)
 		log.Printf("[engine] %s: about to call CollectSysVuln", taskID)
-		items, err := e.collector.CollectSysVuln()
+		items, err := e.collector.CollectSysVulnContext(ctx)
 		log.Printf("[engine] %s: CollectSysVuln returned err=%v items=%d", taskID, err, len(items))
+		if errors.Is(err, context.Canceled) {
+			e.sendCancelled(taskID, hostname, batch)
+			return
+		}
 		if err != nil {
 			// A collection failure (e.g. no dpkg/rpm on a minimal host) must
 			// NOT abort the whole scan: baseline can still run, and the final
@@ -261,19 +265,28 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 	// Throttle check between modules
 	if e.Monitor != nil && e.Monitor.IsThrottling() {
 		e.sendStep(taskID, "throttle", "running", "Resource limit reached, pausing")
-		time.Sleep(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			e.sendCancelled(taskID, hostname, batch)
+			return
+		case <-time.After(5 * time.Second):
+		}
 	}
 
 	// Step 3: Baseline collection
 	if modules["baseline"] {
 		select {
-			case <-ctx.Done():
-				e.sendStep(taskID, "scan_cancelled", "done", "Scan cancelled by server")
-				return
-			default:
-			}
+		case <-ctx.Done():
+			e.sendCancelled(taskID, hostname, batch)
+			return
+		default:
+		}
 		e.sendStep(taskID, "baseline_check", "running", "Running security baseline checks")
-		items, err := e.collector.CollectBaseline()
+		items, err := e.collector.CollectBaselineContext(ctx)
+		if errors.Is(err, context.Canceled) {
+			e.sendCancelled(taskID, hostname, batch)
+			return
+		}
 		if err != nil {
 			e.sendStep(taskID, "baseline_check", "failed", err.Error())
 		} else {
@@ -302,7 +315,7 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 // nuclei CLI. It is invoked when cmd.Engine == EngineNuclei and e.nuclei
 // is non-nil. If nuclei is not installed we fall back to matcher (with a
 // warning) so the operator's task is not lost.
-func (e *ScanEngine) runNuclei(cmd ScanCommand, hostname string) {
+func (e *ScanEngine) runNuclei(parent context.Context, cmd ScanCommand, hostname string) {
 	taskID := cmd.TaskID
 
 	if e.nuclei == nil {
@@ -324,7 +337,7 @@ func (e *ScanEngine) runNuclei(cmd ScanCommand, hostname string) {
 	}
 
 	e.sendStep(taskID, "nuclei", "running", "Launching nuclei scanner")
-	ctx, cancel := context.WithTimeout(context.Background(),
+	ctx, cancel := context.WithTimeout(parent,
 		time.Duration(timeoutOrDefault(cmd.NucleiTimeout, 600))*time.Second)
 	defer cancel()
 
@@ -338,10 +351,18 @@ func (e *ScanEngine) runNuclei(cmd ScanCommand, hostname string) {
 	batch := 1
 	var totalFindings int
 	for f := range findingsCh {
+		if parent.Err() != nil {
+			e.sendCancelled(taskID, hostname, batch)
+			return
+		}
 		findings := []Finding{toFinding(f)}
 		e.sendResult(taskID, hostname, findings, batch, false)
 		batch++
 		totalFindings++
+	}
+	if parent.Err() != nil {
+		e.sendCancelled(taskID, hostname, batch)
+		return
 	}
 
 	e.sendStep(taskID, "nuclei", "done",
@@ -399,6 +420,11 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+func (e *ScanEngine) sendCancelled(taskID, hostname string, batch int) {
+	e.sendStep(taskID, "scan_cancelled", "done", "Scan cancelled by server")
+	e.sendResult(taskID, hostname, nil, batch, true)
 }
 
 func (e *ScanEngine) sendStep(taskID, step, status, message string) {

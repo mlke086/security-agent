@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -126,23 +127,41 @@ func HandleUpgrade(req UpgradeRequest) error {
 		return fmt.Errorf("install new executable: %w", err)
 	}
 
+	// F3-SELINUX (2026-07-23): os.CreateTemp creates files with tmp_t selinux
+	// context; os.Rename preserves it.  Without restorecon systemd refuses to
+	// execve() the binary (203/EXEC). Best-effort: selinux may be disabled.
+	if runtime.GOOS == "linux" {
+		if err := exec.Command("restorecon", execPath).Run(); err != nil {
+			log.Printf("[updater] WARN: restorecon %s failed: %v (selinux may be disabled)", execPath, err)
+		}
+	}
+
 	log.Printf("[updater] upgrade to v%s staged; backup kept at %s", req.Version, oldPath)
 	return nil
 }
 
-// ApplyStagedAndRestart asks the service manager (or, for dev runs,
-// exec.CommandContext) to swap in the new binary. It must NOT block the
-// ack path: the caller acks the server first and then invokes this in a
-// background goroutine.
+// ApplyStagedAndRestart asks the service manager to swap in the new binary.
+// It must NOT block the ack path: the caller acks the server first and then
+// invokes this in a background goroutine.
 func ApplyStagedAndRestart(_ UpgradeRequest, _ *config.Config) error {
-	// F2-UPGRADE-01 (2026-07-22): in production this would shell out to
-	// `systemctl restart secagent-agent.service` (or `sc stop/start`
-	// on Windows). The dev binary simply execs itself again so the new
-	// build takes over; on Windows the function returns an explicit
-	// error so the service helper can do the swap instead.
 	if runtime.GOOS == "windows" {
 		return fmt.Errorf("apply staged binary on Windows requires the service helper")
 	}
+	// F2-UPGRADE-01 (2026-07-22): restart via systemd so the process picks
+	// up the binary that HandleUpgrade already staged to disk.  We shell out
+	// to systemctl in the background so this goroutine can return; systemd
+	// will start the new binary as a fresh process.
+	cmd := exec.Command("systemctl", "restart", "secagent.service")
+	// Detach from the parent's stdin/stdout so systemctl does not race with
+	// the agent's own log output.
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("systemctl restart secagent: %w", err)
+	}
+	// Don't Wait() -- the current process is about to be killed by systemd
+	// and we don't want to block the goroutine.
 	return nil
 }
 

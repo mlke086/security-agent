@@ -29,6 +29,10 @@ type Config struct {
 		CPUPercent int `json:"cpu_percent"`
 		MemPercent int `json:"mem_percent"`
 	} `json:"resource_limit"`
+
+	// AgentVersion is the compiled-in agent version (from internal/version).
+	// Set by main.go at startup; not persisted in config.json.
+	AgentVersion string `json:"-"`
 }
 
 // DefaultConfigPath returns the OS-specific config file path.

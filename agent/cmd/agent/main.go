@@ -17,11 +17,12 @@ import (
 	"github.com/security-agent/agent/internal/queue"
 	"github.com/security-agent/agent/internal/scan"
 	"github.com/security-agent/agent/internal/updater"
+	"github.com/security-agent/agent/internal/version"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("[agent] starting security agent v0.1.0")
+	log.Printf("[agent] starting security agent v%s", version.Version)
 
 	// Allow CONFIG_PATH override for dev / WSL testing -- in production the
 	// installer writes to DefaultConfigPath() and the override is empty.
@@ -47,6 +48,9 @@ func main() {
 			log.Println("[agent] server public key configured from config.json")
 		}
 	}
+
+	// Stamp the compiled-in version so heartbeat can report it.
+	cfg.AgentVersion = version.Version
 
 	// If no agent_id, attempt enrollment
 	if cfg.AgentID == "" && cfg.EnrollToken != "" {

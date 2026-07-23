@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SecAgent 安全 AI Agent — 功能演示讲解</title>
+<style>
+  :root {
+    --bg: #0a0e17;
+    --surface: #111827;
+    --card: #1a2236;
+    --border: #1e2d45;
+    --primary: #3b82f6;
+    --teal: #14b8a6;
+    --green: #22c55e;
+    --orange: #f59e0b;
+    --red: #ef4444;
+    --purple: #8b5cf6;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --text3: #64748b;
+    --code-bg: #0d1321;
+    --radius: 10px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    background: linear-gradient(135deg, #0a0e17 0%, #0f172a 40%, #1a1040 70%, #0d1b2a 100%);
+    padding: 80px 40px 70px; text-align: center; position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content:''; position:absolute; top:-200px; right:-150px; width:600px; height:600px;
+    border-radius:50%; background: radial-gradient(circle, rgba(59,130,246,0.12) 0%, transparent 70%);
+  }
+  .hero::after {
+    content:''; position:absolute; bottom:-100px; left:-100px; width:400px; height:400px;
+    border-radius:50%; background: radial-gradient(circle, rgba(20,184,166,0.08) 0%, transparent 70%);
+  }
+  .hero h1 { font-size: 3rem; font-weight: 800; letter-spacing: -1px; position: relative; z-index: 1; }
+  .hero h1 span.grad { background: linear-gradient(135deg, #3b82f6, #14b8a6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero .sub { font-size: 1.15rem; color: var(--text2); margin-top: 10px; position: relative; z-index: 1; }
+  .hero .meta { margin-top: 18px; display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; position: relative; z-index: 1; }
+  .hero .meta .tag {
+    background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+    padding: 4px 16px; border-radius: 20px; font-size: 0.85rem; color: var(--text2);
+  }
+
+  /* ── Container ── */
+  .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── Section titles ── */
+  .sec { padding: 50px 0 10px; }
+  .sec h2 {
+    font-size: 1.7rem; font-weight: 700; margin-bottom: 6px;
+    background: linear-gradient(135deg, #e2e8f0, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .sec .sec-sub { color: var(--text3); font-size: 0.9rem; margin-bottom: 28px; }
+
+  /* ── Cards ── */
+  .card-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 16px; margin-bottom: 28px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 24px 20px; transition: border-color .2s, transform .2s;
+  }
+  .card:hover { border-color: var(--primary); transform: translateY(-2px); }
+  .card .icon { font-size: 1.8rem; margin-bottom: 10px; }
+  .card h4 { font-size: 1rem; margin-bottom: 6px; color: var(--text); }
+  .card p { font-size: 0.85rem; color: var(--text2); line-height: 1.6; }
+
+  .card-accent { border-top: 3px solid var(--primary); }
+  .card-accent.t2 { border-top-color: var(--teal); }
+  .card-accent.t3 { border-top-color: var(--orange); }
+  .card-accent.t4 { border-top-color: var(--green); }
+
+  /* ── Module block ── */
+  .mod { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px 28px; margin-bottom: 22px; }
+  .mod h3 { font-size: 1.2rem; color: var(--primary); margin-bottom: 12px; }
+  .mod .path { font-size: 0.85rem; color: var(--teal); margin-bottom: 16px; padding: 6px 12px; background: rgba(20,184,166,0.08); border-radius: 6px; display: inline-block; }
+  .mod h5 { font-size: 0.9rem; color: var(--text); margin-top: 16px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .mod ul { list-style: none; padding: 0; }
+  .mod ul li { font-size: 0.9rem; color: var(--text2); padding: 3px 0; padding-left: 20px; position: relative; }
+  .mod ul li::before { content: '▸'; position: absolute; left: 0; color: var(--primary); font-size: 0.75rem; top: 4px; }
+  .mod .ops { margin-top: 12px; }
+  .mod .ops ol { padding-left: 22px; }
+  .mod .ops ol li { font-size: 0.88rem; color: var(--text2); padding: 2px 0; }
+  .mod .highlight-box { margin-top: 14px; background: rgba(59,130,246,0.06); border-left: 3px solid var(--primary); padding: 12px 16px; border-radius: 0 8px 8px 0; }
+  .mod .highlight-box p { font-size: 0.85rem; color: var(--text2); margin: 2px 0; }
+  .mod .highlight-box strong { color: var(--text); }
+
+  /* ── Code blocks ── */
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; overflow-x: auto; font-size: 0.83rem; line-height: 1.55; }
+  code { font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace; }
+  pre code { color: #c9d1d9; }
+  .kw { color: #ff7b72; } .str { color: #a5d6ff; } .cm { color: #8b949e; font-style: italic; }
+
+  /* ── Feature map grid ── */
+  .feat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px,1fr)); gap: 16px; margin-bottom: 28px; }
+  .feat-box {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px;
+  }
+  .feat-box h4 { font-size: 0.95rem; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .feat-box h4 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .feat-box ul { list-style: none; padding: 0; }
+  .feat-box ul li { font-size: 0.83rem; color: var(--text2); padding: 2px 0; padding-left: 18px; position: relative; }
+  .feat-box ul li::before { content: '✓'; position: absolute; left: 0; color: var(--green); font-size: 0.75rem; top: 2px; }
+
+  /* ── Architecture diagram ── */
+  .arch { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px 24px; margin-bottom: 24px; overflow-x: auto; }
+  .arch pre { background: none; border: none; padding: 0; margin: 0; }
+  .arch .l1 { color: #93c5fd; }
+  .arch .l2 { color: #5eead4; }
+  .arch .l3 { color: #fde68a; }
+  .arch .l4 { color: #c4b5fd; }
+  .arch .l5 { color: #fda4af; }
+  .arch .edge { color: #64748b; }
+
+  /* ── Table ── */
+  .tbl-wrap { overflow-x: auto; margin-bottom: 20px; }
+  table { width:100%; border-collapse: collapse; font-size: 0.88rem; }
+  th { background: var(--card); color: var(--text); padding: 10px 14px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--text2); }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* ── Stats row ── */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 14px; margin-bottom: 24px; }
+  .stat {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 20px; text-align: center;
+  }
+  .stat .num { font-size: 1.8rem; font-weight: 800; }
+  .stat .lbl { font-size: 0.8rem; color: var(--text3); margin-top: 4px; }
+
+  /* ── Checklist ── */
+  .checklist { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap: 6px; }
+  .checklist li { font-size: 0.88rem; color: var(--text2); padding: 6px 10px; background: var(--card); border-radius: 6px; border: 1px solid transparent; }
+  .checklist li:hover { border-color: var(--border); }
+
+  /* ── Shell prompt ── */
+  .sh-prompt { color: #22c55e; user-select: none; }
+  .sh-out { color: #8b949e; }
+
+  /* ── Footer ── */
+  .footer { text-align: center; padding: 50px 24px 40px; color: var(--text3); font-size: 0.82rem; border-top: 1px solid var(--border); margin-top: 40px; }
+
+  /* ── Responsive ── */
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 2rem; }
+    .hero { padding: 50px 20px 40px; }
+    .container { padding: 0 12px; }
+  }
+
+  /* Print-friendly */
+  @media print {
+    body { background: #fff; color: #111; }
+    .hero { background: #f8fafc; padding: 30px; }
+    .hero h1 { color: #111; }
+    .hero h1 span.grad { -webkit-text-fill-color: #1d4ed8; }
+    .mod, .card, .feat-box, .stat, .arch { background: #fff; border: 1px solid #ddd; color: #111; }
+    pre { background: #f5f5f5; border: 1px solid #ddd; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ HERO ═══════════ -->
+<header class="hero">
+  <h1><span class="grad">SecAgent</span> 安全 AI Agent</h1>
+  <p class="sub">基于大模型的安全事件智能分析与自动响应平台 — 功能演示讲解</p>
+  <div class="meta">
+    <span class="tag">v0.1.0</span>
+    <span class="tag">2026-07-23</span>
+    <span class="tag">演示时长约 40 分钟</span>
+  </div>
+</header>
+
+<!-- ═══════════ 一、项目概述 ═══════════ -->
+<section class="container sec">
+  <h2>一、项目概述</h2>
+  <p class="sec-sub">SecAgent 是什么？解决了什么问题？</p>
+
+  <div class="card-row">
+    <div class="card card-accent">
+      <div class="icon">🚨</div>
+      <h4>安全告警智能研判</h4>
+      <p>告警进来，AI 自动分析真假、溯源、出报告。Kafka/HTTP 双入口，LLM 分流 + 多步推理链。</p>
+    </div>
+    <div class="card card-accent t2">
+      <div class="icon">🔍</div>
+      <h4>漏洞主动扫描</h4>
+      <p>纳管主机批量漏洞扫描，matcher 规则引擎 + Nuclei 双引擎，对话式 + 表单式双入口。</p>
+    </div>
+    <div class="card card-accent t3">
+      <div class="icon">🛡️</div>
+      <h4>自动处置响应</h4>
+      <p>高危事件自动封禁/通知，10套 YAML 剧本 + L1-L5 分级 HITL 审批，企微钉钉通知。</p>
+    </div>
+    <div class="card card-accent t4">
+      <div class="icon">💬</div>
+      <h4>对话式安全助手</h4>
+      <p>自然语言描述扫描需求，AI 理解意图执行。4路路由：scan / project / web / chat。</p>
+    </div>
+  </div>
+
+  <div style="text-align:center; padding:12px 0 0; font-size:1.05rem; color:var(--teal);">
+    <strong>让 AI 帮安全团队做"告警研判 + 漏洞扫描 + 响应处置"的闭环</strong>
+  </div>
+</section>
+
+<!-- ═══════════ 二、系统架构总览 ═══════════ -->
+<section class="container sec">
+  <h2>二、系统架构总览</h2>
+  <p class="sec-sub">前端 / API 网关 / 编排引擎 / Agent 端 / 中间件 — 四层各司其职</p>
+
+  <div class="arch">
+<pre>
+┌──────────────────────────────────────────────────────────────┐
+│  <span class="l1">前端 (React 18 + antd5 + TypeScript)</span>                         │
+│  态势感知 │ 主机纳管 │ 扫描任务 │ 漏洞清单 │ 规则/模型管理      │
+│  事件队列 │ 审批列表 │ 对话助手 │ 四套主题                      │
+└──────────────────────┬───────────────────────────────────────┘
+                       │ <span class="edge">HTTP / SSE / WebSocket</span>
+┌──────────────────────┴───────────────────────────────────────┐
+│  <span class="l2">API 网关 (FastAPI)</span>                                         │
+│  JWT 认证 · RBAC 4角色 · SSE 实时推送 · OpenAPI 强类型        │
+└──┬──────────┬──────────┬──────────┬──────────────────────────┘
+   │          │          │          │
+┌──▼────┐ ┌──▼─────┐ ┌──▼───┐ ┌───▼───────────┐
+│告警接入│ │Agent   │ │漏洞  │ │ 对话AI助手    │
+│Kafka+ │ │纳管WS  │ │扫描  │ │ 4路意图路由   │
+│HTTP   │ │规则分发│ │TaskQ │ │ KB+Web检索    │
+└──┬────┘ └──┬─────┘ └──┬───┘ └───────────────┘
+   │         │          │
+┌──▼─────────▼──────────▼─────────────────────────────────────┐
+│  <span class="l3">LangGraph 编排引擎</span>                                            │
+│  主图: entry→分流→研判→漏洞验证→聚合→响应→完成                │
+│  子图: investigation · vuln_hunter · responder               │
+└──┬──────┬──────┬──────┬──────┬───────────────────────────────┘
+   │      │      │      │      │
+┌──▼──┐ ┌▼───┐ ┌▼───┐ ┌▼───┐ ┌▼──────────────────────┐
+│Deep-│ │ES  │ │Redis│ │Mil- │ │Neo4j (ATT&CK 2143节点)│
+│Seek │ │事件│ │审批 │ │vus  │ │知识图谱                │
+│LLM  │ │审计│ │总线 │ │向量 │ │                        │
+└─────┘ └────┘ └────┘ └─────┘ └────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│  <span class="l4">Agent 端 (Go 1.22, 跨平台)</span>                                   │
+│  注册入网 · WS长连接 · 规则扫描(matcher+Nuclei)               │
+│  资源监控 · 自升级 · Ed25519签名验证 · 进程保护                │
+└──────────────────────────────────────────────────────────────┘
+</pre>
+  </div>
+
+  <h4 style="color:var(--text);margin-bottom:10px;">技术栈</h4>
+  <div class="tbl-wrap">
+    <table>
+      <tr><th>层</th><th>技术选型</th></tr>
+      <tr><td>编排</td><td>LangGraph 0.2.28（主图 + 3 子图）</td></tr>
+      <tr><td>LLM</td><td>DeepSeek / Claude / OpenAI 可切换（ModelAdapter）</td></tr>
+      <tr><td>后端</td><td>Python 3.11 · FastAPI · Celery · aiokafka</td></tr>
+      <tr><td>存储</td><td>ES(事件+审计) · Redis(审批+总线) · Milvus(向量) · Neo4j(ATT&CK)</td></tr>
+      <tr><td>前端</td><td>React 18 · TypeScript · antd5 · @ant-design/charts · Vite</td></tr>
+      <tr><td>Agent</td><td>Go 1.22 · WebSocket · Nuclei CLI · Ed25519</td></tr>
+      <tr><td>质量</td><td>ruff · mypy(strict) · pytest(257) · Playwright E2E</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════ 三、功能演示脚本 ═══════════ -->
+<section class="container sec">
+  <h2>三、功能演示脚本</h2>
+  <p class="sec-sub">11 个模块，逐个演示，约 30 分钟</p>
+
+  <!-- Module 1 -->
+  <div class="mod">
+    <h3>模块 1：登录与主题切换</h3>
+    <div class="path">浏览器打开 → 登录页 → 进入大屏（2 min）</div>
+    <h5>功能点</h5>
+    <ul>
+      <li>JWT 认证登录（admin / analyst / responder / viewer 四种角色）</li>
+      <li>RBAC 权限控制：不同角色看到不同菜单（responder 能看到审批，viewer 只读）</li>
+      <li><strong>四套 UI 主题</strong>：亮色 / 暗色 / 亮侧栏+暗内容 / 暗侧栏+亮内容，一键切换</li>
+      <li>演示数据注入按钮（管理员可见）</li>
+    </ul>
+    <div class="ops">
+      <h5>演示操作</h5>
+      <ol>
+        <li>打开 <code>http://localhost:5173</code> → 看到登录页</li>
+        <li>输入 <strong>admin / demo123</strong> → 登录成功，进入态势感知大屏</li>
+        <li>右上角主题切换下拉框 → 依次切换 4 套主题</li>
+        <li>观察左侧导航菜单的权限差异</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- Module 2 -->
+  <div class="mod">
+    <h3>模块 2：态势感知大屏</h3>
+    <div class="path">首页 Dashboard（3 min）</div>
+    <h5>功能点</h5>
+    <ul>
+      <li><strong>4 个统计卡片</strong>：总事件数 / 真阳性 / 待审批 / 平均处理时长</li>
+      <li><strong>饼图</strong>：事件结论分布（真阳性 / 假阳性 / 未知 / 忽略）</li>
+      <li><strong>柱状图</strong>：事件定级分布（严重 → 提示，带颜色映射）</li>
+      <li><strong>趋势折线图</strong>：24h 事件趋势，支持时间窗口切换</li>
+      <li><strong>SSE 实时刷新</strong>：无需手动刷新，新事件自动更新图表</li>
+    </ul>
+    <div class="highlight-box">
+      <p><strong>技术亮点：</strong>数据源走 ES 聚合查询；实时通道 SSE（Redis pub/sub 跨 worker fan-out）；中文标签自动映射</p>
+    </div>
+  </div>
+
+  <!-- Module 3 -->
+  <div class="mod">
+    <h3>模块 3：事件队列与推理链详情</h3>
+    <div class="path">事件队列 → 点击某条 → 事件详情（4 min）</div>
+    <h5>功能点</h5>
+    <ul>
+      <li>事件列表：ID / 源 / 定级 / 结论 / 置信度 / 状态 / 时间，支持筛选和分页</li>
+      <li><strong>推理链 Timeline</strong>：每一步 AI 推理过程可视化</li>
+      <li>entry → orchestrator（分流决策）→ cti_analyst（威胁情报查询）→ investigator（综合研判）→ aggregator（汇聚）→ 最终结论</li>
+      <li>IOC 提取结果：IP、域名、Hash、URL（自动脱敏）</li>
+      <li>审批状态 + SSE 实时追加 trace 步骤</li>
+    </ul>
+    <div class="highlight-box">
+      <p><strong>技术亮点：</strong>推理链每步带耗时、节点名、输入输出摘要；trace 存 ES 按 event_id 聚合；SSE 实时推送状态变更</p>
+    </div>
+  </div>
+
+  <!-- Module 4 -->
+  <div class="mod">
+    <h3>模块 4：HITL 分级审批流程</h3>
+    <div class="path">审批列表 → 点击审批 → 批准/拒绝（3 min）</div>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>级别</th><th>触发条件</th><th>所需票数</th></tr>
+        <tr><td>L1</td><td>低风险自动审批（封禁本机 IP）</td><td style="color:var(--green);">0（自动）</td></tr>
+        <tr><td>L2</td><td>自动审批（通知运维群）</td><td style="color:var(--green);">0（自动）</td></tr>
+        <tr><td>L3</td><td>限制单台主机脚本下发</td><td style="color:var(--orange);">1 人 quorum</td></tr>
+        <tr><td>L4</td><td>多机协同封锁</td><td style="color:var(--red);">2 人 quorum</td></tr>
+        <tr><td>L5</td><td>跨域防火墙变更</td><td style="color:var(--red);">2 人 + 风控会签</td></tr>
+      </table>
+    </div>
+    <div class="highlight-box">
+      <p><strong>技术亮点：</strong>Redis Lua 原子 quorum · Celery 超时兜底 · 企微/钉钉 webhook 通知 · 审批后自动 execute/reject</p>
+    </div>
+  </div>
+
+  <!-- Module 5 -->
+  <div class="mod">
+    <h3>模块 5：主机纳管 — Agent 注册与部署</h3>
+    <div class="path">主机纳管 → 创建注册令牌 → 安装 Agent → 主机上线（4 min）</div>
+    <h5>功能点</h5>
+    <ul>
+      <li><strong>主机组管理</strong>：创建/删除分组，主机可按组归类</li>
+      <li><strong>注册令牌</strong>：生成一次性 enroll token，带 TTL 过期</li>
+      <li><strong>三种安装方式</strong>：一键复制安装命令 / 下载安装脚本 / 手动下载二进制</li>
+      <li><strong>主机列表</strong>：主机名/组/OS/Agent版本/在线状态/最后心跳</li>
+      <li><strong>Agent 生命周期</strong>：在线 → 离线 → 已下线（decommission）→ 永久删除（含 token 吊销）</li>
+      <li><strong>Agent 远程升级</strong>：服务端推送新版本 → Agent 自升级</li>
+    </ul>
+    <div class="highlight-box">
+      <p><strong>注册流程：</strong>Agent 启动 → 读取 enroll_token → POST /enroll (Ed25519 key exchange) → 获取 agent_id + token + server_public_key → 保存 config.json → 建立 WebSocket 长连接 → 开始心跳</p>
+    </div>
+  </div>
+
+  <!-- Module 6 -->
+  <div class="mod">
+    <h3>模块 6：扫描任务 — 表单式 &amp; 对话式</h3>
+    <div class="path">扫描任务 → 表单创建 / 对话式创建（5 min）</div>
+    <h5>表单式创建</h5>
+    <ul>
+      <li>目标选择器：按主机组 / 按主机名 / 按 IP-CIDR</li>
+      <li>扫描模块：系统漏洞 (sys_vuln) / 安全基线 (baseline)</li>
+      <li>双引擎：matcher（CVE 精确匹配）+ Nuclei（YAML 模板）</li>
+      <li>资源限制：CPU/内存上限，定时调度 cron</li>
+    </ul>
+    <h5>对话式创建（ChatScan）</h5>
+    <ul>
+      <li>豆包风格对话界面，自然语言描述 → AI 解析为结构化 ScanIntent → 确认卡片</li>
+      <li>多轮对话细化需求，多会话管理，模型动态切换</li>
+    </ul>
+    <pre><code><span class="cm"># 示例对话</span>
+<span class="sh-prompt">用户：</span>扫描 web-server 组的所有主机，检查系统漏洞
+<span class="sh-prompt">AI：</span>  好的，将对 web-server 组（3台主机）执行系统漏洞扫描，Nuclei 引擎。
+        <span class="sh-out">[确认卡片：目标/模块/引擎] [执行扫描]</span>
+<span class="sh-prompt">用户：</span>加上基线检查
+<span class="sh-prompt">AI：</span>  已更新：扫描模块 = 系统漏洞 + 安全基线。
+        <span class="sh-out">[执行扫描]</span></code></pre>
+  </div>
+
+  <!-- Module 7 -->
+  <div class="mod">
+    <h3>模块 7：扫描监控 — SSE 实时进度</h3>
+    <div class="path">扫描监控页（3 min）</div>
+    <h5>功能点</h5>
+    <ul>
+      <li><strong>实时进度条</strong>：总体进度 + 当前主机/模块</li>
+      <li><strong>SSE 事件流</strong>：scan_start / host_start / finding / host_done / task_progress / task_done</li>
+      <li><strong>发现列表</strong>：CVE ID / 名称 / 严重等级 / 所在主机 / 检测时间</li>
+      <li><strong>AI 严重等级评估</strong>：AI 二次评估修正误报等级</li>
+      <li><strong>取消扫描 + HTML 报告导出</strong></li>
+    </ul>
+    <div class="highlight-box">
+      <p><strong>底层链路：</strong>服务端创建任务 → Redis Stream 入队 → TaskWorker → WS 下发 scan_command → Agent 执行 → 实时回传 → ES 写入 → SSE 推前端</p>
+    </div>
+  </div>
+
+  <!-- Module 8 -->
+  <div class="mod">
+    <h3>模块 8：漏洞清单与扫描报告</h3>
+    <div class="path">漏洞清单 → 筛选 → 批量操作 / 扫描报告（3 min）</div>
+    <h5>漏洞清单</h5>
+    <ul>
+      <li>全量漏洞：CVE / 名称 / 严重等级 / AI 评估等级 / 状态(open/fixed/accepted) / 主机 / 类别</li>
+      <li>筛选（按等级/状态）+ 批量标记操作 + AI 误报过滤标记</li>
+    </ul>
+    <h5>扫描报告</h5>
+    <ul>
+      <li>按 task_id 查询：统计摘要 + 等级分布 + 主机汇总 + 详细发现列表 + 修复建议</li>
+      <li><strong>HTML 一键导出</strong>：包含统计图表 + 详细列表的完整报告，邮件外发无依赖</li>
+    </ul>
+  </div>
+
+  <!-- Module 9 -->
+  <div class="mod">
+    <h3>模块 9：规则管理</h3>
+    <div class="path">规则管理页（2 min）</div>
+    <h5>功能点</h5>
+    <ul>
+      <li>规则列表：名称 / CVE / 分类(sys_vuln/baseline) / 严重等级 / 修复建议</li>
+      <li>筛选搜索 + 规则详情 + <strong>离线导入 ZIP 规则包</strong></li>
+      <li><strong>规则签名分发</strong>：Ed25519 签名 → WS 下发 → Agent 验证 → 热加载</li>
+      <li>版本管理：规则版本号追踪</li>
+    </ul>
+    <div class="highlight-box">
+      <p><strong>分发链路：</strong>服务端上传 → 版本号+1 → WS 下发 rule_sync (Ed25519签名) → Agent 验签 → 下载 ZIP → 热加载</p>
+    </div>
+  </div>
+
+  <!-- Module 10 -->
+  <div class="mod">
+    <h3>模块 10：模型管理</h3>
+    <div class="path">模型管理页（2 min）</div>
+    <h5>功能点</h5>
+    <ul>
+      <li>多模型支持：OpenAI / Claude / vLLM / 本地模型</li>
+      <li>模型 CRUD：添加 / 编辑 / 删除 / 启用 / 禁用</li>
+      <li>默认模型切换 + 参数配置（temperature / max_tokens / base_url）</li>
+      <li><strong>API Key 安全</strong>：列表不返回明文，仅显示是否已配置</li>
+      <li>预置 4 家模型服务商参数，开箱即用</li>
+    </ul>
+    <div class="highlight-box">
+      <p><strong>ModelAdapter 统一抽象层</strong> — 支持 structured output (JSON Schema)，切换模型不影响业务代码，DB 持久化（llm_models 表）</p>
+    </div>
+  </div>
+
+  <!-- Module 11 -->
+  <div class="mod">
+    <h3>模块 11：AI 对话助手 — 四路意图路由</h3>
+    <div class="path">扫描任务对话式 Tab / 独立对话入口（3 min）</div>
+    <div class="card-row" style="margin-top:12px;">
+      <div class="card card-accent">
+        <div class="icon">🔍</div><h4>scan — 扫描意图</h4>
+        <p>自然语言 → 结构化 ScanIntent → 确认卡片 → 一键执行</p>
+      </div>
+      <div class="card card-accent t2">
+        <div class="icon">📚</div><h4>project — 项目问答</h4>
+        <p>基于 docs/ RAG 检索 + LLM 总结，引用文件名来源</p>
+      </div>
+      <div class="card card-accent t3">
+        <div class="icon">🌐</div><h4>web — 联网搜索</h4>
+        <p>DuckDuckGo HTML 搜索最新 CVE/安全新闻，引用 URL</p>
+      </div>
+      <div class="card card-accent t4">
+        <div class="icon">💬</div><h4>chat — 自由对话</h4>
+        <p>通用聊天，知识问答，助手介绍</p>
+      </div>
+    </div>
+    <div class="highlight-box" style="margin-top:14px;">
+      <p><strong>技术实现：</strong>用户消息 → /api/v1/chat → LLM 意图分类（4选1）→ scan/project/web/chat 四路分发</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 四、curl 模拟告警 ═══════════ -->
+<section class="container sec">
+  <h2>四、模拟外部告警进入（curl 演示）</h2>
+  <p class="sec-sub">用 curl 推送告警，模拟 Kafka/HTTP 外部告警进入，配合前端 SSE 实时观察</p>
+
+  <h4 style="color:var(--text);margin-bottom:8px;">获取 Token</h4>
+  <pre><code><span class="cm"># 登录获取 JWT token</span>
+<span class="sh-prompt">$</span> export TOKEN=$(curl -s -X POST http://localhost:8000/login \
+    -H <span class="str">"Content-Type: application/json"</span> \
+    -d <span class="str">'{"username":"admin","password":"demo123"}'</span> | jq -r <span class="str">'.access_token'</span>)</code></pre>
+
+  <h4 style="color:var(--text);margin:18px 0 8px;">注入演示种子数据</h4>
+  <pre><code><span class="cm"># 一键注入 5 条样例事件（含 L3 待审批）</span>
+<span class="sh-prompt">$</span> curl -s -X POST http://localhost:8000/api/v1/demo/seed \
+    -H <span class="str">"Authorization: Bearer $TOKEN"</span> | jq
+<span class="sh-out">→ {"status":"ok","injected":5}</span></code></pre>
+
+  <h4 style="color:var(--text);margin:18px 0 8px;">提交自定义告警</h4>
+  <pre><code><span class="cm"># 蜜罐告警 — 会命中 honeypot 快捷通道</span>
+<span class="sh-prompt">$</span> curl -s -X POST <span class="str">"http://localhost:8000/api/v1/events"</span> \
+    -H <span class="str">"Authorization: Bearer $TOKEN"</span> \
+    -H <span class="str">"Content-Type: application/json"</span> \
+    -d <span class="str">'{
+  "sanitized_text": "Honeypot captured whoami && id from 203.0.113.99 on eth0",
+  "iocs": {"ip": ["203.0.113.99"], "command": ["whoami","id"]},
+  "source": "honeypot"
+}'</span> | jq
+<span class="sh-out">→ {"event_id":"...","status":"processing"}</span>
+
+<span class="cm"># CVE 漏洞利用尝试</span>
+<span class="sh-prompt">$</span> curl -s -X POST <span class="str">"http://localhost:8000/api/v1/events"</span> \
+    -H <span class="str">"Authorization: Bearer $TOKEN"</span> \
+    -H <span class="str">"Content-Type: application/json"</span> \
+    -d <span class="str">'{
+  "sanitized_text": "CVE-2024-5678 exploit: Log4j JNDI injection from 10.0.1.200 to C2 198.51.100.50",
+  "iocs": {"ip": ["10.0.1.200","198.51.100.50"], "cve": ["CVE-2024-5678"]},
+  "source": "ids"
+}'</span> | jq
+
+<span class="cm"># 同步模式 — ?sync=true 等待管线完全跑完，实时看推理结果</span>
+<span class="sh-prompt">$</span> curl -s -X POST <span class="str">"http://localhost:8000/api/v1/events?sync=true"</span> \
+    -H <span class="str">"Authorization: Bearer $TOKEN"</span> \
+    -H <span class="str">"Content-Type: application/json"</span> \
+    -d <span class="str">'{
+  "sanitized_text": "Lateral movement via RDP from workstation 10.0.1.100 to DC 10.0.1.10",
+  "iocs": {"ip": ["10.0.1.100","10.0.1.10"]},
+  "source": "edr"
+}'</span> | jq
+
+<span class="cm"># 查询推理链</span>
+<span class="sh-prompt">$</span> curl -s <span class="str">"http://localhost:8000/api/v1/events/&lt;event_id&gt;/trace"</span> \
+    -H <span class="str">"Authorization: Bearer $TOKEN"</span> | jq</code></pre>
+</section>
+
+<!-- ═══════════ 五、功能地图 ═══════════ -->
+<section class="container sec">
+  <h2>五、功能地图总结</h2>
+  <p class="sec-sub">五大模块 · 完整功能全景</p>
+
+  <div class="feat-grid">
+    <div class="feat-box">
+      <h4><span class="dot" style="background:var(--primary);"></span>安全告警研判</h4>
+      <ul>
+        <li>Kafka/HTTP 双入口告警接入</li>
+        <li>LLM 自动分流（蜜罐规则优先）</li>
+        <li>多步推理链（CTI→研判→汇聚）</li>
+        <li>IOC 自动提取 + 脱敏</li>
+        <li>置信度评分 + 证据链</li>
+        <li>GraphRAG 知识增强 (ATT&CK 2143)</li>
+        <li>全程 ES 审计追踪</li>
+        <li>实时 SSE 推送</li>
+      </ul>
+    </div>
+    <div class="feat-box">
+      <h4><span class="dot" style="background:var(--teal);"></span>漏洞扫描</h4>
+      <ul>
+        <li>matcher + Nuclei 双引擎</li>
+        <li>表单式 + 对话式任务创建</li>
+        <li>SSE 实时进度监控</li>
+        <li>AI 漏洞等级二次评估</li>
+        <li>漏洞生命周期管理</li>
+        <li>批量操作</li>
+        <li>HTML 报告导出</li>
+        <li>任务取消 / 定时调度</li>
+      </ul>
+    </div>
+    <div class="feat-box">
+      <h4><span class="dot" style="background:var(--orange);"></span>响应处置</h4>
+      <ul>
+        <li>10 个预设 YAML 剧本</li>
+        <li>HITL 分级审批（L1-L5）</li>
+        <li>Redis Lua 原子 quorum</li>
+        <li>企微/钉钉 webhook 通知</li>
+        <li>notify/siem_tag/dns_block</li>
+        <li>幂等执行 + 失败回滚</li>
+        <li>dry_run 安全闸默认开启</li>
+        <li>Celery 超时兜底</li>
+      </ul>
+    </div>
+    <div class="feat-box">
+      <h4><span class="dot" style="background:var(--green);"></span>主机纳管</h4>
+      <ul>
+        <li>Agent Ed25519 注册入网</li>
+        <li>WebSocket 长连接通信</li>
+        <li>主机分组管理</li>
+        <li>Agent 远程升级推送</li>
+        <li>规则签名分发</li>
+        <li>资源监控 (CPU/内存/磁盘)</li>
+        <li>Agent 完整生命周期管理</li>
+        <li>跨平台 (Linux/Win/macOS)</li>
+      </ul>
+    </div>
+    <div class="feat-box">
+      <h4><span class="dot" style="background:var(--purple);"></span>AI 对话 &amp; 平台</h4>
+      <ul>
+        <li>4 路意图路由</li>
+        <li>对话式扫描任务创建</li>
+        <li>项目文档 RAG 问答</li>
+        <li>联网安全搜索</li>
+        <li>多轮对话历史</li>
+        <li>模型动态切换</li>
+        <li>JWT + RBAC 4 角色</li>
+        <li>4 套 UI 主题</li>
+      </ul>
+    </div>
+    <div class="feat-box">
+      <h4><span class="dot" style="background:var(--red);"></span>工程质量</h4>
+      <ul>
+        <li>ruff 全绿零错误</li>
+        <li>mypy strict 零错误</li>
+        <li>257 单元测试</li>
+        <li>Playwright E2E 4/4 通过</li>
+        <li>OpenAPI 强类型生成</li>
+        <li>SSE 实时推送（3通道）</li>
+        <li>规则离线导入/分发</li>
+        <li>中文界面 + 标签映射</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 六、环境准备 ═══════════ -->
+<section class="container sec">
+  <h2>六、演示环境准备清单</h2>
+  <p class="sec-sub">启动顺序 &amp; 演示账号</p>
+
+  <h4 style="color:var(--text);margin-bottom:8px;">启动顺序</h4>
+  <pre><code><span class="cm"># 1. 确保中间件可用（服务器 192.168.80.101）</span>
+<span class="sh-prompt">$</span> docker ps  <span class="sh-out"># Redis, ES, Kafka, Neo4j, Milvus</span>
+
+<span class="cm"># 2. 启动后端 API</span>
+<span class="sh-prompt">$</span> cd V:\project\security-agent
+<span class="sh-prompt">$</span> .venv\Scripts\activate
+<span class="sh-prompt">$</span> uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+<span class="cm"># 3. 启动 TaskWorker（漏洞扫描后台消费）</span>
+<span class="sh-prompt">$</span> python -m src.orchestration.task_worker
+
+<span class="cm"># 4. 启动前端</span>
+<span class="sh-prompt">$</span> cd frontend && npm run dev
+
+<span class="cm"># 5.（可选）启动 Agent 模拟</span>
+<span class="sh-prompt">$</span> cd agent && go run ./cmd/agent</code></pre>
+
+  <h4 style="color:var(--text);margin:18px 0 8px;">演示账号</h4>
+  <div class="tbl-wrap">
+    <table>
+      <tr><th>角色</th><th>用户名</th><th>说明</th></tr>
+      <tr><td>admin</td><td>admin</td><td>全部权限 + 注入演示数据</td></tr>
+      <tr><td>analyst</td><td>analyst</td><td>分析 + 查看（无审批）</td></tr>
+      <tr><td>responder</td><td>responder</td><td>响应 + 审批</td></tr>
+      <tr><td>viewer</td><td>viewer</td><td>只读</td></tr>
+    </table>
+  </div>
+
+  <div class="highlight-box">
+    <p><strong>演示数据：</strong>通过 UI 右上角「注入演示数据」按钮，或调用 <code>POST /api/v1/demo/seed</code>，一键注入 5 条样本事件。</p>
+  </div>
+</section>
+
+<!-- ═══════════ 七、checklist ═══════════ -->
+<section class="container sec">
+  <h2>七、演示 Checklist</h2>
+  <p class="sec-sub">按顺序逐项演示，约 8~10 分钟</p>
+  <ul class="checklist">
+    <li>🔐 登录页 + 主题切换（4 套皮肤）</li>
+    <li>📊 态势感知大屏实时刷新（SSE）</li>
+    <li>📡 curl 模拟告警进入 → 前端 SSE 实时看到</li>
+    <li>📋 事件队列 + 详情推理链 Timeline</li>
+    <li>✅ 审批流程（L3 quorum 批准/拒绝）</li>
+    <li>🖥️ 主机纳管：创建令牌 → Agent 注册 → 上线</li>
+    <li>📝 表单式创建扫描任务</li>
+    <li>💬 对话式创建扫描任务（ChatScan）</li>
+    <li>📡 扫描实时监控（SSE 进度条 + 事件流）</li>
+    <li>🐛 漏洞清单筛选 + 批量标记操作</li>
+    <li>📄 扫描报告查看 + HTML 一键导出</li>
+    <li>📐 规则浏览 + 搜索 + 离线导入</li>
+    <li>🤖 模型管理 CRUD + 默认切换</li>
+    <li>🧠 AI 对话：项目问答 + 联网搜索 + 扫描意图</li>
+  </ul>
+</section>
+
+<footer class="footer">
+  SecAgent v0.1.0 · 257 测试 · ruff/mypy 零错误 · Playwright E2E 4/4 通过
+</footer>
+
+</body>
+</html>

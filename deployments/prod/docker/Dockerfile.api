@@ -1,0 +1,132 @@
+﻿# =====================================================================
+# Security-Agent API image
+# 多阶段构建:
+#   - builder: 安装依赖 + 复制源码
+#   - runtime: 精简运行时,只保留运行所需依赖
+#
+# 网络说明:
+#   编译期需要拉 pypi/debian 源,通过 build args 注入代理。
+#   运行时无外网依赖(LLM/中间件由用户环境提供)。
+#
+# Build example:
+#   docker build -t secagent-api:0.1.0 \
+#     -f deployments/prod/docker/Dockerfile.api \
+#     --build-arg HTTP_PROXY=http://192.168.254.121:7897 \
+#     --build-arg HTTPS_PROXY=http://192.168.254.121:7897 \
+#     .
+# =====================================================================
+
+# ---------- 1. builder ----------
+FROM python:3.11-slim AS builder
+
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ARG NO_PROXY=127.0.0.1,localhost,.svc.cluster.local,.local
+
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY} \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# 安装编译工具 + 系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        libffi-dev \
+        libssl-dev \
+        libpq-dev \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# 先复制依赖清单 + 源码,利用 docker layer 缓存
+COPY pyproject.toml ./
+COPY src ./src
+
+# 安装项目依赖(不安装 dev/test)
+RUN pip install --no-cache-dir \
+        "fastapi==0.115.4" \
+        "uvicorn[standard]==0.32.0" \
+        "pydantic==2.9.2" \
+        "pydantic-settings==2.6.1" \
+        "asyncpg==0.30.0" \
+        "aiokafka==0.11.0" \
+        "redis==5.2.0" \
+        "elasticsearch==8.15.1" \
+        "pymilvus==2.4.9" \
+        "neo4j==5.26.0" \
+        "celery==5.4.0" \
+        "httpx==0.27.2" \
+        "python-jose[cryptography]==3.3.0" \
+        "passlib[bcrypt]==1.7.4" \
+        "python-multipart==0.0.12" \
+        "stix2==3.0.1" \
+        "PyYAML==6.0.2" \
+        "structlog==24.4.0" \
+        "watchdog==5.0.3" \
+        "docker==7.2.0" \
+        "langgraph==0.2.28" \
+        "langchain==0.3.7" \
+        "langchain-openai==0.2.9" \
+        "langchain-community==0.3.7" \
+    && pip install --no-cache-dir --no-deps "langchain-anthropic==0.3.0" \
+    || true
+
+# ---------- 2. runtime ----------
+FROM python:3.11-slim AS runtime
+
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ENV http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# 运行时只需要 libpq / ca-certificates / tini / jq(nacos 推送用)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 \
+        ca-certificates \
+        curl \
+        tini \
+        jq \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r secagent && useradd -r -g secagent -d /app -s /sbin/nologin secagent
+
+WORKDIR /app
+
+# 拷贝已安装的 site-packages + 源码
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY src ./src
+COPY pyproject.toml ./
+
+# 部署脚本(Nacos 推送 / PG schema init / 一次性配置)
+COPY deployments/prod/docker/init-pg.sql ./deployments/prod/docker/init-pg.sql
+COPY deployments/prod/docker/init-nacos.sh ./deployments/prod/docker/init-nacos.sh
+COPY deployments/prod/docker/nacos-config.yaml ./deployments/prod/docker/nacos-config.yaml
+COPY deployments/prod/docker/entrypoint.sh /entrypoint.sh
+
+# 把 Agent 二进制打进镜像,供 /api/v1/agents/binary/{os}/{arch} 提供下载
+COPY deployments/agent/dist /app/deployments/agent/dist
+
+RUN chmod +x /entrypoint.sh /app/deployments/prod/docker/init-nacos.sh \
+    && chown -R secagent:secagent /app
+
+USER secagent
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
+CMD ["api"]

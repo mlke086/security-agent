@@ -89,14 +89,12 @@ EOF
     exit 1
 fi
 chmod 0750 "$INSTALL_DIR/agent"
-install_nuclei || true
-install_nuclei_templates || true
+# F3-SELINUX: curl -o preserves the inode's selinux context. If the previous
+# binary had tmp_t (e.g. from an upgrade that used CreateTemp+Rename), the
+# new binary inherits it and systemd execve() fails with 203/EXEC.
+restorecon "$INSTALL_DIR/agent" 2>/dev/null || true
 
-# --- 4. Optional CA cert (best-effort) ----------------------------------------
-curl -fsSL --fail -H "Authorization: Bearer $TOKEN" "$CONSOLE/api/v1/agents/ca" -o "$CONFIG_DIR/ca.pem" 2>/dev/null \
-    || log "CA cert not available (continuing without)."
-
-# --- 4b. Best-effort nuclei CLI download (P0 / 2026-07-18) ---------------------
+# --- 4. Best-effort nuclei CLI download (P0 / 2026-07-18) ---------------------
 # The Go agent ships a runNuclei() path that shells out to /opt/secagent/bin/nuclei.
 # We download it from the official projectdiscovery/nuclei release. The download
 # is best-effort: matcher-only mode still works without nuclei, so we swallow
@@ -122,7 +120,7 @@ install_nuclei() {
     rm -rf "$TMPDIR_NUC"
 }
 
-# --- 4c. Best-effort nuclei templates sync (P1-GO-4 / 2026-07-19) ------------
+# --- 4b. Best-effort nuclei templates sync (P1-GO-4 / 2026-07-19) ------------
 # The Go agent's nuclei runner reads templates from $INSTALL_DIR/templates.
 # nuclei ships its own -update flag, but the bundled templates are huge
 # (multi-thousand templates) so we skip them here and instead drop a small
@@ -154,7 +152,14 @@ install_nuclei_templates() {
     rm -rf "$TMPDIR_TPL"
 }
 
-# --- 5. systemd unit (enable now, start later once config has credentials) ---
+install_nuclei || true
+install_nuclei_templates || true
+
+# --- 5. Optional CA cert (best-effort) ----------------------------------------
+curl -fsSL --fail -H "Authorization: Bearer $TOKEN" "$CONSOLE/api/v1/agents/ca" -o "$CONFIG_DIR/ca.pem" 2>/dev/null \
+    || log "CA cert not available (continuing without)."
+
+# --- 6. systemd unit (enable now, start later once config has credentials) ---
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOFSVC
 [Unit]
 Description=Security Agent

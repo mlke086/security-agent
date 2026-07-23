@@ -1,4 +1,4 @@
-﻿"""Server-side orchestration for controlled Agent binary upgrades."""
+"""Server-side orchestration for controlled Agent binary upgrades."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def prepare_upgrade(host: Host, requested_version: str | None = None) -> Prepare
     base = get_settings().agent_console_external_url.rstrip("/")
     if not base:
         raise UpgradeNotAvailableError("AGENT_CONSOLE_EXTERNAL_URL is not configured")
-    download_url = f"{base}/api/v1/agents/binary/{host.os.lower()}/{host.arch.lower()}"
+    download_url = f"{base}/api/v1/agents/binary/{host.os.lower()}/{host.arch.lower()}?agent_id={host.agent_id}"
     message = {
         "v": 1,
         "type": "agent_upgrade",
@@ -155,4 +155,3 @@ async def confirm_upgrade_from_heartbeat(agent_id: str, current_version: str) ->
             error="",
         )
     await update_upgrade_status(agent_id, **changes)
-

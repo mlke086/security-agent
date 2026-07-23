@@ -35,15 +35,13 @@ from src.agents.models import (
 )
 from src.agents.signing import get_public_key_hex
 from src.agents.store import get_vulnscan_store
-from src.agents.ws_gateway import get_agent_gateway
 from src.agents.upgrade import (
     UpgradeNotAvailableError,
-    confirm_upgrade_from_heartbeat,
     get_upgrade_status,
     prepare_upgrade,
-    record_upgrade_ack,
     update_upgrade_status,
 )
+from src.agents.ws_gateway import get_agent_gateway
 from src.api.auth.routes import require_role
 from src.common.audit.audit_logger import get_audit_logger
 from src.common.config.settings import get_settings
@@ -219,7 +217,7 @@ async def api_enroll_host(req: EnrollRequest, request: Request):
     registration replaces it cleanly. This keeps the host list de-duplicated
     by IP and prevents stale offline rows from accumulating.
 
-    P1-6 濞ｅ浂鍠栭ˇ鏌ユ晬濞嗙硽 闁告ê顭烽崳鎼佹偨閵婏附绠涢柛鏃撶磿椤忣剟宕ｉ娆庣箚 IP闁挎稑婀?Forwarded-For 闁?request.client.host闁挎稑顧€缁?    濞戞挸绉虫穱濠冪閺勫浚鍤炴慨鐟板€风紞瀣煂瀹€鈧▓?req.ip -- 闁告熬绠戦崹顖炲绩鐠囨彃姣婇柤鏉挎噽閺併倝宕ラ崼鐔恒€?enroll token 濞寸⒈浜埀?ip 闁告鍟胯ぐ?    decommission_host_by_ip(濞寸姷绮崜鐧穚) 濞戞挸顑囬崵搴㈢缂佹ê澹堥柛锔哄妺妤犲洦绋夌紒妯荤皻闁靛棔鎷積q.ip 濞寸姴鎳嶇紞鏃€绋夐崫鍕綌缂佲偓閾忚鏆?    Host.ip 閻庢稒顨嗛灞剧┍濠靛牊娈岄柨娑樻綂gent 濞戞挸锕ユ慨銈夋儍閸曨厽鍩傞悗鍦仜閸炲绱?IP闁挎稑顒T 闁告艾瀛╁﹢鍥礉閿涘嫷浼傞柣顏勵儎缁楀宕氱敮顔剧闁?    """
+    P1-6 濞ｅ浂鍠栭ˇ鏌ユ晬濞嗙硽 闁告ê顭烽崳鎼佹偨閵婏附绠涢柛鏃撶磿椤忣剟宕ｉ娆庣箚 IP闁挎稑婀?Forwarded-For 闁?request.client.host闁挎稑顧€缁?    濞戞挸绉虫穱濠冪閺勫浚鍤炴慨鐟板€风紞瀣煂瀹€鈧▓?req.ip -- 闁告熬绠戦崹顖炲绩鐠囨彃姣婇柤鏉挎噽閺併倝宕ラ崼鐔恒€?enroll token 濞寸⒈浜埀?ip 闁告鍟胯ぐ?    decommission_host_by_ip(濞寸姷绮崜鐧穚) 濞戞挸顑囬崵搴㈢缂佹ê澹堥柛锔哄妺妤犲洦绋夌紒妯荤皻闁靛棔鎷積q.ip 濞寸姴鎳嶇紞鏃€绋夐崫鍕綌缂佲偓閾忚鏆?    Host.ip 閻庢稒顨嗛灞剧┍濠靛牊娈岄柨娑樻綂gent 濞戞挸锕ユ慨銈夋儍閸曨厽鍩傞悗鍦仜閸炲绱?IP闁挎稑顒T 闁告艾瀛╁﹢鍥礉閿涘嫷浼傞柣顏勵儎缁楀宕氱敮顔剧闁?"""
     valid = await validate_enroll_token(req.token)
     if not valid:
         raise HTTPException(
@@ -314,20 +312,30 @@ async def api_download_binary(
     arch: str,
     token: str | None = Query(default=None),
     authorization: str | None = Header(default=None),
+    agent_id: str | None = Query(default=None),
 ):
     """Download the agent binary for ``os``/``arch``.
 
-    The enrollment token is accepted via either the ``token`` query param (legacy,
-    kept for backward compatibility with older install scripts) or the
-    ``Authorization: Bearer <token>`` header. Header-based auth is preferred
-    because query params leak into proxy / shell logs.
+    Accepts either an enrollment token (install scripts, operator curl) or an
+    agent token (self-upgrade flow).  Enrollment tokens are tried first;
+    when that fails and an ``agent_id`` is present, the token is validated as
+    an agent bearer token instead.
     """
     effective = _extract_token(token, authorization)
     if not effective:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again."
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
         )
+    # try enrollment token first, fall back to agent token for self-upgrade
     valid = await peek_enroll_token(effective)
+    if not valid and agent_id:
+        try:
+            from src.agents.enroll import validate_agent_token
+
+            valid = await validate_agent_token(agent_id, effective)
+        except Exception:
+            valid = False
     if not valid:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -365,7 +373,8 @@ async def api_download_ca(
     effective = _extract_token(token, authorization)
     if not effective:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again."
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
         )
     valid = await peek_enroll_token(effective)
     if not valid:
@@ -377,7 +386,10 @@ async def api_download_ca(
     settings = get_settings()
     ca_path = settings.agent_ca_cert
     if not ca_path or not Path(ca_path).is_file():
-        raise HTTPException(status_code=404, detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.")
+        raise HTTPException(
+            status_code=404,
+            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+        )
 
     return FileResponse(
         path=ca_path,
@@ -464,7 +476,6 @@ async def api_create_group(
             detail="Group already exists",
         )
     await get_audit_logger().log(
-
         node="agents.router",
         action="create_group",
         actor=current_user.username,
@@ -481,7 +492,7 @@ async def api_delete_group(
     """Delete a host group (admin only).
 
     P1-4 濞ｅ浂鍠栭ˇ鏌ユ晬濮樿京鐭嬮柛鎰噸缁盯寮垫径澶婄槣闁哄牏鍎ゅ鍌炲箯閹烘梻鍗滈柛鎺斿█濞呭酣鏁嶉崼锝囩闁?409闁挎稑顧€缁辨繈鏌嗛崹顔煎赋 hosts.group_name
-    鐎殿喗娲滈弫銈咁啅閹绘帒鐏╃紓浣稿瑜板骞?legacy 閻庢稏鍊曢崝褰掑Υ閸屾稒鎯欏ù锝嗙矊閹叉娊妫侀埀顒勫礂閸絿璁ｇ紒澶岀帛閸ㄣ劍绋夌€ｎ剙娈犵紓浣稿閸炲瓨绋夌紒妯荤皻闁?    """
+    鐎殿喗娲滈弫銈咁啅閹绘帒鐏╃紓浣稿瑜板骞?legacy 閻庢稏鍊曢崝褰掑Υ閸屾稒鎯欏ù锝嗙矊閹叉娊妫侀埀顒勫礂閸絿璁ｇ紒澶岀帛閸ㄣ劍绋夌€ｎ剙娈犵紓浣稿閸炲瓨绋夌紒妯荤皻闁?"""
     remaining = await delete_group(name)
     if remaining > 0:
         raise HTTPException(
@@ -507,7 +518,10 @@ async def api_update_host(
     """Move a host to a different group (admin only)."""
     host = await update_host_group(agent_id, body.group)
     if not host:
-        raise HTTPException(status_code=404, detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.")
+        raise HTTPException(
+            status_code=404,
+            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+        )
     await get_audit_logger().log(
         event_id="agent",
         node="agents.router",
@@ -575,7 +589,10 @@ async def api_get_host(
     """Get a specific host."""
     host = await get_host(agent_id)
     if not host:
-        raise HTTPException(status_code=404, detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.")
+        raise HTTPException(
+            status_code=404,
+            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+        )
     return host
 
 
@@ -587,10 +604,13 @@ async def api_delete_host(
 ):
     """Delete a host (admin only).
 
-    闂傚洠鍋撴慨?.4闁挎稒顒猽rge=True 闁哄啫澧庢晶鍧楁偠閸℃鐏╅梻鍕╁€х槐娆愮?decommissioned 濞戞挾绮┃鈧柛蹇庢祰椤斿繘鏁嶆径娑氱purge=False 闁哄啯鍎奸拏瀣礆閻樼粯鐝熼柨娑樼墔缁楀懐鐥崠锛勭闁?    """
+    闂傚洠鍋撴慨?.4闁挎稒顒猽rge=True 闁哄啫澧庢晶鍧楁偠閸℃鐏╅梻鍕╁€х槐娆愮?decommissioned 濞戞挾绮┃鈧柛蹇庢祰椤斿繘鏁嶆径娑氱purge=False 闁哄啯鍎奸拏瀣礆閻樼粯鐝熼柨娑樼墔缁楀懐鐥崠锛勭闁?"""
     host = await get_host(agent_id)
     if not host:
-        raise HTTPException(status_code=404, detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.")
+        raise HTTPException(
+            status_code=404,
+            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+        )
     if purge:
         # 闁绘せ鏅濋幃濠囧礆閻樼粯鐝熼柨娑欑煯缁骸顔忛煫顓犵憮缂佹儳銇樼€靛矂寮甸崫鍕笒閻犱線娼荤槐婵嬫焼閸喖甯抽悹鍥跺灠閸ㄥ綊宕烽妸褍娈犲☉鎾剁帛濠р偓
         ok = await delete_host_permanently(agent_id)
@@ -598,11 +618,11 @@ async def api_delete_host(
             raise HTTPException(
                 status_code=422,
                 detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
-            node="agents.router",
-            action="delete_permanent",
-            actor=current_user.username,
-            details={"agent_id": agent_id},
-        )
+                node="agents.router",
+                action="delete_permanent",
+                actor=current_user.username,
+                details={"agent_id": agent_id},
+            )
         return {"status": "ok", "purged": True}
     # P1 (F4) -- revoke the persisted token and tell every worker to
     # drop the live WS so a heartbeat or stale scan_result cannot keep
@@ -637,7 +657,10 @@ async def api_upgrade_agent(
     """
     host = await get_host(agent_id)
     if host is None:
-        raise HTTPException(status_code=404, detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.")
+        raise HTTPException(
+            status_code=404,
+            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+        )
     try:
         prepared = prepare_upgrade(host, body.version)
     except UpgradeNotAvailableError as exc:
@@ -649,7 +672,9 @@ async def api_upgrade_agent(
         agent_id,
         state=state,
         target_version=prepared.version,
-        message="Upgrade command sent to Agent" if delivered else "Agent offline; will retry on reconnect",
+        message="Upgrade command sent to Agent"
+        if delivered
+        else "Agent offline; will retry on reconnect",
         error="",
     )
     await get_audit_logger().log(
@@ -674,7 +699,10 @@ async def api_upgrade_status(
 ):
     """Return the latest upgrade record for this host (operator UI)."""
     if await get_host(agent_id) is None:
-        raise HTTPException(status_code=404, detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.")
+        raise HTTPException(
+            status_code=404,
+            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+        )
     status = await get_upgrade_status(agent_id)
     return {"agent_id": agent_id, "upgrade": status or {"state": "idle"}}
 
@@ -707,7 +735,10 @@ async def api_update_agent_config(
     }
     ok = await gateway.send_to_agent(agent_id, msg)
     if not ok:
-        raise HTTPException(status_code=404, detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.")
+        raise HTTPException(
+            status_code=404,
+            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+        )
     return {"status": "ok"}
 
 
@@ -725,4 +756,3 @@ def _extract_token(query_token, authorization_header):
     if query_token:
         return query_token.strip()
     return None
-

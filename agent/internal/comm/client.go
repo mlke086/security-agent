@@ -165,6 +165,16 @@ func (c *Client) Connect(ctx context.Context) error {
 
 		log.Println("[comm] connected to server")
 
+		// F3-SELINUX (2026-07-23): when the context is cancelled (e.g. SIGTERM
+		// from systemd during an upgrade), immediately close the WebSocket so
+		// the read loop unblocks instead of waiting for the 90s read deadline.
+		// Without this the read loop holds the process alive and systemd escalates
+		// to SIGKILL after TimeoutStopSec.
+		go func() {
+			<-ctx.Done()
+			_ = conn.Close()
+		}()
+
 		// Process offline queue
 		go c.processQueue()
 
@@ -240,7 +250,7 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 			"type": "heartbeat",
 			"ts":   time.Now().UTC().Format(time.RFC3339),
 			"payload": map[string]interface{}{
-				"agent_version": "0.1.0",
+				"agent_version": c.cfg.AgentVersion,
 				"rule_version":  c.RuleVersion(),
 				"hostname":      getHostname(),
 				"os":            runtime.GOOS,

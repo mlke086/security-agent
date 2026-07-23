@@ -1,0 +1,49 @@
+﻿# =====================================================================
+# Security-Agent Frontend image
+# 多阶段:
+#   - builder:  安装依赖 + tsc 校验 + vite build
+#   - runtime:  nginx:alpine 提供静态文件 + 反向代理 /api 到后端
+# =====================================================================
+
+# ---------- 1. builder ----------
+FROM node:20-alpine AS builder
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ENV npm_config_registry=${NPM_REGISTRY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    NODE_OPTIONS=--max-old-space-size=2048
+
+WORKDIR /build
+
+# 单独 COPY package*.json 充分利用 docker layer 缓存
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install --no-audit --no-fund --prefer-offline
+
+# 复制源码并构建
+COPY frontend ./
+# 构建时把 /api 反代目标写死(由 docker-compose 网络解析)
+ARG VITE_API_TARGET=/api
+ENV VITE_API_TARGET=${VITE_API_TARGET}
+RUN npm run build
+
+# ---------- 2. runtime ----------
+FROM nginx:1.27-alpine AS runtime
+
+LABEL org.opencontainers.image.title="security-agent-frontend" \
+      org.opencontainers.image.source="https://example.local/security-agent"
+
+# 复制构建产物
+COPY --from=builder /build/dist /usr/share/nginx/html
+
+# 自定义 nginx 配置(根目录 + 反向代理 /api + SPA history fallback)
+COPY deployments/prod/docker/nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O- http://127.0.0.1/ >/dev/null 2>&1 || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]

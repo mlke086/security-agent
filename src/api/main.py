@@ -98,6 +98,24 @@ async def lifespan(app: FastAPI):
     from src.agents.ws_gateway import _worker_id
 
     logger.info("startup", version="0.1.0", worker_id=_worker_id)
+    # ---- Startup order is load-bearing (do not reorder) ----
+    # 1) load_nacos_settings() must run FIRST so PG_HOST / ES_HOSTS /
+    #    REDIS_URL etc. reflect whatever Nacos says for this environment.
+    #    Otherwise _ensure_es_indices() and init_schema() fall back to
+    #    the docker-compose `x-bootstrap-env` defaults (127.0.0.1) and
+    #    silently connect to the wrong host on multi-host deployments.
+    #    entrypoint.sh also calls load_nacos_settings() once before
+    #    uvicorn starts (preload), so this is a defensive re-run for
+    #    worker processes forked after preload.
+    from src.common.config.settings import load_nacos_settings
+
+    try:
+        await load_nacos_settings()
+        logger.info("nacos_settings_loaded_in_lifespan")
+    except Exception as exc:  # noqa: BLE001
+        # Nacos ?????????,????? env-only?
+        logger.warning("nacos_settings_load_failed_in_lifespan", error=str(exc))
+    # 2) ???????? ES indices (?? es_hosts) ? PG schema (?? pg_host)?
     await _ensure_es_indices()
     from src.common.db.pg import init_schema
 
@@ -106,10 +124,6 @@ async def lifespan(app: FastAPI):
         logger.info("pg_schema_initialized")
     except Exception as exc:
         logger.warning("pg_schema_init_failed", error=str(exc))
-    # Nacos 閰嶇疆涓績锛氭媺鍙栦笟鍔￠厤缃敞鍏?env锛宔nv 浼樺厛绾ф渶楂橈紙鏁忔劅閰嶇疆涓嶈蛋 Nacos锛?
-    from src.common.config.settings import load_nacos_settings
-
-    await load_nacos_settings()
     from src.agents.scheduler import start_background_tasks
 
     start_background_tasks()

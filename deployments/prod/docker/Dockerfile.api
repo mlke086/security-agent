@@ -1,7 +1,7 @@
-﻿# =====================================================================
+# =====================================================================
 # Security-Agent API image
 # 多阶段构建:
-#   - builder: 安装依赖 + 复制源码
+#   - builder: 安装构建依赖 + 复制源码 + pip 安装
 #   - runtime: 精简运行时,只保留运行所需依赖
 #
 # 网络说明:
@@ -17,7 +17,7 @@
 # =====================================================================
 
 # ---------- 1. builder ----------
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
@@ -35,8 +35,14 @@ ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# 安装编译工具 + 系统依赖
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 配置 APT 代理 + 安装构建依赖
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && if [ -n "$HTTP_PROXY" ]; then \
+        echo 'Acquire::http::Proxy "'$HTTP_PROXY'";' > /etc/apt/apt.conf.d/00proxy; \
+        echo 'Acquire::https::Proxy "'$HTTPS_PROXY'";' >> /etc/apt/apt.conf.d/00proxy; \
+    fi \
+    && apt-get update -o Acquire::http::No-Cache=True -o Acquire::http::Timeout=30 \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential \
         gcc \
         libffi-dev \
@@ -44,7 +50,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         curl \
         ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/apt/apt.conf.d/00proxy
 
 WORKDIR /build
 
@@ -78,32 +86,47 @@ RUN pip install --no-cache-dir \
         "langchain==0.3.7" \
         "langchain-openai==0.2.9" \
         "langchain-community==0.3.7" \
-    && pip install --no-cache-dir --no-deps "langchain-anthropic==0.3.0" \
-    || true
+    && pip install --no-cache-dir "bcrypt==4.0.1" --no-deps \
+    && pip install --no-cache-dir "anthropic>=0.39.0,<1" \
+    && pip install --no-cache-dir --no-deps "langchain-anthropic==0.3.0"
 
 # ---------- 2. runtime ----------
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim-bookworm AS runtime
 
-ARG HTTP_PROXY=""
-ARG HTTPS_PROXY=""
-ENV http_proxy=${HTTP_PROXY} \
-    https_proxy=${HTTPS_PROXY} \
-    PYTHONDONTWRITEBYTECODE=1 \
+# IMPORTANT: build-time HTTP_PROXY/HTTPS_PROXY were intentionally NOT
+# forwarded into this stage. Those values exist ONLY to let the builder
+# pull packages from PyPI / Debian mirrors across a corporate proxy. The
+# runtime image here has no such need -- and leaking them into the
+# runtime layer actively breaks Nacos / Postgres / Redis / ES connections,
+# because every Python library that respects `trust_env=True` (httpx,
+# urllib3, asyncpg via env-vars, requests, etc.) routes loopback calls
+# through the build proxy, where 127.0.0.1:8848 / :5432 / etc. are
+# unreachable. Never add `ENV http_proxy` back to this stage.
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# 运行时只需要 libpq / ca-certificates / tini / jq(nacos 推送用)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 安装运行时依赖 + 创建用户
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && if [ -n "$HTTP_PROXY" ]; then \
+        echo 'Acquire::http::Proxy "'$HTTP_PROXY'";' > /etc/apt/apt.conf.d/00proxy; \
+        echo 'Acquire::https::Proxy "'$HTTPS_PROXY'";' >> /etc/apt/apt.conf.d/00proxy; \
+    fi \
+    && apt-get update -o Acquire::http::No-Cache=True -o Acquire::http::Timeout=30 \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         libpq5 \
         ca-certificates \
         curl \
         tini \
         jq \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r secagent && useradd -r -g secagent -d /app -s /sbin/nologin secagent
+    && rm -f /etc/apt/apt.conf.d/00proxy \
+    && groupadd -r secagent \
+    && useradd -r -g secagent -d /app -s /sbin/nologin secagent
 
 WORKDIR /app
 
-# 拷贝已安装的 site-packages + 源码
+# 拷贝已安装的 Python 包 + 应用源码
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY src ./src
@@ -114,19 +137,20 @@ COPY deployments/prod/docker/init-pg.sql ./deployments/prod/docker/init-pg.sql
 COPY deployments/prod/docker/init-nacos.sh ./deployments/prod/docker/init-nacos.sh
 COPY deployments/prod/docker/nacos-config.yaml ./deployments/prod/docker/nacos-config.yaml
 COPY deployments/prod/docker/entrypoint.sh /entrypoint.sh
+COPY deployments/prod/docker/run_taskworker.py /app/deployments/prod/docker/run_taskworker.py
 
 # 把 Agent 二进制打进镜像,供 /api/v1/agents/binary/{os}/{arch} 提供下载
 COPY deployments/agent/dist /app/deployments/agent/dist
 
-RUN chmod +x /entrypoint.sh /app/deployments/prod/docker/init-nacos.sh \
+RUN chmod +x /entrypoint.sh /app/deployments/prod/docker/init-nacos.sh /app/deployments/prod/docker/run_taskworker.py \
     && chown -R secagent:secagent /app
 
 USER secagent
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+# 健康检查在 docker-compose.yml 的 api 服务中定义
+# (celery/taskworker 也使用此镜像,不跑 API server)
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
 CMD ["api"]

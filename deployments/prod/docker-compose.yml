@@ -1,97 +1,33 @@
-﻿# =====================================================================
-# SecAgent production stack
-# 目标:在已有中间件(Postgres/Redis/ES/Kafka/Milvus/Neo4j/Nacos/MinIO)
-#       的服务器上启动 4 个核心容器:
-#         secagent-api       FastAPI (uvicorn)   :8000
-#         secagent-taskworker Redis Stream 消费者(漏洞扫描任务)
-#         secagent-celery    Celery worker(HITL 审批超时)
-#         secagent-frontend  Nginx + React 静态  :80
-#
-# 网络策略:
-#   - 后端三个容器走 host_network=true,直接访问宿主机上的中间件
-#     (避免与已有容器在网络层冲突,运维不用关心 docker bridge 路由)
-#   - 前端走默认 bridge,只暴露 80 到宿主机,再由 nginx 反代到 api
-#
-# 启动顺序(由 depends_on + healthcheck 控制):
-#   中间件(已在宿主机运行) -> taskworker & celery  -> api -> frontend
+# =====================================================================
+# SecAgent 生产部署
+# 业务配置走 Nacos(由 nacos-config.yaml 维护),docker-compose 只注入
+# 启动必须的引导变量。
 # =====================================================================
 
 name: secagent
 
-x-common-env: &common-env
-  # ---- 中间件地址(全部走 host localhost)----
+x-bootstrap-env: &bootstrap-env
+  # ---- 中间件地址(本地中间件)----
   POSTGRES_HOST: "127.0.0.1"
   POSTGRES_PORT: "5432"
   PG_HOST: "127.0.0.1"
   PG_PORT: "5432"
   PG_DATABASE: "SecAgent"
   PG_USER: "secagent"
-  PG_PASSWORD: "${PG_PASSWORD:?set in .env}"
   PG_POOL_SIZE: "10"
 
   REDIS_HOST: "127.0.0.1"
   REDIS_PORT: "6379"
-  REDIS_URL: "redis://:${REDIS_PASSWORD:?set in .env}@127.0.0.1:6379/0"
-  REDIS_CACHE_TTL: "3600"
 
-  ES_HOSTS: "http://127.0.0.1:9200"
-  ES_INDEX_AUDIT: "security-agent-audit"
-  ES_INDEX_EVENTS: "security-agent-events"
-
-  KAFKA_BOOTSTRAP_SERVERS: "127.0.0.1:9092"
-  KAFKA_TOPIC_RAW_ALERTS: "raw-alerts"
-  KAFKA_TOPIC_DLQ: "dead-letter-queue"
-  KAFKA_CONSUMER_GROUP: "security-agent-group"
-
-  MILVUS_HOST: "127.0.0.1"
-  MILVUS_PORT: "19530"
-  MILVUS_COLLECTION: "threat_intel"
-
-  NEO4J_URI: "bolt://127.0.0.1:7687"
-  NEO4J_USER: "neo4j"
-  NEO4J_PASSWORD: "${NEO4J_PASSWORD:?set in .env}"
-
-  # ---- Nacos 配置中心(可选,留空 = 全部走 env)----
+  # ---- Nacos bootstrap ----
   NACOS_SERVER: "http://127.0.0.1:8848"
   NACOS_NAMESPACE: "prod"
   NACOS_GROUP: "SECURITY"
   NACOS_DATA_ID: "security-agent.yaml"
-  NACOS_USERNAME: "nacos"
-  NACOS_PASSWORD: "${NACOS_PASSWORD:?set in .env}"
 
-  # ---- API ----
-  API_SECRET_KEY: "${API_SECRET_KEY:?set in .env, length>=32}"
-  API_ACCESS_TOKEN_EXPIRE_MINUTES: "120"
   API_HOST: "0.0.0.0"
   API_PORT: "8000"
   LOG_LEVEL: "INFO"
-
-  # ---- LLM ----
-  LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
-  OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-  OPENAI_BASE_URL: "${OPENAI_BASE_URL:-https://api.deepseek.com/v1}"
-  OPENAI_MODEL: "${OPENAI_MODEL:-deepseek-chat}"
-
-  # ---- Agent ----
-  AGENT_CONSOLE_EXTERNAL_URL: "${AGENT_CONSOLE_EXTERNAL_URL:?set in .env, e.g. http://192.168.18.156:8000}"
-  AGENT_SIGNING_KEY: "${AGENT_SIGNING_KEY:?set in .env, 64 hex}"
-  AGENT_HMAC_KEY: "${AGENT_HMAC_KEY:-}"
-  AGENT_HEARTBEAT_INTERVAL: "60"
-  RULES_SYNC_SOURCE: "nvd"
-  NVD_API_KEY: "${NVD_API_KEY:-}"
-  NVD_PROXY: "${NVD_PROXY:-http://192.168.254.121:7897}"
-  ADVISORY_LOOKBACK_DAYS: "30"
-
-  # ---- 种子用户 ----
-  DEV_MODE: "${DEV_MODE:-false}"
-  DEFAULT_ADMIN_PASSWORD: "${DEFAULT_ADMIN_PASSWORD:-}"
-  DEFAULT_ANALYST_PASSWORD: "${DEFAULT_ANALYST_PASSWORD:-}"
-  DEFAULT_VIEWER_PASSWORD: "${DEFAULT_VIEWER_PASSWORD:-}"
-  DEFAULT_RESPONDER_PASSWORD: "${DEFAULT_RESPONDER_PASSWORD:-}"
-
-  # ---- 一次性 init 开关 ----
-  RUN_INIT_PG: "${RUN_INIT_PG:-true}"
-  RUN_INIT_NACOS: "${RUN_INIT_NACOS:-true}"
 
 x-logging: &logging
   driver: json-file
@@ -102,32 +38,38 @@ x-logging: &logging
 services:
 
   # ============================================================
-  # API 网关(FastAPI)
+  # API 网关
+  # 启动时序:lifespan init_schema() -> load_nacos_settings() ->
+  #          start_nacos_listener() -> uvicorn
+  # HEALTHCHECK 只在本服务上,因为其他服务(taskworker/celery)不暴露 HTTP
   # ============================================================
   api:
     image: ${SECAGENT_IMAGE_API:-secagent-api:0.1.0}
     container_name: secagent-api
     restart: unless-stopped
-    network_mode: host        # 直接访问宿主机中间件
+    network_mode: host
     env_file:
-      - .env                   # 提供 *_PASSWORD 等密钥
+      - .env
     environment:
-      <<: *common-env
+      <<: *bootstrap-env
+      # 健康检查用的 curl 必须绕过任何代理,直接打 127.0.0.1:8000
+      # (entrypoint 里有 no_proxy 但 curl 默认走 HTTPS_PROXY,所以这里显式再写一次)
+      no_proxy: "127.0.0.1,localhost,127.0.0.0/8"
+      NO_PROXY: "127.0.0.1,localhost,127.0.0.0/8"
     volumes:
-      # 日志持久化到宿主机(可选)
       - ./logs/api:/app/logs
-      # 规则包本地缓存(可选,便于离线部署)
-      - ./data/rules:/app/data/rules
     logging: *logging
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      # --noproxy '*' + -4 强制走 IPv4,避开容器内 http_proxy 把 127.0.0.1
+      # 解析成代理自身 localhost 的问题
+      test: ["CMD-SHELL", "curl -fsS -4 --noproxy '*' http://127.0.0.1:8000/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
 
   # ============================================================
-  # TaskWorker — 漏洞扫描 Redis Stream 消费者
+  # TaskWorker — vulnscan Redis Stream 消费者
   # ============================================================
   taskworker:
     image: ${SECAGENT_IMAGE_API:-secagent-api:0.1.0}
@@ -138,13 +80,12 @@ services:
     env_file:
       - .env
     environment:
-      <<: *common-env
-      DISABLE_TASK_WORKER: "true"  # 防止 lifespan 二次启动
+      <<: *bootstrap-env
     volumes:
       - ./logs/taskworker:/app/logs
     logging: *logging
     depends_on:
-      - api                       # 仅表示顺序,不强制
+      - api
 
   # ============================================================
   # Celery worker — HITL 审批超时兜底
@@ -158,7 +99,7 @@ services:
     env_file:
       - .env
     environment:
-      <<: *common-env
+      <<: *bootstrap-env
       CELERY_CONCURRENCY: "4"
     volumes:
       - ./logs/celery:/app/logs
@@ -174,7 +115,7 @@ services:
     container_name: secagent-frontend
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      - "${FRONTEND_PORT:-8081}:80"
     depends_on:
       - api
     logging: *logging

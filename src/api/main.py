@@ -10,6 +10,7 @@ from src.agents.ws_gateway import get_agent_gateway
 from src.api.auth import auth_router
 from src.api.auth.routes import require_role
 from src.api.routers.agents import router as agents_router
+from src.api.routers.alerts import router as alerts_router
 from src.api.routers.chat import router as chat_router
 from src.api.routers.demo import router as demo_router
 from src.api.routers.models import router as models_router
@@ -301,6 +302,7 @@ app.include_router(models_router)
 app.include_router(chat_router)
 app.include_router(scan_chat_router)
 app.include_router(stream_router)
+app.include_router(alerts_router)
 
 if __name__ == "__main__":
     import uvicorn

@@ -63,3 +63,14 @@ htmlcov/
 # Editor backup
 *.bak
 *.tmp
+
+# Go workspace cache (P0: 411 MB Go module cache accidentally tracked)
+.goworks/
+
+# Secrets / private keys (P0-1: id_rsa was tracked)
+id_rsa
+*.pem
+*.key
+*.pfx
+*.p12
+secrets/

@@ -590,11 +590,27 @@ class VulnscanStore:
         await self._es.close()
 
 
+import asyncio
 _store: VulnscanStore | None = None
+_store_loop: asyncio.AbstractEventLoop | None = None
 
 
 def get_vulnscan_store() -> VulnscanStore:
-    global _store
+    # Singleton must be re-created when the event loop changes,
+    # because the underlying AsyncElasticsearch client binds its
+    # connection pool to the loop active at first use. The lifespan
+    # and tests run on different loops between test sessions; reusing
+    # a stale client raises Event loop is closed.
+    global _store, _store_loop
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if _store is not None and _store_loop is not current_loop:
+        # Stale: previous loop closed. Drop the reference; the
+        # new call below will open fresh ES connections.
+        _store = None
     if _store is None:
         _store = VulnscanStore()
+        _store_loop = current_loop
     return _store

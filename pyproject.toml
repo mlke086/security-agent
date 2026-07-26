@@ -88,7 +88,7 @@ module = "src.knowledge.models.adapter"
 disable_error_code = ["call-arg", "arg-type", "assignment", "attr-defined"]
 
 [tool.pytest.ini_options]
-asyncio_default_fixture_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "session"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=src --cov-report=term-missing --cov-fail-under=80"

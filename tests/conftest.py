@@ -11,6 +11,7 @@ import os
 
 import pytest as _pytest
 
+
 os.environ.setdefault("STORE_BACKEND", "memory")
 os.environ.setdefault("API_SECRET_KEY", "test-secret-key-12345678")
 os.environ.setdefault("HITL_TIMEOUT_SEC", "5")

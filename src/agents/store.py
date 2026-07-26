@@ -18,6 +18,7 @@ INDEX_TASKS = "vulnscan-tasks"
 INDEX_RESULTS = "vulnscan-results"
 INDEX_VULNS = "vulnscan-vulns"
 INDEX_REPORTS = "vulnscan-reports"
+INDEX_ALERTS = "secagent-alerts"
 
 _MAPPINGS = {
     INDEX_HOSTS: {
@@ -78,7 +79,32 @@ _MAPPINGS = {
             }
         },
     },
-}
+INDEX_ALERTS: {
+    "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+    "mappings": {
+        "properties": {
+            "alert_id": {"type": "keyword"},
+            "source": {"type": "keyword"},
+            "severity": {"type": "keyword"},
+            "status": {"type": "keyword"},
+            "hostname": {"type": "keyword"},
+            "host_ip": {"type": "ip"},
+            "agent_id": {"type": "keyword"},
+            "rule_id": {"type": "keyword"},
+            "mitre_attack": {"type": "keyword"},
+            "tags": {"type": "keyword"},
+            "iocs.ips": {"type": "ip"},
+            "iocs.domains": {"type": "keyword"},
+            "iocs.hashes": {"type": "keyword"},
+            "iocs.urls": {"type": "keyword"},
+            "title": {"type": "text"},
+            "description": {"type": "text"},
+            "occurred_at": {"type": "date"},
+            "received_at": {"type": "date"},
+            "raw": {"type": "object", "enabled": False},
+        },
+    },
+},}
 
 
 def _parse_ts(value):

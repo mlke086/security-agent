@@ -2,6 +2,31 @@
 
 Phase 1 persistence: users & RBAC, enroll tokens, agent auth tokens, HITL approvals.
 Phase 2 adds hosts (agent inventory) and events (event lifecycle records).
+-- EDR alerts (Phase 0). One row per normalized alert from any
+-- source (Wazuh, Elkeid, Syslog, etc.). Hot path columns are
+-- extracted from the raw payload; the full source JSON is kept
+-- in raw JSONB for forensic / audit.
+CREATE TABLE IF NOT EXISTS alerts (
+    alert_id      VARCHAR(128) PRIMARY KEY,
+    source        VARCHAR(32)  NOT NULL,
+    severity      VARCHAR(16)  NOT NULL,
+"    status        VARCHAR(32)  NOT NULL DEFAULT 'new',"
+"    hostname      VARCHAR(256) NOT NULL DEFAULT '',"
+"    host_ip       VARCHAR(64)  NOT NULL DEFAULT '',"
+"    agent_id      VARCHAR(64)  NOT NULL DEFAULT '',"
+"    rule_id       VARCHAR(128) NOT NULL DEFAULT '',"
+    title         VARCHAR(512) NOT NULL,
+    occurred_at   TIMESTAMPTZ  NOT NULL,
+    received_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+"    iocs          JSONB         NOT NULL DEFAULT '{}'::jsonb,"
+"    mitre_attack  JSONB         NOT NULL DEFAULT '[]'::jsonb,"
+"    tags          JSONB         NOT NULL DEFAULT '[]'::jsonb,"
+"    raw           JSONB         NOT NULL DEFAULT '{}'::jsonb"
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_received_at ON alerts (received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts (severity);
+CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts (status);
+CREATE INDEX IF NOT EXISTS idx_alerts_source ON alerts (source);
 """
 
 from __future__ import annotations

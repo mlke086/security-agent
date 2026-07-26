@@ -204,3 +204,91 @@ class RulePack(BaseModel):
     rules: list[RuleItem]
     signature: str = ""
     published_at: str = ""
+
+# ============================================================
+# Agent monitoring / EDR alert model (Phase 0 of
+# docs/Agent监控告警改造方案.md). All fields are source-agnostic;
+# edr_adapter/* in src/preprocessing normalizes vendor JSON into
+# this shape before persistence.
+# ============================================================
+from enum import StrEnum as _StrEnum
+
+
+class AlertSeverity(_StrEnum):
+    """Standard severity levels across all EDR sources."""
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
+
+
+class AlertStatus(_StrEnum):
+    """Operator workflow state for an alert."""
+    NEW = "new"
+    ACKNOWLEDGED = "acknowledged"
+    IN_PROGRESS = "in_progress"
+    RESOLVED = "resolved"
+    FALSE_POSITIVE = "false_positive"
+
+
+class AlertSource(_StrEnum):
+    """Where the alert originated. Phase 1 wires Wazuh/Elkeid/Syslog;
+    Phase 2 adds the in-house secagent source; Phase 4 adds the rest."""
+    WAZUH = "wazuh"
+    ELKEID = "elkeid"
+    ELASTIC = "elastic"
+    CROWDSTRIKE = "crowdstrike"
+    SENTINELONE = "sentinelone"
+    SYSLOG = "syslog"
+    SECAGENT = "secagent"
+    UNKNOWN = "unknown"
+
+
+class AlertIOC(BaseModel):
+    """Indicators of Compromise extracted from the alert payload."""
+    ips: list[str] = []
+    domains: list[str] = []
+    hashes: list[str] = []
+    urls: list[str] = []
+    emails: list[str] = []
+    users: list[str] = []
+
+
+class Alert(BaseModel):
+    """Normalized alert. One row per source alert, regardless of vendor."""
+    alert_id: str  # primary key; deterministic from source when possible
+    source: AlertSource
+    title: str
+    description: str = ""
+    severity: AlertSeverity
+    status: AlertStatus = AlertStatus.NEW
+    occurred_at: str  # when the alert happened in the source system
+    received_at: str  # when SecAgent received it (ISO 8601 UTC)
+    hostname: str = ""
+    host_ip: str = ""
+    agent_id: str = ""
+    rule_id: str = ""
+    rule_name: str = ""
+    category: str = ""
+    mitre_attack: list[str] = []  # ATT&CK technique IDs, e.g. T1059
+    iocs: AlertIOC = AlertIOC()
+    tags: list[str] = []
+    source_url: str = ""
+    # Original payload kept for audit / forensic. May be large; PG stores as JSONB,
+    # ES has a separate field with mapping disabled to keep size bounded.
+    raw: dict = {}
+
+
+class AlertIngestRequest(BaseModel):
+    """Webhook payload from a third-party EDR. The "source" field tells
+    the server which adapter to use for normalization. Vendors that do not
+    supply source metadata may rely on the URL path (see router)."""
+    source: AlertSource = AlertSource.UNKNOWN
+    payload: dict
+
+
+class AlertIngestResponse(BaseModel):
+    alert_id: str
+    received_at: str
+    severity: AlertSeverity

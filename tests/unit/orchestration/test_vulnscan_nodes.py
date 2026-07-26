@@ -224,7 +224,7 @@ class TestDispatch:
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway", return_value=mock_gateway),
             patch("src.orchestration.subgraphs.vulnscan.nodes._resolve_targets", return_value=[]),
-            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
         ):
             result = await dispatch(state)
@@ -267,7 +267,7 @@ class TestDispatch:
         ))
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
         ):
             new_state = await collect(state)
@@ -283,7 +283,7 @@ class TestDispatch:
         mock_store.save_task = AsyncMock()
         mock_store.update_task = AsyncMock()
         mock_gateway = MagicMock()
-        fake_redis = AsyncMock()
+        fake_redis = AsyncMock(exists=AsyncMock(return_value=0))
         fake_redis.publish = AsyncMock()
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
@@ -339,7 +339,7 @@ class TestCollect:
 
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
         ):
             new_state = await collect(state)
@@ -379,7 +379,7 @@ class TestCollect:
 
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
             patch("asyncio.get_running_loop", return_value=fake_loop),
             patch("asyncio.sleep", new=AsyncMock()),
@@ -534,7 +534,7 @@ class TestGenerateReport:
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
-            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
@@ -554,7 +554,7 @@ class TestGenerateReport:
 
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
@@ -579,7 +579,7 @@ class TestGenerateReport:
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
-            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
@@ -608,7 +608,7 @@ class TestGenerateReport:
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
-            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
@@ -634,7 +634,7 @@ class TestGenerateReport:
         with (
             patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
-            patch("redis.asyncio.from_url", return_value=AsyncMock()),
+            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
             patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):

@@ -47,7 +47,7 @@ def test_prepare_upgrade_selects_binary_and_signs_hash(tmp_path) -> None:
     assert prepared.message["type"] == "agent_upgrade"
     assert prepared.message["payload"] == {
         "version": "0.2.0",
-        "download_url": "https://console.example/api/v1/agents/binary/linux/amd64",
+        "download_url": "https://console.example/api/v1/agents/binary/linux/amd64?agent_id=agent-1",
         "signature": "signed-digest",
     }
 

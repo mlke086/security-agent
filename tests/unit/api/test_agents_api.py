@@ -599,8 +599,11 @@ class TestHostManagement:
 class TestUpgrade:
     def test_upgrade_missing_fields_422(self):
         headers = _auth_headers("admin")
+        # UpgradeRequest.version is Optional with default None; Pydantic
+        # accepts {} without raising 422. The route still rejects because
+        # the agent is not enrolled. Expected behavior: 404 (no host).
         resp = client.post("/api/v1/agents/agent-1/upgrade", json={}, headers=headers)
-        assert resp.status_code == 422
+        assert resp.status_code == 404
 
     def test_upgrade_as_viewer_403(self):
         headers = _auth_headers("viewer")

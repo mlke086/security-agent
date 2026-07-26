@@ -15,6 +15,8 @@ import {
   type ConversationSummary, type ChatMessage, type LlmModel,
   type ChatRoute, type ChatSource,
 } from "../api/client"
+import Markdown from "./Markdown"
+import "./Markdown.css"
 import "./ChatScan.css"
 
 /**
@@ -500,7 +502,9 @@ function MessageRow({
             {ROUTE_LABEL[msg.route]?.text || msg.route}
           </span>
         )}
-        <div className="chat-bubble">{msg.content}</div>
+        <div className="chat-bubble">
+            {isUser ? msg.content : <Markdown source={msg.content} />}
+          </div>
         {/* 扫描意图卡片 */}
         {msg.intent && msg.route === "scan" && (
           <IntentCard intent={msg.intent} onConfirm={onConfirmScan} disabled={executing} />

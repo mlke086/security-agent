@@ -2,6 +2,8 @@ import { useState, useEffect } from "react"
 import { Card, List, Tag, Statistic, Row, Col, Button, Input, Space, message, Empty, Spin, Progress } from "antd"
 import { SearchOutlined, ArrowLeftOutlined } from "@ant-design/icons"
 import { useSearchParams, useNavigate } from "react-router-dom"
+import Markdown from "../components/Markdown"
+import "../components/Markdown.css"
 import api from "../api/client"
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -79,8 +81,8 @@ export default function ScanReportPage() {
 
       {/* 扫描摘要 */}
       <Card title="扫描摘要" style={{ marginBottom: 16 }}>
-        {report.summary && <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 8 }}>{report.summary}</div>}
-        {report.ai_analysis && <div style={{ color: "#666", marginBottom: 8 }}>{report.ai_analysis}</div>}
+        {report.summary && <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 8 }}><Markdown source={report.summary} /></div>}
+        {report.ai_analysis && <div style={{ color: "#666", marginBottom: 8 }}><Markdown source={report.ai_analysis} /></div>}
         <Row gutter={16} style={{ marginTop: 16 }}>
           <Col span={4}><Statistic title="严重" value={report.stats?.by_severity?.critical || 0} valueStyle={{ color: "#cf1322" }} /></Col>
           <Col span={4}><Statistic title="高危" value={report.stats?.by_severity?.high || 0} valueStyle={{ color: "#d4380d" }} /></Col>

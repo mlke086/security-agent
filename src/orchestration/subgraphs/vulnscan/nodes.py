@@ -601,21 +601,46 @@ async def _pub_progress(task_id: str, step: str, status: str, message: str) -> N
 
 
 async def _is_task_cancelled(task_id: str) -> bool:
-    """Return the cross-worker cancellation tombstone state."""
+    """Return the cross-worker cancellation tombstone state.
+
+    Failure policy: FAIL-CLOSED. If the redis lookup raises for any
+    reason (connection refused, timeout, auth error, etc.) we treat the
+    task as cancelled and short-circuit the current node. The alternative
+    (fail-open) silently drops user-initiated cancellations whenever redis
+    blips, leaving zombie scans running. Operators can monitor redis
+    health separately; fail-closed on a non-critical dependency is the
+    safer default for a security product.
+
+    The cancellation tombstone itself is set by the cancel API; the
+    expensive thing we protect here is the dispatch / collect / report
+    work that would otherwise run for an already-cancelled task and
+    waste agent bandwidth."""
     redis = None
     try:
         import redis.asyncio as aioredis
 
         from src.common.config.settings import get_settings
+        from src.common.logging.logger import get_logger
         from src.orchestration.task_queue.keys import cancel_key
 
         redis = aioredis.from_url(get_settings().redis_url, decode_responses=True)
         return bool(await redis.exists(cancel_key(task_id)))
-    except Exception:
-        return False
+    except Exception as exc:
+        get_logger(__name__).warning(
+            "nacos_cancellation_check_unavailable_treating_as_cancelled",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            task_id=task_id,
+        )
+        return True  # fail-closed: abort the node rather than run a cancelled task
     finally:
         if redis is not None:
-            await redis.aclose()
+            try:
+                await redis.aclose()
+            except Exception:
+                # Connection teardown failures should not mask the actual
+                # cancellation decision; swallow and move on.
+                pass
 
 
 async def generate_report(state: dict) -> dict:

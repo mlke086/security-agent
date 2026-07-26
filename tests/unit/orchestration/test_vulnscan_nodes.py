@@ -641,3 +641,88 @@ class TestGenerateReport:
             result = await generate_report(state)
             assert result["status"] == "completed"
             assert "Scan completed" in result["report"].summary
+
+# ---------------------------------------------------------------
+# P2-1 regression: _is_task_cancelled must fail-CLOSED.
+#
+# A redis connection error during the cancellation tombstone
+# check must be treated as "cancelled" (return True), not
+# "not cancelled" (return False). Otherwise a redis blip
+# silently drops user-initiated cancellations and lets the
+# dispatched work run to completion.
+# ---------------------------------------------------------------
+class TestIsTaskCancelledFailClosed:
+    """Lock in the fail-closed behavior of the cancel check."""
+
+    @pytest.mark.asyncio
+    async def test_redis_connection_error_returns_true(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+        with patch("redis.asyncio.from_url") as mock_from_url:
+            # Simulate redis.from_url raising during connection setup.
+            mock_from_url.side_effect = ConnectionError("redis down")
+            cancelled = await _is_task_cancelled("task-x")
+        assert cancelled is True, (
+            "redis connection failure must fail-closed; abort the node"
+        )
+
+    @pytest.mark.asyncio
+    async def test_redis_exists_raises_returns_true(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+        fake_redis = AsyncMock()
+        fake_redis.exists = AsyncMock(side_effect=TimeoutError("slow"))
+        with patch("redis.asyncio.from_url", return_value=fake_redis):
+            cancelled = await _is_task_cancelled("task-x")
+        assert cancelled is True
+
+    @pytest.mark.asyncio
+    async def test_key_exists_returns_true(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+        fake_redis = AsyncMock()
+        fake_redis.exists = AsyncMock(return_value=1)
+        with patch("redis.asyncio.from_url", return_value=fake_redis):
+            assert await _is_task_cancelled("task-x") is True
+        assert fake_redis.aclose.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_key_missing_returns_false(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+        fake_redis = AsyncMock()
+        fake_redis.exists = AsyncMock(return_value=0)
+        with patch("redis.asyncio.from_url", return_value=fake_redis):
+            assert await _is_task_cancelled("task-x") is False
+        assert fake_redis.aclose.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_aclose_failure_does_not_mask_decision(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+        fake_redis = AsyncMock()
+        fake_redis.exists = AsyncMock(return_value=1)
+        fake_redis.aclose = AsyncMock(side_effect=ConnectionError("teardown"))
+        with patch("redis.asyncio.from_url", return_value=fake_redis):
+            # Decision must still be True (cancelled); teardown
+            # failure is logged + swallowed, not raised.
+            assert await _is_task_cancelled("task-x") is True
+
+    @pytest.mark.asyncio
+    async def test_dispatch_aborts_when_redis_unavailable(self):
+        # End-to-end: with fail-closed, dispatch() short-circuits
+        with patch("redis.asyncio.from_url") as mock_from_url:
+            mock_from_url.side_effect = ConnectionError("redis down")
+            state = _default_state("manual", targets=["host-a"])
+            mock_store = AsyncMock()
+            mock_gateway = MagicMock()
+            with (
+                patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
+                patch("src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway", return_value=mock_gateway),
+                patch("src.orchestration.subgraphs.vulnscan.nodes._resolve_targets", return_value=["agent-a"]),
+                patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            ):
+                result = await dispatch(state)
+        assert result["status"] == "cancelled", (
+            "with redis down, fail-closed dispatch must abort"
+        )
+        # Crucially: NO broadcast should have been attempted
+        # (we do not waste agent bandwidth on a task we cannot
+        # confirm is still wanted).
+        mock_gateway.broadcast.assert_not_called()
+

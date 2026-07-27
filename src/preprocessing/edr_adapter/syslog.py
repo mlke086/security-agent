@@ -20,11 +20,12 @@ class SyslogAdapter(EDRAdapter):
     def _severity(self):
         sev = self.raw.get("severity")
         try:
-            sev = int(sev)
-        except(TypeError, ValueError):
+            sev_int = int(sev)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
             pri = self.raw.get("priority") or self.raw.get("PRI") or 134
             m = _SYSLOG_PRI_RE.search(str(pri))
-            sev = int(m.group(1)) % 8 if m else 5
+            sev_int = int(m.group(1)) % 8 if m else 5
+        sev = sev_int
         if sev <= 1: return AlertSeverity.CRITICAL
         if sev <= 3: return AlertSeverity.HIGH
         if sev <= 4: return AlertSeverity.MEDIUM

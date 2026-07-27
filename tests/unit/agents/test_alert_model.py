@@ -139,7 +139,8 @@ class TestAlertFull:
 class TestAlertIngestRequest:
     def test_default_source_unknown(self):
         req = AlertIngestRequest(payload={"id": "x", "rule": {}})
-        assert req.source == AlertSource.UNKNOWN
+        # source is now a free-form str; empty default = auto-detect in normalize()
+        assert req.source == ""
 
     def test_explicit_source(self):
         req = AlertIngestRequest(

@@ -15,6 +15,7 @@ import pytest as _pytest
 os.environ.setdefault("STORE_BACKEND", "memory")
 os.environ.setdefault("API_SECRET_KEY", "test-secret-key-12345678")
 os.environ.setdefault("HITL_TIMEOUT_SEC", "5")
+os.environ.setdefault("NACOS_SERVER", "")  # disable nacos in tests; settings come from env
 
 # Initialize PostgreSQL schema (users/tokens/approvals) once at session start.
 # get_pg_pool() auto-detects event-loop mismatches, so the pool created here

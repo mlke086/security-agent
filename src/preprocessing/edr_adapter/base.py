@@ -1,16 +1,24 @@
-"""EDR adapter base + registry. Subclasses set source and override the hooks."""
+"""EDR adapter base + registry."""
 import hashlib
 from datetime import datetime, UTC
+from typing import Any
+
 from src.agents.models import Alert, AlertIOC, AlertSeverity, AlertSource
 
 
 class EDRAdapter:
-    source = AlertSource.UNKNOWN  # subclasses must override
+    """Base class for EDR/3rd-party alert normalizers.
 
-    def __init__(self, raw):
+    Subclasses set class-level `source` and override the private hooks
+    to convert their vendor JSON into the common Alert model.
+    """
+
+    source: AlertSource  # subclasses override
+
+    def __init__(self, raw: dict[str, Any]) -> None:
         self.raw = raw or {}
 
-    def to_alert(self):
+    def to_alert(self) -> Alert:
         return Alert(
             alert_id=self._id(),
             source=self.source,
@@ -32,36 +40,45 @@ class EDRAdapter:
             raw=self.raw,
         )
 
-    def _id(self):
+    def _id(self) -> str:
         vendor = self._vendor_id()
         if vendor:
-            return self.source.value + chr(58) + vendor
-        canonical = repr(sorted(self.raw.items())).encode(chr(34) + chr(34) + chr(34) + chr(34))
+            return self.source.value + ":" + vendor
+        canonical = repr(sorted(self.raw.items())).encode("utf-8")
         digest = hashlib.sha256(canonical).hexdigest()[:32]
-        return self.source.value + chr(58) + chr(115) + chr(104) + chr(97) + chr(50) + chr(53) + chr(54) + chr(58) + digest
+        return self.source.value + ":sha256:" + digest
 
-    def _vendor_id(self): return ""
-    def _title(self):
+    def _vendor_id(self) -> str:
+        return ""
+
+    def _title(self) -> str:
         return self.raw.get("title") or self.raw.get("description") or "(no title)"
-    def _description(self):
+
+    def _description(self) -> str:
         return str(self.raw.get("description") or self.raw.get("summary") or "")
-    def _severity(self): return AlertSeverity.MEDIUM
-    def _occurred_at(self):
+
+    def _severity(self) -> AlertSeverity:
+        return AlertSeverity.MEDIUM
+
+    def _occurred_at(self) -> str:
         return self.raw.get("timestamp") or self.raw.get("timestamp_utc") or datetime.now(UTC).isoformat()
-    def _hostname(self): return ""
-    def _host_ip(self): return ""
-    def _agent_id(self): return ""
-    def _rule_id(self): return ""
-    def _rule_name(self): return ""
-    def _category(self): return ""
-    def _mitre(self): return []
-    def _iocs(self): return AlertIOC()
-    def _tags(self): return []
-    def _source_url(self): return ""
+
+    def _hostname(self) -> str: return ""
+    def _host_ip(self) -> str: return ""
+    def _agent_id(self) -> str: return ""
+    def _rule_id(self) -> str: return ""
+    def _rule_name(self) -> str: return ""
+    def _category(self) -> str: return ""
+    def _mitre(self) -> list: return []
+    def _iocs(self) -> AlertIOC: return AlertIOC()
+    def _tags(self) -> list: return []
+    def _source_url(self) -> str: return ""
 
 
 class EDRAlertNormalizer:
-    ADAPTERS = {}
+    """Registry facade (legacy -- prefer edr_adapter.normalize)."""
+
+    ADAPTERS: dict = {}
 
     @classmethod
     def register(cls, source, adapter_cls):

@@ -128,6 +128,30 @@ CREATE TABLE IF NOT EXISTS host_groups (
 -- can add / switch / default models from the UI instead of editing .env.
 -- api_key is stored in plain text here (Phase 1); harden with pgcrypto /
 -- KMS in a later pass. is_default marks the single global default model.
+
+-- EDR alerts (Phase 0 of monitoring plan). One row per normalized
+-- alert from any source (Wazuh, Elkeid, Syslog, etc.).
+CREATE TABLE IF NOT EXISTS alerts (
+    alert_id      VARCHAR(128) PRIMARY KEY,
+    source        VARCHAR(32)  NOT NULL,
+    severity      VARCHAR(16)  NOT NULL,
+    status        VARCHAR(32)  NOT NULL DEFAULT 'new',
+    hostname      VARCHAR(256) NOT NULL DEFAULT '',
+    host_ip       VARCHAR(64)  NOT NULL DEFAULT '',
+    agent_id      VARCHAR(64)  NOT NULL DEFAULT '',
+    rule_id       VARCHAR(128) NOT NULL DEFAULT '',
+    title         VARCHAR(512) NOT NULL,
+    occurred_at   TIMESTAMPTZ  NOT NULL,
+    received_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    iocs          JSONB         NOT NULL DEFAULT '{}'::jsonb,
+    mitre_attack  JSONB         NOT NULL DEFAULT '[]'::jsonb,
+    tags          JSONB         NOT NULL DEFAULT '[]'::jsonb,
+    raw           JSONB         NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_received_at ON alerts (received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts (severity);
+CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts (status);
+CREATE INDEX IF NOT EXISTS idx_alerts_source ON alerts (source);
 CREATE TABLE IF NOT EXISTS llm_models (
     id                      SERIAL PRIMARY KEY,
     name                    VARCHAR(128) NOT NULL,

@@ -284,7 +284,7 @@ class AlertIngestRequest(BaseModel):
     """Webhook payload from a third-party EDR. The "source" field tells
     the server which adapter to use for normalization. Vendors that do not
     supply source metadata may rely on the URL path (see router)."""
-    source: AlertSource = AlertSource.UNKNOWN
+    source: str = ""  # any vendor name; normalize() maps UNKNOWN on miss
     payload: dict
 
 

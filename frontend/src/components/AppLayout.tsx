@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { Layout, Menu, Button, Typography, theme, message, Select, Space } from "antd"
 import {
-  DashboardOutlined, ProfileOutlined, AuditOutlined,
+  AlertOutlined, DashboardOutlined, ProfileOutlined, AuditOutlined,
   LogoutOutlined, SecurityScanOutlined, BugOutlined,
   CloudServerOutlined, EyeOutlined, FileSearchOutlined,
   SyncOutlined, SkinOutlined, RobotOutlined,
@@ -35,6 +35,7 @@ export default function AppLayout() {
     { key: "/rules", icon: <SyncOutlined />, label: "规则管理" },
     { key: "/models", icon: <RobotOutlined />, label: "模型管理" },
     { key: "/events", icon: <ProfileOutlined />, label: "事件队列" },
+    { key: "/alerts", icon: <AlertOutlined />, label: "EDR 告警" },
     ...(canApprove ? [{ key: "/approvals", icon: <AuditOutlined />, label: "审批列表" }] : []),
   ]
 

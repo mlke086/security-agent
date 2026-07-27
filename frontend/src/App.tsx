@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import EventQueuePage from './pages/EventQueuePage'
 import EventDetailPage from './pages/EventDetailPage'
+import AlertInboxPage from './pages/AlertInboxPage'
 import ApprovalsPage from './pages/ApprovalsPage'
 import HostOnboardPage from './pages/HostOnboardPage'
 import ScanTaskPage from './pages/ScanTaskPage'
@@ -31,6 +32,7 @@ export default function App() {
           <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/events" element={<EventQueuePage />} />
+    <Route path="/alerts" element={<AlertInboxPage />} />
             <Route path="/events/:eventId" element={<EventDetailPage />} />
             <Route path="/approvals" element={<ApprovalsPage />} />
             <Route path="/hosts" element={<HostOnboardPage />} />

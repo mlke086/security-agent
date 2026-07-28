@@ -76,6 +76,12 @@ export default function ScanMonitorPage() {
         if (inner.type === "task_done" || inner.status === "completed" || inner.status === "failed") {
           doneRef.current = true
         }
+        // Phase-3 UX fix: on status_change (e.g. scanning -> analyzing)
+        // update task.status immediately so the empty-state text
+        // re-evaluates without waiting for the 3s-debounced refresh.
+        if (inner.type === "status_change" && typeof inner.status === "string") {
+          setTask((prev: any) => (prev ? { ...prev, status: inner.status } : prev))
+        }
         setEvents(prev => [...prev, { ...inner, ts: Date.now() }].slice(-50))
 
         // 需求6：SSE 事件到达时，防抖刷新任务状态（最多 3s 一次），
@@ -240,8 +246,24 @@ export default function ScanMonitorPage() {
               )
             ) : events.length === 0 ? (
               <div style={{ color: "#999", padding: 20, textAlign: "center" }}>
-                <Spin size="small" />
-                <div style={{ marginTop: 8 }}>任务进行中，等待 agent 上报扫描进度...</div>
+                {(() => {
+                  // Phase-3 UX fix (2026-07-28 e2e sweep): the empty-state
+                  // text used to say "等待 agent 上报..." for every non-terminal
+                  // status, so an `analyzing` task (scan done, server
+                  // processing) also showed it -- misleading. Match the
+                  // text to the actual state. The server also pushes a
+                  // status_change SSE event on every transition now
+                  // (vulnscan.py sse_gen), so the status here is current
+                  // even if the agent has stopped pushing events.
+                  const s = task?.status
+                  if (s === "queued") return "排队中，等待任务被调度..."
+                  if (s === "dispatching") return "正在向 agent 下发扫描任务..."
+                  if (s === "analyzing") return "扫描已完成，正在分析结果..."
+                  if (s === "cancelling") return "正在取消..."
+                  return "扫描中，等待 agent 上报扫描进度..."
+                })()}
+                {/* spinner only when we are actually waiting for the agent */}
+                {task?.status !== "analyzing" && task?.status !== "cancelled" && <Spin size="small" style={{ marginRight: 8 }} />}
               </div>
             ) : (
               [...events].reverse().map((ev, i) => (

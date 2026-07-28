@@ -181,9 +181,17 @@ async def api_task_stream(task_id: str, token: str = Query(...)):
         r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
         pubsub = r.pubsub()
         await pubsub.subscribe(f"vulnscan:task:{task_id}")
-        # 检查任务是否已终态（completed/failed），若是则推送最终事件后结束流，
-        # 主动关闭连接 -- 避免监控页离开后 SSE 长连接泄漏（尤指 vite proxy
-        # 转发时客户端 close 后端连接未及时断开，累积占满连接数致系统卡死）。
+        # Phase-3 UX fix (2026-07-28 e2e sweep): push a status_change
+        # event on ANY transition, not just terminal. Without this, when
+        # the agent finishes the scan phase and the subgraph moves the
+        # task to `analyzing`, the agent stops pushing events at the
+        # same moment -- so the only reliable signal to the monitor
+        # page is the canonical task.status write. The page used to
+        # sit on stale "scanning" + the same "等待 agent 上报..."
+        # message during the analysis phase, which was misleading.
+        # We now mirror the canonical status into SSE on every change.
+        # Terminal transitions still send `task_done` for backwards
+        # compatibility with the existing client close logic.
         store = get_vulnscan_store()
         last_status = ""
         try:
@@ -193,17 +201,21 @@ async def api_task_stream(task_id: str, token: str = Query(...)):
                     yield f"data: {msg['data']}\n\n"
                 else:
                     yield ": heartbeat\n\n"
-                # 每 10s 检查任务状态，终态则结束流
+                # 每 10s 检查任务状态；状态变化时推 status_change，
+                # 终态则发 task_done 并 break 关闭连接。
                 try:
                     task = await store.get_task(task_id)
-                    if task and task.status in ("completed", "failed", "cancelled"):
-                        if last_status != task.status:
-                            import json as _json
+                    if task and task.status != last_status:
+                        import json as _json
 
+                        if task.status in ("completed", "failed", "cancelled"):
                             yield f"data: {_json.dumps({'type': 'task_done', 'task_id': task_id, 'status': task.status})}\n\n"
                             last_status = task.status
-                        # 终态后发一次结束事件即 break，关闭连接
-                        break
+                            # 终态后发一次结束事件即 break，关闭连接
+                            break
+                        else:
+                            yield f"data: {_json.dumps({'type': 'status_change', 'task_id': task_id, 'status': task.status})}\n\n"
+                            last_status = task.status
                 except Exception:
                     pass
         except Exception:

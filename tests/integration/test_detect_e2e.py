@@ -229,10 +229,13 @@ def test_07_rbac_viewer_can_list_rules(client, viewer_headers):
 
 def test_08_reload_rules_admin_only(client, admin_headers, viewer_headers):
     """POST /detect/rules/load requires admin role."""
+    # 3 builtins + 3 imported files (recursive load). Dedup leaves
+    # 3 unique rule_ids in the registry, but load_builtin_rules()
+    # counts every file it processes.
     r1 = client.post("/api/v1/detect/rules/load", headers=admin_headers)
     assert r1.status_code == 200, r1.text
     body = r1.json()
-    assert body["loaded"] == 3
+    assert body["loaded"] == 6
 
     r2 = client.post("/api/v1/detect/rules/load", headers=viewer_headers)
     assert r2.status_code in (401, 403), r2.text

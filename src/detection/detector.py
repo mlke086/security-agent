@@ -48,7 +48,11 @@ class Detector:
         if not d.exists():
             return 0
         loaded = 0
-        for p in sorted(d.glob("*.yml")):
+        # Recurse so ``src/detection/rules/imported/`` (CLI output)
+        # is also picked up. We dedup by rule_id via add_rule, so a
+        # rule that exists in both the root and a subdir just wins
+        # the first-load race.
+        for p in sorted(list(d.glob("*.yml")) + list(d.rglob("*.yml"))):
             try:
                 rule = parse_sigma_yaml(p)
                 self.add_rule(rule)

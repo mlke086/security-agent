@@ -110,9 +110,13 @@ class TestSigmaParser:
         assert len(rule.selection) == 3
 
     def test_load_all_three_rules(self):
+        # Phase 6 added src/detection/rules/imported/ as a sibling dir
+        # to the builtins; load_builtin_rules() recurses so the file
+        # count is builtins(3) + imported files(3) = 6. The registry
+        # itself dedups by rule_id, so list_rules() returns 3.
         d = Detector()
         n = d.load_builtin_rules()
-        assert n == 3
+        assert n == 6
         rules = d.list_rules()
         ids = {r.rule_id for r in rules}
         assert "ssh-brute-force-2026" in ids

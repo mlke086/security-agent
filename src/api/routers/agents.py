@@ -68,6 +68,7 @@ class AgentConfigRequest(BaseModel):
 
 class GroupCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, description="Group name")
+    description: str | None = Field(default=None, max_length=512, description="Optional human-readable description")
 
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
@@ -476,6 +477,7 @@ async def api_create_group(
             detail="Group already exists",
         )
     await get_audit_logger().log(
+        event_id=f"group:{req.name}",
         node="agents.router",
         action="create_group",
         actor=current_user.username,

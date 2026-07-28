@@ -134,7 +134,10 @@ class MonitorStore:
                 body={
                     "size": max(1, min(limit, 500)),
                     "sort": [{"received_at": {"order": "desc"}}],
-                    "query": {"term": {"agent_id": agent_id}},
+                    # agent_id is mapped as text+keyword (dynamic mapping
+                    # wins when the index predates the explicit mapping);
+                    # the .keyword sub-field gives us exact match.
+                    "query": {"term": {"agent_id.keyword": agent_id}},
                     "_source": [
                         "agent_id", "hostname", "collected_at", "received_at",
                         "interval_sec", "total_count", "truncated", "process_count",

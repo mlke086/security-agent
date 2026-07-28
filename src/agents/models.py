@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class HostStatus(StrEnum):
@@ -123,8 +123,9 @@ class ScanIntent(BaseModel):
 
 class EnrollTokenRequest(BaseModel):
     group: str | None = None
-    ttl_hours: int = 24
-    uses: int = 1
+    # ttl_hours: 0 falls back to the server default (24h); max 168h = 1 week.
+    ttl_hours: int = Field(default=24, ge=0, le=168, description="Token lifetime in hours; 0 falls back to the default")
+    uses: int = Field(default=1, ge=1, le=10000, description="Max number of agents that can enroll with this token")
 
 
 class EnrollTokenResponse(BaseModel):

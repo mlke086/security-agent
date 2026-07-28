@@ -307,6 +307,10 @@ async def health_check() -> dict[str, str]:
 
 
 app.include_router(auth_router)
+# P0-2 (2026-07-28 e2e sweep): stream_router must register BEFORE
+# operations_router. operations has GET /events/{event_id} which would
+# otherwise shadow the literal /events/stream with event_id="stream".
+app.include_router(stream_router)
 app.include_router(operations_router)
 app.include_router(demo_router)
 app.include_router(agents_router)
@@ -318,7 +322,6 @@ app.include_router(monitor_router)
 app.include_router(models_router)
 app.include_router(chat_router)
 app.include_router(scan_chat_router)
-app.include_router(stream_router)
 app.include_router(alerts_router)
 app.include_router(detection_router)
 

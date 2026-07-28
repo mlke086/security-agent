@@ -63,6 +63,18 @@ def _verify_scoped_token(token: str, scope: str) -> dict[str, Any]:
     payload = decode_token(token)
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    # P1-API-04 tightening (2026-07-28 e2e sweep): if the JWT carries a
+    # ``scope`` claim (it was minted by mint_sse_token for some other
+    # stream), the scope MUST match. Otherwise a 60s `events` token
+    # could be replayed against `/metrics/stream` and bypass the
+    # per-stream scope isolation that P1-API-04 introduced. Legacy
+    # long-lived JWTs (no scope claim) keep the role-based fallback.
+    token_scope = payload.get("scope")
+    if token_scope is not None and token_scope != scope:
+        raise HTTPException(
+            status_code=401,
+            detail=f"token scope mismatch: want {scope}, got {token_scope}",
+        )
     role = payload.get("role")
     if role not in {"admin", "analyst", "responder"}:
         raise HTTPException(status_code=403, detail="SSE requires admin/analyst/responder role")
@@ -70,11 +82,17 @@ def _verify_scoped_token(token: str, scope: str) -> dict[str, Any]:
     return payload
 
 
-@router.get("/api/v1/events/{event_id}/stream")
-async def event_stream(event_id: str, token: str = Query(...)):
-    _verify_scoped_token(token, "events")
+# IMPORTANT: literal /events/stream MUST be registered before
+# /events/{event_id}/stream. FastAPI's router matches in registration
+# order, so the param route would otherwise eat requests to
+# /events/stream and return "Event not found" (event_id="stream").
+# Re-ordering fixes P0-2 of the 2026-07-28 e2e sweep: EventQueuePage
+# was silently broken because its EventSource hit 404.
+@router.get("/api/v1/events/stream")
+async def events_list_stream(token: str = Query(...)):
+    _verify_scoped_token(token, "events_list")
     return StreamingResponse(
-        _sse_generator(f"events:{event_id}", event_id),
+        _sse_generator("events:list"),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -90,11 +108,11 @@ async def metrics_stream(token: str = Query(...)):
     )
 
 
-@router.get("/api/v1/events/stream")
-async def events_list_stream(token: str = Query(...)):
-    _verify_scoped_token(token, "events_list")
+@router.get("/api/v1/events/{event_id}/stream")
+async def event_stream(event_id: str, token: str = Query(...)):
+    _verify_scoped_token(token, "events")
     return StreamingResponse(
-        _sse_generator("events:list"),
+        _sse_generator(f"events:{event_id}", event_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

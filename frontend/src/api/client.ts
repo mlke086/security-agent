@@ -93,6 +93,40 @@ export async function seedDemo() {
   return res.data
 }
 
+// -- Response actions (Phase 4 of monitoring plan) ----------------------
+// Dispatch a server-side defensive action (kill_process / quarantine_file)
+// to a specific agent. Returns the server-generated action_id so the
+// operator can poll for terminal status via getAgentActionStatus.
+export interface AgentActionDispatch {
+  action_id: string
+  action: string
+  agent_id: string
+  status: string
+}
+export interface AgentActionStatus {
+  action_id: string
+  status: string
+  detail: string
+  agent_id: string
+  received_at: string
+}
+export async function dispatchAgentAction(
+  agentId: string,
+  actionName: "kill_process" | "quarantine_file",
+  params: Record<string, unknown>,
+  reason: string,
+): Promise<AgentActionDispatch> {
+  const res = await api.post(`/agents/${agentId}/actions/${actionName}`, {
+    params,
+    reason,
+  })
+  return res.data as AgentActionDispatch
+}
+export async function getAgentActionStatus(actionId: string): Promise<AgentActionStatus> {
+  const res = await api.get(`/agents/actions/${actionId}`)
+  return res.data as AgentActionStatus
+}
+
 export async function getMe() {
   const res = await api.get("/auth/me")
   return res.data

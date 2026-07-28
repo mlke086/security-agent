@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
-import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty, Switch } from "antd"
-import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined } from "@ant-design/icons"
+import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty, Switch, Dropdown } from "antd"
+import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined, DownOutlined, PoweroffOutlined, LockOutlined } from "@ant-design/icons"
 import type { Host, HostGroup } from "../api/client"
 import {
   createEnrollToken,
@@ -15,6 +15,8 @@ import {
   deleteHost,
   upgradeAgent,
   getAgentUpgradeStatus,
+  dispatchAgentAction,
+  getAgentActionStatus,
   type AgentUpgradeStatus,
 } from "../api/client"
 
@@ -63,6 +65,58 @@ export default function HostOnboardPage() {
   const [showDecommissioned, setShowDecommissioned] = useState(false)
   const [upgradeById, setUpgradeById] = useState<Record<string, AgentUpgradeStatus["upgrade"] | undefined>>({})
   const [upgrading, setUpgrading] = useState<Record<string, boolean>>({})
+
+  // Phase 4: server-dispatched defensive actions (kill_process / quarantine_file).
+  // ``actionModal`` holds the active modal state; ``pollingActionId`` is the
+  // server-generated action_id we are polling for terminal status.
+  const [actionModal, setActionModal] = useState<null | {
+    host: Host
+    action: "kill_process" | "quarantine_file"
+    params: Record<string, unknown>
+    reason: string
+  }>(null)
+  const [actionSubmitting, setActionSubmitting] = useState(false)
+  const [pollingActionId, setPollingActionId] = useState<string | null>(null)
+  const [pollingStatus, setPollingStatus] = useState<string | null>(null)
+
+  // Phase 4: response action handlers
+  const openActionModal = (host: Host, action: "kill_process" | "quarantine_file") => {
+    setActionModal({ host, action, params: {}, reason: "" })
+  }
+  const closeActionModal = () => {
+    setActionModal(null)
+    setActionSubmitting(false)
+    setPollingActionId(null)
+    setPollingStatus(null)
+  }
+  const submitActionModal = async () => {
+    if (!actionModal) return
+    const { host, action, params, reason } = actionModal
+    setActionSubmitting(true)
+    try {
+      const r = await dispatchAgentAction(host.agent_id, action, params, reason)
+      setPollingActionId(r.action_id)
+      setPollingStatus(r.status)
+      message.success(`已下发: ${action} -> ${host.hostname}`)
+      for (let i = 0; i < 10; i++) {
+        await new Promise((res) => setTimeout(res, 1000))
+        try {
+          const s = await getAgentActionStatus(r.action_id)
+          setPollingStatus(s.status)
+          if (s.status === "succeeded" || s.status === "failed") {
+            if (s.status === "succeeded") message.success(`执行成功: ${s.detail || ""}`)
+            else message.error(`执行失败: ${s.detail || ""}`)
+            break
+          }
+        } catch { /* transient */ }
+      }
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || "下发失败")
+      setActionSubmitting(false)
+      return
+    }
+    setActionSubmitting(false)
+  }
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(hostSearch.trim().toLowerCase()), 300)
@@ -371,6 +425,40 @@ export default function HostOnboardPage() {
       </Tooltip>
     )
   }},
+  {
+    title: "应急响应",
+    key: "response",
+    width: 130,
+    render: (_: unknown, r: Host) => (
+      <Dropdown
+        trigger={["click"]}
+        menu={{
+          items: [
+            {
+              key: "kill_process",
+              icon: <PoweroffOutlined />,
+              label: "终止进程 (按 PID)",
+              disabled: r.status === "decommissioned",
+            },
+            {
+              key: "quarantine_file",
+              icon: <LockOutlined />,
+              label: "隔离文件 (按路径)",
+              disabled: r.status === "decommissioned",
+            },
+          ],
+          onClick: ({ key }) => {
+            if (key === "kill_process") openActionModal(r, "kill_process")
+            else if (key === "quarantine_file") openActionModal(r, "quarantine_file")
+          },
+        }}
+      >
+        <Button size="small">
+          应急响应 <DownOutlined />
+        </Button>
+      </Dropdown>
+    ),
+  },
   ]
 
   const groupColumns = [
@@ -511,6 +599,70 @@ export default function HostOnboardPage() {
             <Input.TextArea rows={2} placeholder="可选" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* Phase 4: response action modal */}
+      <Modal
+        title={actionModal ? `应急响应 - ${actionModal.action === "kill_process" ? "终止进程" : "隔离文件"} (${actionModal.host.hostname})` : ""}
+        open={!!actionModal}
+        onCancel={closeActionModal}
+        confirmLoading={actionSubmitting}
+        okButtonProps={{ disabled: !actionModal || (actionModal.action === "kill_process" ? !actionModal.params.pid : !actionModal.params.path) }}
+        okText={pollingActionId ? "已下发" : "确认执行"}
+        cancelText="关闭"
+        onOk={pollingActionId ? closeActionModal : submitActionModal}
+      >
+        {actionModal && (
+          <>
+            {actionModal.action === "kill_process" && (
+              <Form layout="vertical">
+                <Form.Item label="目标 PID" required>
+                  <InputNumber
+                    min={1}
+                    max={4194304}
+                    style={{ width: "100%" }}
+                    placeholder="例如: 12345"
+                    onChange={(v) => setActionModal((m) => m ? { ...m, params: { pid: v ?? 0, signal: "SIGKILL" } } : m)}
+                  />
+                </Form.Item>
+                <Form.Item label="信号">
+                  <Select
+                    defaultValue="SIGKILL"
+                    options={[
+                      { value: "SIGKILL", label: "SIGKILL (强制)" },
+                      { value: "SIGTERM", label: "SIGTERM (优雅)" },
+                      { value: "SIGABRT", label: "SIGABRT (断言)" },
+                    ]}
+                    onChange={(v) => setActionModal((m) => m ? { ...m, params: { ...m.params, signal: v } } : m)}
+                  />
+                </Form.Item>
+              </Form>
+            )}
+            {actionModal.action === "quarantine_file" && (
+              <Form layout="vertical">
+                <Form.Item label="文件绝对路径" required>
+                  <Input
+                    placeholder="/var/www/html/shell.php"
+                    onChange={(e) => setActionModal((m) => m ? { ...m, params: { path: e.target.value } } : m)}
+                  />
+                </Form.Item>
+              </Form>
+            )}
+            <Form.Item label="操作原因(可选)">
+              <Input.TextArea
+                rows={2}
+                placeholder="例如: Honeypot triggered / Wazuh rule 5715 / 手动隔离"
+                onChange={(e) => setActionModal((m) => m ? { ...m, reason: e.target.value } : m)}
+              />
+            </Form.Item>
+            {pollingActionId && (
+              <div style={{ marginTop: 8, padding: 8, background: "#f5f5f5", borderRadius: 4 }}>
+                <div><b>action_id:</b> <code>{pollingActionId}</code></div>
+                <div><b>当前状态:</b> {pollingStatus ?? "dispatched"}</div>
+              </div>
+            )}
+          </>
+        )}
       </Modal>
     </div>
   )

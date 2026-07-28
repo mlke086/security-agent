@@ -56,6 +56,8 @@ type Client struct {
 	OnConfigUpdate func(payload json.RawMessage)
 	// P1-GO-06 (2026-07-19): scan_cancel dispatcher. Wired to engine.CancelScan.
 	OnScanCancel   func(payload json.RawMessage)
+	// Phase 4: response_action dispatcher. Wired to response.Dispatcher.
+	OnResponseAction func(payload json.RawMessage)
 }
 
 // NewClient creates a new WebSocket client.
@@ -335,6 +337,20 @@ func (c *Client) handleMessage(raw []byte) {
 		} else {
 			log.Println("[comm] scan_cancel ignored (no handler wired)")
 		}
+	case "response_action":
+		// Phase 4: server-dispatched defensive action. Verified against
+		// the same Ed25519 pubkey as scan_command / rule_update.
+		dbgLog("[comm] dbg_msg type=%q ts=%q payload=%s sig=%q",
+			msg.Type, msg.TS, string(msg.Payload), msg.Sig)
+		if err := crypto.Verify(msg.Type, msg.TS, msg.Payload, msg.Sig); err != nil {
+			log.Printf("[comm] signature verification failed for %s: %v", msg.Type, err)
+			return
+		}
+		if c.OnResponseAction != nil {
+			c.OnResponseAction(msg.Payload)
+		} else {
+			log.Println("[comm] response_action ignored (no handler wired)")
+		}
 	case "keepalive":
 		// 后端每 30s 发的应用层保活，重置 read deadline，无需处理。
 	default:
@@ -444,6 +460,26 @@ func (c *Client) SendUpdateAck(kind, version string, ok bool, errMsg string) {
 			"version": version,
 			"ok":      ok,
 			"error":   errMsg,
+		},
+	})
+}
+
+// SendResponseAck confirms (or rejects) a response_action dispatched by the server.
+//
+// Phase 4: action_id comes from the server-issued envelope; ``ok`` is
+// ``true`` when the action ran to completion, ``false`` when it failed
+// or the action type was unsupported; ``detail`` is a short operator-
+// visible message (e.g. "moved to /tmp/x.quarantined.20260728T...").
+// Sent unsigned because the WS is already authenticated.
+func (c *Client) SendResponseAck(actionID string, ok bool, detail string) {
+	c.send(map[string]interface{}{
+		"v":    1,
+		"type": "response_ack",
+		"ts":   time.Now().UTC().Format(time.RFC3339),
+		"payload": map[string]interface{}{
+			"action_id": actionID,
+			"ok":        ok,
+			"detail":    detail,
 		},
 	})
 }

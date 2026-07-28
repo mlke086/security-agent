@@ -15,6 +15,7 @@ import (
 	"github.com/security-agent/agent/internal/enroll"
 	"github.com/security-agent/agent/internal/protection"
 	"github.com/security-agent/agent/internal/queue"
+	"github.com/security-agent/agent/internal/response"
 	"github.com/security-agent/agent/internal/scan"
 	"github.com/security-agent/agent/internal/updater"
 	"github.com/security-agent/agent/internal/version"
@@ -273,6 +274,16 @@ func main() {
 			cfgUpdate.ResourceLimit.MemPercent,
 		)
 		client.SendUpdateAck("config", "", true, "")
+	}
+
+	// Phase 4: response_action dispatcher. Holds the catalogue of allowed
+	// server-dispatched actions (kill_process / quarantine_file) and runs
+	// them on this host. Acks are sent back through the same WS connection
+	// using SendResponseAck, which the server's AgentGateway._record_response_ack
+	// mirrors into a per-action Redis status key.
+	respDispatcher := response.New(client.SendResponseAck)
+	client.OnResponseAction = func(payload json.RawMessage) {
+		respDispatcher.Handle(payload)
 	}
 
 	log.Println("[agent] engine wired, connecting to server...")

@@ -223,6 +223,12 @@ class AgentGateway:
                         agent_id=agent_id,
                         error=str(exc),
                     )
+            elif msg_type == "response_ack":
+                # Phase 4: agent confirmed (or rejected) a response_action.
+                # Persist the outcome to the same Redis status key the
+                # router set on dispatch so the operator can poll
+                # GET /api/v1/agents/actions/{action_id}.
+                await self._record_response_ack(agent_id, payload)
             else:
                 logger.debug("unknown_agent_msg_type", type=msg_type, agent_id=agent_id)
         except Exception as exc:
@@ -258,6 +264,56 @@ class AgentGateway:
         finally:
             if r is not None:
                 await r.aclose()
+
+    async def _record_response_ack(self, agent_id: str, payload: dict) -> None:
+        """Mirror a response_ack to the per-action Redis status key.
+
+        The router writes status=dispatched with a 5-minute TTL on
+        POST; we refresh the same key with the ack outcome so the
+        operator GET sees succeeded/failed within seconds.
+        """
+        import time
+        action_id = str(payload.get("action_id", ""))
+        if not action_id:
+            logger.warning("response_ack_missing_action_id", agent_id=agent_id, payload=payload)
+            return
+        ok = bool(payload.get("ok", False))
+        detail = str(payload.get("detail", ""))
+        new_status = "succeeded" if ok else "failed"
+        record = {
+            "status": new_status,
+            "agent_id": agent_id,
+            "detail": detail,
+            "received_at": int(time.time()),
+        }
+        r = None
+        try:
+            r = self._redis()
+            await r.set(
+                f"response_action:status:{action_id}",
+                json.dumps(record, ensure_ascii=False),
+                ex=300,
+            )
+        except Exception as exc:
+            logger.warning(
+                "response_ack_persist_failed",
+                action_id=action_id,
+                agent_id=agent_id,
+                error=str(exc),
+            )
+        finally:
+            if r is not None:
+                try:
+                    await r.aclose()
+                except Exception:
+                    pass
+        logger.info(
+            "response_ack_recorded",
+            action_id=action_id,
+            agent_id=agent_id,
+            status=new_status,
+            detail=detail,
+        )
 
     async def broadcast(self, agent_ids: list[str], msg: dict) -> dict:
         """Send a message to multiple agents. Returns {sent, failed}."""

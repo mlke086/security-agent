@@ -229,6 +229,11 @@ class AgentGateway:
                 # router set on dispatch so the operator can poll
                 # GET /api/v1/agents/actions/{action_id}.
                 await self._record_response_ack(agent_id, payload)
+            elif msg_type == "monitor_event":
+                # Phase 5: lightweight host monitor (process / file
+                # snapshots). Best-effort persist to ES; a failure
+                # here never tears down the agent connection.
+                await self._record_monitor_event(agent_id, payload)
             else:
                 logger.debug("unknown_agent_msg_type", type=msg_type, agent_id=agent_id)
         except Exception as exc:
@@ -314,6 +319,27 @@ class AgentGateway:
             status=new_status,
             detail=detail,
         )
+
+    async def _record_monitor_event(self, agent_id: str, payload: dict) -> None:
+        """Persist a monitor_event to the ES index.
+
+        We do not validate the payload here -- the agent is the only
+        source of truth for the Snapshot schema, and the Sigma
+        detector consumes the live shape. Bad payloads are visible
+        immediately in the console (the drawer renders empty or
+        partial data) and a future monitor_schema_version field can
+        gate upgrades without code on this side.
+        """
+        try:
+            from src.agents.monitor_store import get_monitor_store
+            await get_monitor_store().save_event(agent_id, payload)
+        except Exception as exc:  # noqa: BLE001
+            # ES outage should never cost the agent its socket.
+            logger.warning(
+                "monitor_event_persist_failed",
+                agent_id=agent_id,
+                error=str(exc),
+            )
 
     async def broadcast(self, agent_ids: list[str], msg: dict) -> dict:
         """Send a message to multiple agents. Returns {sent, failed}."""

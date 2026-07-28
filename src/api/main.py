@@ -17,6 +17,7 @@ from src.api.routers.demo import router as demo_router
 from src.api.routers.models import router as models_router
 from src.api.routers.operations import router as operations_router
 from src.api.routers.responses import router as responses_router
+from src.api.routers.monitor import router as monitor_router
 from src.api.routers.rules import router as rules_router
 from src.api.routers.scan_chat import router as scan_chat_router
 from src.api.routers.stream import router as stream_router
@@ -311,6 +312,7 @@ app.include_router(agents_router)
 app.include_router(vulnscan_router)
 app.include_router(rules_router)
 app.include_router(responses_router)
+app.include_router(monitor_router)
 app.include_router(models_router)
 app.include_router(chat_router)
 app.include_router(scan_chat_router)

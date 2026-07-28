@@ -484,6 +484,23 @@ func (c *Client) SendResponseAck(actionID string, ok bool, detail string) {
 	})
 }
 
+// SendMonitorEvent ships one host-level monitoring snapshot up the WS.
+// Used by the lightweight monitor (process / file) in
+// agent/internal/monitor; the server side mirrors it into ES for
+// the console and the Sigma detector.
+//
+// ``payload`` is the JSON shape produced by monitor.Snapshot. We pass
+// it through verbatim rather than re-marshalling so the wire format
+// stays single-source (Snapshot is the contract).
+func (c *Client) SendMonitorEvent(payload interface{}) {
+	c.send(map[string]interface{}{
+		"v":    1,
+		"type": "monitor_event",
+		"ts":   time.Now().UTC().Format(time.RFC3339),
+		"payload": payload,
+	})
+}
+
 // processQueue sends all queued messages after reconnection.
 func (c *Client) processQueue() {
 	if c.Queue == nil {

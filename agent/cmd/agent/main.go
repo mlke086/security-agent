@@ -7,13 +7,16 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/security-agent/agent/internal/comm"
 	"github.com/security-agent/agent/internal/config"
 	"github.com/security-agent/agent/internal/crypto"
 	"github.com/security-agent/agent/internal/enroll"
 	"github.com/security-agent/agent/internal/protection"
+	"github.com/security-agent/agent/internal/monitor"
 	"github.com/security-agent/agent/internal/queue"
 	"github.com/security-agent/agent/internal/response"
 	"github.com/security-agent/agent/internal/scan"
@@ -286,6 +289,18 @@ func main() {
 		respDispatcher.Handle(payload)
 	}
 
+	// Phase 5: lightweight host monitor. Polls the process table every
+	// MonitorIntervalSec and ships a snapshot up the WS as ``monitor_event``.
+	// The default is 30s (rather than 3-5s) because the snapshot payload
+	// is ~ a few hundred process rows; 30s is a sweet spot for
+	// "near-real-time view of what is running" without flooding the WS
+	// for hosts with thousands of processes. Operators can override via
+	// env if they have a fleet small enough for tighter polling.
+	monitorInterval := time.Duration(getMonitorIntervalSec()) * time.Second
+	hostMonitor := monitor.New(monitor.RealLister{}, clientMonitorSink(client), monitorInterval, 0)
+	hostMonitor.Start(ctx)
+	defer hostMonitor.Stop()
+
 	log.Println("[agent] engine wired, connecting to server...")
 
 	// Monitor.Start 暂缓（nil 指针问题需排查 protection 包）
@@ -295,4 +310,30 @@ func main() {
 	}
 
 	log.Println("[agent] shutdown complete")
+}
+
+// clientMonitorSink adapts comm.Client.SendMonitorEvent (which takes
+// an opaque ``interface{}`` payload) to monitor.Sink (which expects a
+// concrete monitor.Snapshot). Kept as a free function so it does not
+// pull a circular import into agent/internal/monitor.
+func clientMonitorSink(c *comm.Client) monitor.Sink {
+	return monitor.SinkFunc(func(s monitor.Snapshot) {
+		c.SendMonitorEvent(s)
+	})
+}
+
+// getMonitorIntervalSec reads MONITOR_INTERVAL_SEC from env (default 30s).
+// Split out of main() so tests can call it without standing up the full
+// Agent; range-clamped so a typo in production cannot stall the monitor
+// at e.g. 0s (per-second polling would saturate the WS).
+func getMonitorIntervalSec() int {
+	raw := os.Getenv("MONITOR_INTERVAL_SEC")
+	if raw == "" {
+		return 30
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 5 {
+		return 30
+	}
+	return n
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
-import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty, Switch, Dropdown } from "antd"
-import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined, DownOutlined, PoweroffOutlined, LockOutlined } from "@ant-design/icons"
+import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty, Switch, Dropdown, Drawer, Spin } from "antd"
+import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined, DownOutlined, PoweroffOutlined, LockOutlined, MonitorOutlined } from "@ant-design/icons"
 import type { Host, HostGroup } from "../api/client"
 import {
   createEnrollToken,
@@ -17,6 +17,8 @@ import {
   getAgentUpgradeStatus,
   dispatchAgentAction,
   getAgentActionStatus,
+  getAgentMonitor,
+  type MonitorEvent,
   type AgentUpgradeStatus,
 } from "../api/client"
 
@@ -79,6 +81,12 @@ export default function HostOnboardPage() {
   const [pollingActionId, setPollingActionId] = useState<string | null>(null)
   const [pollingStatus, setPollingStatus] = useState<string | null>(null)
 
+  // Phase 5: monitor drawer
+  const [monitorHost, setMonitorHost] = useState<Host | null>(null)
+  const [monitorEvents, setMonitorEvents] = useState<MonitorEvent[]>([])
+  const [monitorLoading, setMonitorLoading] = useState(false)
+  const [monitorDrawerOpen, setMonitorDrawerOpen] = useState(false)
+
   // Phase 4: response action handlers
   const openActionModal = (host: Host, action: "kill_process" | "quarantine_file") => {
     setActionModal({ host, action, params: {}, reason: "" })
@@ -116,6 +124,27 @@ export default function HostOnboardPage() {
       return
     }
     setActionSubmitting(false)
+  }
+
+  // Phase 5: monitor drawer
+  const openMonitorDrawer = async (host: Host) => {
+    setMonitorHost(host)
+    setMonitorEvents([])
+    setMonitorDrawerOpen(true)
+    setMonitorLoading(true)
+    try {
+      const r = await getAgentMonitor(host.agent_id, 20)
+      setMonitorEvents(r.items)
+    } catch {
+      message.error("加载监控数据失败")
+    } finally {
+      setMonitorLoading(false)
+    }
+  }
+  const closeMonitorDrawer = () => {
+    setMonitorHost(null)
+    setMonitorEvents([])
+    setMonitorDrawerOpen(false)
   }
 
   useEffect(() => {
@@ -459,6 +488,21 @@ export default function HostOnboardPage() {
       </Dropdown>
     ),
   },
+  {
+    title: "进程监控",
+    key: "monitor",
+    width: 100,
+    render: (_: unknown, r: Host) => (
+      <Button
+        size="small"
+        icon={<MonitorOutlined />}
+        onClick={() => openMonitorDrawer(r)}
+        disabled={r.status === "decommissioned"}
+      >
+        查看
+      </Button>
+    ),
+  },
   ]
 
   const groupColumns = [
@@ -664,6 +708,51 @@ export default function HostOnboardPage() {
           </>
         )}
       </Modal>
+
+      {/* Phase 5: monitor drawer */}
+      <Drawer
+        title={monitorHost ? `进程监控 - ${monitorHost.hostname} (${monitorHost.agent_id})` : "进程监控"}
+        open={monitorDrawerOpen}
+        onClose={closeMonitorDrawer}
+        width={720}
+        extra={
+          <Button
+            size="small"
+            icon={<ReloadOutlined />}
+            loading={monitorLoading}
+            onClick={() => monitorHost && openMonitorDrawer(monitorHost)}
+          >
+            刷新
+          </Button>
+        }
+      >
+        {monitorLoading ? (
+          <div style={{ textAlign: "center", padding: 40 }}><Spin /></div>
+        ) : monitorEvents.length === 0 ? (
+          <Empty description="暂无监控数据,Agent 可能未启动 monitor 或尚未上报" />
+        ) : (
+          <Table<MonitorEvent>
+            size="small"
+            dataSource={monitorEvents}
+            rowKey={(r) => `${r.received_at}`}
+            pagination={false}
+            columns={[
+              { title: "采集时间", dataIndex: "collected_at", width: 175 },
+              { title: "收到时间", dataIndex: "received_at", width: 175 },
+              { title: "主机", dataIndex: "hostname", width: 110 },
+              { title: "进程数", dataIndex: "total_count", width: 80,
+                render: (v: number, r: MonitorEvent) => (
+                  <Space size={4}>
+                    <span>{v}</span>
+                    {r.truncated && <Tag color="orange">已截断</Tag>}
+                  </Space>
+                ) },
+              { title: "上报条数", dataIndex: "process_count", width: 80 },
+              { title: "间隔(s)", dataIndex: "interval_sec", width: 80 },
+            ]}
+          />
+        )}
+      </Drawer>
     </div>
   )
 }

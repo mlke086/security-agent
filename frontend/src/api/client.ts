@@ -127,6 +127,31 @@ export async function getAgentActionStatus(actionId: string): Promise<AgentActio
   return res.data as AgentActionStatus
 }
 
+// -- Monitor events (Phase 5 of monitoring plan) -------------------------
+// Read the most recent process snapshots uploaded by the agent's
+// lightweight monitor. Returns the slim shape (no full process list)
+// the server exposes; the full payload lives in ES for forensic drill-down.
+export interface MonitorEvent {
+  agent_id: string
+  hostname: string
+  collected_at: string
+  received_at: string
+  interval_sec: number
+  total_count: number
+  truncated: boolean
+  process_count: number
+}
+export interface MonitorEventList {
+  agent_id: string
+  items: MonitorEvent[]
+  count: number
+  limit: number
+}
+export async function getAgentMonitor(agentId: string, limit = 20): Promise<MonitorEventList> {
+  const res = await api.get(`/agents/${agentId}/monitor`, { params: { limit } })
+  return res.data as MonitorEventList
+}
+
 export async function getMe() {
   const res = await api.get("/auth/me")
   return res.data

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react"
 import { Card, Button, Descriptions, Tag, message, Space, Spin, Table, Input, Select, Tabs, Tooltip, Upload, Modal, Typography } from "antd"
 import { SafetyCertificateOutlined, ReloadOutlined, SearchOutlined, UploadOutlined, QuestionCircleOutlined, CloudSyncOutlined, GlobalOutlined, ApiOutlined } from "@ant-design/icons"
-import { listRules, getRuleVersion, syncRules, importRules, syncRulesToAgents, type RuleItem } from "../api/client"
+import { listRules, getRuleVersion, syncRules, importRules, syncRulesToAgents, type RuleItem, getSigmaRules, getSigmaSummary, type SigmaRuleItem, type SigmaSummary } from "../api/client"
 
 const { Text, Paragraph } = Typography
 
@@ -49,6 +49,15 @@ export default function RulesPage() {
   const [pageSize, setPageSize] = useState(20)
   const [activeTab, setActiveTab] = useState("all")
 
+  // Phase 6: Sigma detection rules state
+  const [sigmaSummary, setSigmaSummary] = useState<SigmaSummary | null>(null)
+  const [sigmaRules, setSigmaRules] = useState<SigmaRuleItem[]>([])
+  const [sigmaLoading, setSigmaLoading] = useState(false)
+  const [sigmaCategory, setSigmaCategory] = useState<string | undefined>(undefined)
+  const [sigmaOs, setSigmaOs] = useState<string | undefined>(undefined)
+  const [sigmaLevel, setSigmaLevel] = useState<string | undefined>(undefined)
+  const [sigmaDetectorOnly, setSigmaDetectorOnly] = useState<boolean | null>(null)
+
   useEffect(() => {
     const t = setTimeout(() => {
       setDebouncedQ(q)
@@ -65,6 +74,35 @@ export default function RulesPage() {
     } catch { /* ignore */ }
     finally { setLoadingVer(false) }
   }
+
+  const fetchSigma = useCallback(async () => {
+    setSigmaLoading(true)
+    try {
+      const [summary, list] = await Promise.all([
+        getSigmaSummary().catch(() => null),
+        getSigmaRules({
+          category: sigmaCategory,
+          os: sigmaOs,
+          level: sigmaLevel,
+          detector_supported: sigmaDetectorOnly ?? undefined,
+        }).catch((e) => {
+          // 404 = no manifest yet (operator has not run the importer)
+          if (e?.response?.status === 404) {
+            message.info("尚未导入 Sigma 规则,请在服务器上执行 scripts/import_sigma_rules.py")
+          }
+          return { total: 0, items: [] }
+        }),
+      ])
+      setSigmaSummary(summary)
+      setSigmaRules(list.items)
+    } finally {
+      setSigmaLoading(false)
+    }
+  }, [sigmaCategory, sigmaOs, sigmaLevel, sigmaDetectorOnly])
+
+  useEffect(() => {
+    if (activeTab === "detection") fetchSigma()
+  }, [activeTab, fetchSigma])
 
   const fetchRules = useCallback(async () => {
     setLoading(true)
@@ -229,6 +267,7 @@ export default function RulesPage() {
           { key: "all", label: "全部" },
           { key: "sys_vuln", label: "漏洞扫描规则" },
           { key: "baseline", label: "安全基线规则" },
+          { key: "detection", label: "检测规则" },
         ]} />
 
         <Space style={{ marginBottom: 16 }}>
@@ -250,21 +289,136 @@ export default function RulesPage() {
           />
         </Space>
 
-        <Table
-          dataSource={rules}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          pagination={{
-            current: page,
-            pageSize,
-            total,
-            showSizeChanger: true,
-            showTotal: (t) => `共 ${t} 条`,
-            onChange: (p, ps) => { setPage(p); setPageSize(ps) },
-          }}
-          locale={{ emptyText: "暂无规则，请点击「联网更新」或「离线导入」" }}
-        />
+        {activeTab === "detection" ? (
+          <div>
+            {sigmaSummary && (
+              <Card size="small" style={{ marginBottom: 16 }}>
+                <Space size="large" wrap>
+                  <span><b>已导入:</b> {sigmaSummary.accepted} 条</span>
+                  <span><b>跳过:</b> {sigmaSummary.skipped} 条</span>
+                  <span><b>导入时间:</b> {sigmaSummary.imported_at || "—"}</span>
+                </Space>
+                <div style={{ marginTop: 8 }}>
+                  <Space size="large" wrap>
+                    {Object.entries(sigmaSummary.by_category || {}).map(([k, v]) => (
+                      <Tag key={`cat-${k}`} color="blue">{k}: {v}</Tag>
+                    ))}
+                    {Object.entries(sigmaSummary.by_os || {}).map(([k, v]) => (
+                      <Tag key={`os-${k}`} color="geekblue">{k}: {v}</Tag>
+                    ))}
+                    {Object.entries(sigmaSummary.by_level || {}).map(([k, v]) => (
+                      <Tag key={`lvl-${k}`} color="purple">{k}: {v}</Tag>
+                    ))}
+                  </Space>
+                </div>
+              </Card>
+            )}
+
+            <Space style={{ marginBottom: 16 }} wrap>
+              <Select
+                allowClear
+                placeholder="分类"
+                style={{ width: 160 }}
+                value={sigmaCategory}
+                onChange={(v) => setSigmaCategory(v)}
+                options={[
+                  { value: "process_creation", label: "进程创建" },
+                  { value: "file_event", label: "文件事件" },
+                  { value: "network_connection", label: "网络连接" },
+                  { value: "dns_query", label: "DNS 查询" },
+                  { value: "image_load", label: "镜像加载" },
+                ]}
+              />
+              <Select
+                allowClear
+                placeholder="操作系统"
+                style={{ width: 130 }}
+                value={sigmaOs}
+                onChange={(v) => setSigmaOs(v)}
+                options={[
+                  { value: "linux", label: "Linux" },
+                  { value: "macos", label: "macOS" },
+                  { value: "windows", label: "Windows" },
+                ]}
+              />
+              <Select
+                allowClear
+                placeholder="严重等级"
+                style={{ width: 140 }}
+                value={sigmaLevel}
+                onChange={(v) => setSigmaLevel(v)}
+                options={Object.entries(SEVERITY_CONFIG).map(([k, v]) => ({ label: v.label, value: k }))}
+              />
+              <Select
+                allowClear
+                placeholder="检测器支持"
+                style={{ width: 140 }}
+                value={sigmaDetectorOnly === null ? undefined : sigmaDetectorOnly}
+                onChange={(v) => setSigmaDetectorOnly(v === undefined ? null : v)}
+                options={[
+                  { value: true, label: "已支持" },
+                  { value: false, label: "暂不支持" },
+                ]}
+              />
+              <Button onClick={fetchSigma} icon={<ReloadOutlined />}>刷新</Button>
+            </Space>
+
+            <Table<SigmaRuleItem>
+              dataSource={sigmaRules}
+              rowKey="rule_id"
+              loading={sigmaLoading}
+              pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
+              columns={[
+                { title: "规则 ID", dataIndex: "rule_id", width: 200,
+                  render: (v: string) => <code>{v}</code> },
+                { title: "标题", dataIndex: "title", ellipsis: true },
+                { title: "等级", dataIndex: "level", width: 90,
+                  render: (v: string) => {
+                    const cfg = SEVERITY_CONFIG[v] || { color: "default", label: v }
+                    return <Tag color={cfg.color}>{cfg.label}</Tag>
+                  } },
+                { title: "适用 OS", dataIndex: "applicable_os", width: 150,
+                  render: (os: string[]) => (
+                    <Space size={2} wrap>{(os || []).map((o) => <Tag key={o}>{o}</Tag>)}</Space>
+                  ) },
+                { title: "MITRE ATT&CK", dataIndex: "mitre_techniques", width: 200,
+                  render: (ts: string[]) => (
+                    <Space size={2} wrap>{(ts || []).map((t) => <Tag key={t} color="magenta">{t}</Tag>)}</Space>
+                  ) },
+                { title: "检测器", dataIndex: "detector_supported", width: 100,
+                  render: (v: boolean) => v ? <Tag color="green">✓</Tag> : <Tag color="default">—</Tag> },
+              ]}
+              locale={{ emptyText: "未导入 Sigma 规则,或当前筛选无匹配" }}
+            />
+
+            {sigmaSummary && sigmaSummary.skipped_reasons && sigmaSummary.skipped_reasons.length > 0 && (
+              <Card size="small" style={{ marginTop: 16 }} title={`跳过原因 (${sigmaSummary.skipped_reasons.length})`}>
+                {sigmaSummary.skipped_reasons.map((s, i) => (
+                  <div key={i} style={{ marginBottom: 4 }}>
+                    <code style={{ fontSize: 12 }}>{s.path}</code>
+                    <span style={{ marginLeft: 8, color: "#999" }}>{s.reason}</span>
+                  </div>
+                ))}
+              </Card>
+            )}
+          </div>
+        ) : (
+          <Table
+            dataSource={rules}
+            columns={columns}
+            rowKey="id"
+            loading={loading}
+            pagination={{
+              current: page,
+              pageSize,
+              total,
+              showSizeChanger: true,
+              showTotal: (t) => `共 ${t} 条`,
+              onChange: (p, ps) => { setPage(p); setPageSize(ps) },
+            }}
+            locale={{ emptyText: "暂无规则，请点击「联网更新」或「离线导入」" }}
+          />
+        )}
       </Card>
 
       <Modal title="离线导入说明" open={importHelpOpen} onCancel={() => setImportHelpOpen(false)} footer={null} width={620}>

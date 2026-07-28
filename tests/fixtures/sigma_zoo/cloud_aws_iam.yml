@@ -1,0 +1,13 @@
+title: Cloud-only rule (no logsource)
+id: cloud-iam-zoo-001
+description: AWS IAM event; no logsource we can match locally
+level: low
+detection:
+  selection:
+    eventName: 'CreateUser'
+  condition: selection
+fields:
+  - userIdentity.arn
+tags:
+  - attack.persistence
+  - attack.t1136

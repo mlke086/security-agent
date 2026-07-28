@@ -1,0 +1,16 @@
+title: macOS LaunchDaemon Persistence
+id: launchd-zoo-001
+description: Modification of LaunchDaemon plist
+level: medium
+logsource:
+  product: macos
+  category: file_event
+detection:
+  selection:
+    TargetFilename|contains: '/Library/LaunchDaemons/'
+  condition: selection
+fields:
+  - TargetFilename
+tags:
+  - attack.persistence
+  - attack.t1543.001

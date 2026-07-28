@@ -1,0 +1,18 @@
+title: Suspicious Encoded PowerShell Command
+id: ps-encoded-zoo-001
+description: Encoded PowerShell command-line argument
+level: high
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\\powershell.exe'
+    CommandLine|contains: '-EncodedCommand'
+  condition: selection
+fields:
+  - CommandLine
+  - User
+tags:
+  - attack.execution
+  - attack.t1059.001

@@ -152,6 +152,50 @@ export async function getAgentMonitor(agentId: string, limit = 20): Promise<Moni
   return res.data as MonitorEventList
 }
 
+// -- Sigma detection rules (Phase 6 of monitoring plan) -----------------
+// Read the imported Sigma rules inventory. The console's "检测规则"
+// tab on the Rules page uses these to show the operator what is
+// actually loaded into the detector.
+export interface SigmaRuleItem {
+  path: string
+  rule_id: string
+  title: string
+  level: string
+  category: string
+  applicable_os: string[]
+  detector_supported: boolean
+  mitre_techniques: string[]
+}
+export interface SigmaSummary {
+  total_seen: number
+  accepted: number
+  skipped: number
+  by_category: Record<string, number>
+  by_os: Record<string, number>
+  by_level: Record<string, number>
+  skipped_reasons: { path: string; reason: string }[]
+  imported_at: string
+  rules?: SigmaRuleItem[]
+}
+export interface SigmaList {
+  total: number
+  items: SigmaRuleItem[]
+}
+export async function getSigmaSummary(): Promise<SigmaSummary> {
+  const res = await api.get("/sigma-rules/summary")
+  return res.data as SigmaSummary
+}
+export async function getSigmaRules(params: {
+  category?: string
+  os?: string
+  level?: string
+  detector_supported?: boolean
+  q?: string
+} = {}): Promise<SigmaList> {
+  const res = await api.get("/sigma-rules", { params })
+  return res.data as SigmaList
+}
+
 export async function getMe() {
   const res = await api.get("/auth/me")
   return res.data

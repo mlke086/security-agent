@@ -2,10 +2,19 @@ import { useState } from 'react'
 import { Card, Form, Input, Button, Typography, message, Space } from 'antd'
 import { SecurityScanOutlined, UserOutlined, LockOutlined } from '@ant-design/icons'
 import { useAuth } from '../context/AuthContext'
+import { useTheme, type ThemeKey } from '../context/ThemeContext'
 import { useNavigate } from 'react-router-dom'
+
+const LOGIN_BG: Record<ThemeKey, string> = {
+  light: '/background/blue_white_gradient.png',
+  dark: '/background/dark_color.png',
+  'eye-green': '/background/high_contrast.png',
+  'tech-blue': '/background/Technology_Blue.png',
+}
 
 export default function LoginPage() {
   const { login } = useAuth()
+  const { themeKey } = useTheme()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
 
@@ -39,7 +48,14 @@ export default function LoginPage() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '20%', background: '#f0f2f5' }}>
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      paddingRight: '20%',
+      background: `url(${LOGIN_BG[themeKey]}) center/cover no-repeat`,
+    }}>
       <Card style={{ width: 400 }}>
         <Space direction="vertical" style={{ width: '100%', textAlign: 'center', marginBottom: 24 }}>
           <SecurityScanOutlined style={{ fontSize: 48, color: '#1677ff' }} />
@@ -56,9 +72,6 @@ export default function LoginPage() {
           <Form.Item>
             <Button type="primary" htmlType="submit" loading={loading} block>登 录</Button>
           </Form.Item>
-          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', textAlign: 'center' }}>
-            demo: admin / Admin@2026
-          </Typography.Text>
         </Form>
       </Card>
     </div>

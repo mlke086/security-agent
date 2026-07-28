@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Layout, Menu, Button, Typography, theme, message, Select, Space } from "antd"
+import { Layout, Menu, Button, Typography, theme, Select, Space } from "antd"
 import {
   AlertOutlined, DashboardOutlined, ProfileOutlined, AuditOutlined,
   LogoutOutlined, SecurityScanOutlined, BugOutlined,
@@ -9,7 +9,6 @@ import {
 import { useNavigate, useLocation, Outlet } from "react-router-dom"
 import { useAuth } from "../context/AuthContext"
 import { useTheme, THEMES, type ThemeKey } from "../context/ThemeContext"
-import { seedDemo } from "../api/client"
 
 const { Header, Sider, Content } = Layout
 
@@ -18,12 +17,10 @@ export default function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
-  const [seeding, setSeeding] = useState(false)
   const { token: themeToken } = theme.useToken()
   const { profile, setThemeKey, themeKey } = useTheme()
   const role = user?.role || ""
 
-  const isAdmin = role === "admin"
   const canApprove = role === "admin" || role === "responder"
 
   const items = [
@@ -65,11 +62,6 @@ export default function AppLayout() {
               suffixIcon={<SkinOutlined />}
               options={Object.values(THEMES).map((t) => ({ label: t.label, value: t.key }))}
             />
-            {isAdmin && (
-              <Button size="small" icon={<BugOutlined />} loading={seeding} onClick={async () => {
-                setSeeding(true); try { await seedDemo(); message.success("演示数据已注入") } catch { message.error("注入失败") } finally { setSeeding(false) }
-              }}>注入演示数据</Button>
-            )}
             <Typography.Text>{user?.username}</Typography.Text>
             <Button type="text" icon={<LogoutOutlined />} onClick={logout}>退出</Button>
           </Space>

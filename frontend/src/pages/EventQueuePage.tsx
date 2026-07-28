@@ -2,7 +2,7 @@
 import { Table, Tag, Button, Drawer, Form, Input, Select, message, Space, Typography, Badge, Progress } from "antd"
 import { PlusOutlined, EyeOutlined } from "@ant-design/icons"
 import { useNavigate } from "react-router-dom"
-import api, { getEvents, submitEvent, seedDemo, getSseToken } from "../api/client"
+import api, { getEvents, submitEvent, getSseToken } from "../api/client"
 import { useAuth } from "../context/AuthContext"
 import type { EventRecord } from "../types"
 
@@ -18,12 +18,10 @@ export default function EventQueuePage() {
   const [loading, setLoading] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [seeding, setSeeding] = useState(false)
   const [filters, setFilters] = useState<{ status?: string; verdict?: string; priority?: string }>({})
   const [form] = Form.useForm()
   const intervalRef = useRef<ReturnType<typeof setInterval>>()
 
-  const isAdmin = user?.role === "admin"
   const canSubmit = user?.role === "admin" || user?.role === "analyst"
 
   const fetchEvents = async () => {
@@ -98,7 +96,6 @@ export default function EventQueuePage() {
           <Select allowClear placeholder="状态" style={{ width: 130 }} onChange={(v) => setFilters(f => ({ ...f, status: v }))} options={["processing", "completed", "pending_approval", "ignored", "error", "rejected"].map(s => ({ value: s, label: s }))} />
           <Select allowClear placeholder="结论" style={{ width: 130 }} onChange={(v) => setFilters(f => ({ ...f, verdict: v }))} options={["true_positive", "false_positive", "ignored"].map(s => ({ value: s, label: s }))} />
           <Select allowClear placeholder="定级" style={{ width: 110 }} onChange={(v) => setFilters(f => ({ ...f, priority: v }))} options={["high", "medium", "low"].map(s => ({ value: s, label: s }))} />
-          {isAdmin && <Button loading={seeding} onClick={async () => { setSeeding(true); try { await seedDemo(); message.success("演示数据已注入") } catch { message.error("注入失败") } finally { setSeeding(false); fetchEvents() } }}>注入演示数据</Button>}
           {canSubmit && <Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerOpen(true)}>提交新事件</Button>}
         </Space>
       </Space>

@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     # (国内可访问 GitHub)。离线导入另支持 NVD json / advisory zip / rulepack。
     nvd_api_key: str = ""  # NVD API key，提升限速(50req/30s)，留空走匿名(5req/30s)
     nvd_proxy: str = ""  # NVD 代理(国内访问超时时配，如 http://192.168.254.121:7897)
+    # NVD 拉取最近 N 小时更新的 CVE；0 = 兜底走 DEFAULT_LOOKBACK_HOURS(模块常量)。
+    nvd_lookback_hours: int = Field(default=24, ge=0, le=8760)
+    # NVD 每页条数；服务端硬上限 2000，超出会 400。
+    nvd_results_per_page: int = Field(default=100, ge=1, le=2000)
     # GitHub Advisory 在线同步：拉取近 N 天的 reviewed advisory，避免全量 28530 条。
     advisory_lookback_days: int = 30
 

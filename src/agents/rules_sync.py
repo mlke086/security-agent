@@ -390,9 +390,11 @@ async def sync_rules(source: str = "nvd", since: str | None = None) -> str:
 
 async def _fetch_nvd_cves(since: str | None) -> list[dict[str, Any]]:
     """Fetch CVEs from NVD API 2.0. Returns list of CVE item dicts."""
+    settings = get_settings()
     if since is None:
-        if DEFAULT_LOOKBACK_HOURS:
-            since = (datetime.now(UTC) - timedelta(hours=DEFAULT_LOOKBACK_HOURS)).strftime(
+        lookback = settings.nvd_lookback_hours or DEFAULT_LOOKBACK_HOURS
+        if lookback:
+            since = (datetime.now(UTC) - timedelta(hours=lookback)).strftime(
                 "%Y-%m-%dT%H:%M:%S.000"
             )
         else:
@@ -401,13 +403,11 @@ async def _fetch_nvd_cves(since: str | None) -> list[dict[str, Any]]:
                 "%Y-%m-%dT%H:%M:%S.000"
             )
     pub_end = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.999")
-
     params: dict[str, str] = {
         "pubStartDate": since.replace(" ", "T"),
         "pubEndDate": pub_end,
-        "resultsPerPage": "100",
+        "resultsPerPage": str(settings.nvd_results_per_page),
     }
-    settings = get_settings()
     headers = {"User-Agent": "Security-Agent/0.1.0"}
     # 需求2.2：NVD apiKey 提升限速(匿名 5req/30s -> 带 key 50req/30s)
     if settings.nvd_api_key:

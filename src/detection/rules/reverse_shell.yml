@@ -1,0 +1,19 @@
+﻿title: Reverse shell pattern detected
+id: reverse-shell-netcat-2026
+description: Detects suspicious use of netcat with execution flag suggesting a reverse shell.
+level: critical
+logsource:
+  product: linux
+  category: process_creation
+detection:
+  selection:
+    process.name: nc
+    process.cmdline|contains: -e
+  condition: selection
+fields:
+  - process.cmdline
+  - process.pid
+  - hostname
+tags:
+  - attack.execution
+  - attack.t1059.004

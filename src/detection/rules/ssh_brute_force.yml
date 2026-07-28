@@ -1,0 +1,20 @@
+﻿title: SSH brute force attempt
+id: ssh-brute-force-2026
+description: Detects repeated SSH authentication failures from the same source within the log source.
+level: high
+logsource:
+  product: linux
+  service: sshd
+detection:
+  selection:
+    RuleName|contains: ssh
+    Status|contains: failed
+    ip|exists: true
+  condition: selection
+fields:
+  - ip
+  - hostname
+  - agent.id
+tags:
+  - attack.credential_access
+  - attack.t1110

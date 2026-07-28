@@ -1,0 +1,19 @@
+﻿title: Linux privilege escalation via su
+id: priv-esc-su-2026
+description: Detects attempts to switch users via su command.
+level: high
+logsource:
+  product: linux
+  category: process_creation
+detection:
+  selection:
+    process.name: su
+    user.name|exists: true
+  condition: selection
+fields:
+  - user.name
+  - process.cmdline
+  - hostname
+tags:
+  - attack.privilege_escalation
+  - attack.t1548

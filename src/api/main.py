@@ -11,6 +11,7 @@ from src.api.auth import auth_router
 from src.api.auth.routes import require_role
 from src.api.routers.agents import router as agents_router
 from src.api.routers.alerts import router as alerts_router
+from src.api.routers.detection import router as detection_router
 from src.api.routers.chat import router as chat_router
 from src.api.routers.demo import router as demo_router
 from src.api.routers.models import router as models_router
@@ -129,6 +130,16 @@ async def lifespan(app: FastAPI):
     from src.agents.scheduler import start_background_tasks
 
     start_background_tasks()
+
+    # Phase 3 -- load bundled Sigma rules into the singleton Detector.
+    # Must run before the first /api/v1/detect/run hits so the rule
+    # registry is populated for any worker serving HTTP traffic.
+    try:
+        from src.detection.detector import init_builtin_rules
+        n = init_builtin_rules()
+        logger.info("detection_rules_loaded_in_lifespan", count=n)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("detection_rules_load_failed_in_lifespan", error=str(exc))
 
     # P1 (F4) -- subscribe to cross-worker revocation events so token revoke
     # also tears down any WS held by THIS worker.
@@ -303,6 +314,7 @@ app.include_router(chat_router)
 app.include_router(scan_chat_router)
 app.include_router(stream_router)
 app.include_router(alerts_router)
+app.include_router(detection_router)
 
 if __name__ == "__main__":
     import uvicorn

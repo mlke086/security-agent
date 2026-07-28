@@ -57,6 +57,14 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean \
 WORKDIR /build
 
 # 先复制依赖清单 + 源码,利用 docker layer 缓存
+#
+# 维护说明 (2026-07-28): pyproject.toml 是 Python 依赖的唯一来源。
+# 之后任何新加的 src/ 子模块(如 src/detection/、src/api/routers/
+# sigma_rules.py 等)都会被下面这行 `COPY src ./src` 自动包含进
+# 镜像,无需改 Dockerfile。新增 Python 依赖时:
+#   1. 先把包加到 pyproject.toml 的 dependencies[]
+#   2. 然后在下面 RUN pip install 块里也加一行同名 pinned 版本
+# 任何一边漏加都会导致镜像里缺这个包,所以两边都要同步。
 COPY pyproject.toml ./
 COPY src ./src
 
@@ -149,8 +157,19 @@ USER secagent
 
 EXPOSE 8000
 
-# 健康检查在 docker-compose.yml 的 api 服务中定义
-# (celery/taskworker 也使用此镜像,不跑 API server)
+# Healthcheck. Mirrors docker-compose.yml. P0 (2026-07-28): the api
+# service is the only one that exposes 8000; celery/taskworker share
+# the image but never call /health. So a failing healthcheck means the
+# API process is down (which is the only thing that matters). The
+# --noproxy '*' + -4  flags force curl to skip the build-time proxy
+# and resolve 127.0.0.1 directly -- otherwise the build-time
+# HTTP_PROXY would be honored (and fail to reach 127.0.0.1:8000).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -fsS -4 --noproxy '*' http://127.0.0.1:8000/health || exit 1
+
+# celery/taskworker 也使用此镜像,不跑 API server,所以这两个
+# 服务的 healthcheck 必须在 docker-compose.yml 里用 override 关闭
+# (示例见 docker-compose.yml 的 celery / taskworker 服务定义)
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
 CMD ["api"]

@@ -1,0 +1,66 @@
+# Security AI Agent — Docker build context filter
+# Affects: deployments/prod/docker/Dockerfile.api + Dockerfile.frontend
+# (both use repo root as the build context)
+#
+# Goals:
+#   - Exclude .pyc / __pycache__ / .venv / cache dirs to shrink build context
+#   - Exclude tests / docs / editor configs
+#   - API image does not need frontend/ or agent/ sources
+#   - Frontend image does not need src/ (Python) or agent/ (Go)
+#   - Both images still need deployments/prod/docker/ (scripts + config)
+#   - Exclude .git/ to keep git history out of the image
+
+# ---- Python cache ----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Python venv ----
+.venv/
+.venv312/
+.goworks/
+.coverage
+.coverage.*
+
+# ---- Tests / docs / scratch ----
+tests/
+docs/
+*.md
+E2E_TEST_REPORT.md
+enroll_token.json
+openapi.json
+
+# ---- Editor / tool config ----
+.git/
+.gitignore
+.gitattributes
+.editorconfig
+.idea/
+.vscode/
+.claude/
+.codex/
+
+# ---- Scratch / misc ----
+*.log
+*.swp
+*.bak
+.DS_Store
+Thumbs.db
+
+# ---- API image does not need ----
+frontend/
+agent/
+scripts/
+.openapi.json
+
+# ---- Frontend image does not need ----
+src/
+agent/
+docs/
+scripts/

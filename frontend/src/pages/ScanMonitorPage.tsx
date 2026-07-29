@@ -161,14 +161,14 @@ export default function ScanMonitorPage() {
     try {
       const r = await cancelScanTask(taskId)
       if (r.status === "cancelled") {
-        message.success("????????Agent ???????????")
+        message.success("取消请求已发送，Agent 将在下一个心跳停止扫描")
       } else {
-        message.warning(`????????${r.status}`)
+        message.warning(`取消结果：${r.status}`)
       }
       await refreshTask()
     } catch (err: any) {
       const detail = err?.response?.data?.detail
-      message.error(detail || "????")
+      message.error(detail || "操作失败")
     } finally {
       setCancelling(false)
     }

@@ -3,7 +3,7 @@ import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typograph
 import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined, DownOutlined, PoweroffOutlined, LockOutlined, MonitorOutlined } from "@ant-design/icons"
 import type { Host, HostGroup } from "../api/client"
 import {
-  createEnrollToken,
+  createEnrollToken, getHostStats, type HostStatsRow,
   getConsoleUrl,
   getInstallHelper,
   getInstallScript,
@@ -55,6 +55,17 @@ export default function HostOnboardPage() {
   const [consoleBaseUrl, setConsoleBaseUrl] = useState<string>("")
 
   const [groups, setGroups] = useState<HostGroup[]>([])
+  // 2026-07-29 UX upgrade: business-group distribution card above the
+  // host table. Refreshed alongside the host list so the bar chart
+  // stays in sync.
+  const [hostStats, setHostStats] = useState<HostStatsRow[]>([])
+
+  const refreshHostStats = async () => {
+    try {
+      const r = await getHostStats()
+      setHostStats(r.items || [])
+    } catch { /* ignore */ }
+  }
   const [groupFilter, setGroupFilter] = useState<string | undefined>(undefined)
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   // 需求1.3：主机列表搜索（前端过滤，debounce 300ms）
@@ -166,7 +177,7 @@ export default function HostOnboardPage() {
   useEffect(() => {
     let alive = true
     listHosts({ include_decommissioned: showDecommissioned })
-      .then((res) => { if (alive) setHosts(res.items) })
+      .then((res) => { if (alive) setHosts(res.items); void refreshHostStats() })
       .catch(() => { if (alive) message.error("加载主机列表失败") })
     fetchGroups()
     return () => { alive = false }
@@ -207,15 +218,26 @@ export default function HostOnboardPage() {
     setUpgrading((prev) => ({ ...prev, [agent.agent_id]: true }))
     try {
       const r = await upgradeAgent(agent.agent_id)
-      if (r.delivered) {
-        message.success(`?? ${agent.hostname} ???? ${r.version} ??`)
-      } else {
-        message.warning("???????????????????????")
+      if (r.status === "already_current") {
+        message.info(`${agent.hostname} 已是最新版本 ${r.version}`)
+        await refreshUpgrade(agent.agent_id)
+        return
       }
-      await refreshUpgrade(agent.agent_id)
-    } catch (err: any) {
+      if (r.delivered) message.success(`已向 ${agent.hostname} 下发 ${r.version} 升级`)
+      else message.warning("主机当前离线，升级将在重连后下发")
+
+      for (let i = 0; i < 45; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        const status = await getAgentUpgradeStatus(agent.agent_id)
+        setUpgradeById((prev) => ({ ...prev, [agent.agent_id]: status.upgrade }))
+        if (["confirmed", "failed", "already_current"].includes(status.upgrade.state)) {
+          if (status.upgrade.state === "confirmed") message.success(`${agent.hostname} 已升级到 ${status.upgrade.current_version}`)
+          if (status.upgrade.state === "failed") message.error(status.upgrade.error || "Agent 升级失败")
+          break
+        }
+      }    } catch (err: any) {
       const detail = err?.response?.data?.detail
-      message.error(detail || "????")
+      message.error(detail || "操作失败")
     } finally {
       setUpgrading((prev) => ({ ...prev, [agent.agent_id]: false }))
     }
@@ -605,6 +627,41 @@ export default function HostOnboardPage() {
           size="small"
           locale={{ emptyText: <Empty description="暂无主机组" /> }}
         />
+      </Card>
+
+      <Card title="业务分布" size="small" style={{ marginBottom: 16 }}>
+        {hostStats.length === 0 ? (
+          <div style={{ color: "#999" }}>暂无业务分组数据</div>
+        ) : (
+          (() => {
+            const maxTotal = Math.max(...hostStats.map((g) => g.total), 1)
+            const SEV_COLORS_BAR: Record<string, string> = { critical: "#cf1322", high: "#d4380d", medium: "#d4b106", low: "#389e0d", info: "#1677ff" }
+            return (
+              <div>
+                {hostStats.map((g) => (
+                  <div key={g.group} style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+                      <span>
+                        <b>{g.group}</b>
+                        <span style={{ color: "#999", marginLeft: 8 }}>{g.member_count} 主机</span>
+                      </span>
+                      <span style={{ color: "#666" }}>{g.total} 漏洞</span>
+                    </div>
+                    <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "#f5f5f5" }}>
+                      {Object.entries(g.by_severity || {}).map(([sev, n]) => (
+                        <span
+                          key={sev}
+                          title={sev + ": " + n}
+                          style={{ width: ((Number(n) / maxTotal) * 100) + "%", background: SEV_COLORS_BAR[sev] || "#999" }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          })()
+        )}
       </Card>
 
       <Card title={`主机列表 (${hosts.length})`}>

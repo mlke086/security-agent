@@ -1,5 +1,6 @@
 """Pydantic models for the vulnerability scanning subsystem."""
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
@@ -22,6 +23,12 @@ class Host(BaseModel):
     status: HostStatus = HostStatus.ONLINE
     agent_version: str = ""
     rule_version: str = ""
+    # 2026-07-29 UX upgrade: business groups this scan targets,
+    # derived from the targets at enqueue time so the task list page
+    # can render the column without an N+1 host lookup. Optional /
+    # empty for legacy / dialog-driven tasks where the group isn't
+    # known up front.
+    target_groups: list[str] = []
     last_heartbeat: str = ""
     group: str | None = None
     owner: str | None = None
@@ -49,6 +56,12 @@ class ScanTask(BaseModel):
     source: Literal["dialog", "manual"] = "manual"
     intent_text: str | None = None
     targets: list[str] = []
+    # 2026-07-29 UX upgrade: business groups this scan targets,
+    # derived from the targets at enqueue time so the task list page
+    # can render the column without an N+1 host lookup. Optional /
+    # empty for legacy / dialog-driven tasks where the group is not
+    # known up front.
+    target_groups: list[str] = []
     policy: ScanPolicy = ScanPolicy()
     rule_version: str = ""
 
@@ -92,6 +105,21 @@ class VulnFinding(BaseModel):
     fix_advice: str | None = None
     status: Literal["open", "fixed", "accepted"] = "open"
     detected_at: str = ""
+    # ---- AI evidence (2026-07-29 UX upgrade) ----
+    # ai_processed distinguishes "AI handled this row" from "the row was
+    # never seen by AI" (e.g. LLM unavailable -> fallback in the subgraph).
+    # Old documents that lack the field load with ai_processed=False and
+    # ai_reason=None, so the frontend can render the "AI 待分析" badge.
+    ai_processed: bool = False
+    ai_reason: str | None = None
+    ai_fix_summary: str | None = None
+    ai_processed_at: str = ""
+    # ---- Fix tracking (2026-07-29 UX upgrade) ----
+    # first_fixed_at is the first time status transitioned to fixed/accepted;
+    # last_fixed_at is the most recent such transition. Operators can use
+    # these to track SLA / re-open history without joining the audit log.
+    first_fixed_at: str | None = None
+    last_fixed_at: str | None = None
 
 
 class ScanResult(BaseModel):
@@ -112,6 +140,17 @@ class ScanReport(BaseModel):
     top_vulns: list[dict] = []
     recommendations: list[str] = []
     generated_at: str = ""
+    # ---- AI evidence (2026-07-29 UX upgrade) ----
+    # ai_processed separates AI-generated reports from the LLM-unavailable
+    # template fallback. ai_overall_advice is the business-level "why this
+    # matters and what to do next" content, separate from the structured
+    # recommendations[] list (which is rule-driven by severity). The UI
+    # renders both in the same card but as two blocks so operators can tell
+    # the difference at a glance.
+    ai_processed: bool = False
+    ai_model: str = ""
+    ai_overall_advice: str = ""
+    ai_processed_at: str = ""
 
 
 class ScanIntent(BaseModel):
@@ -124,8 +163,15 @@ class ScanIntent(BaseModel):
 class EnrollTokenRequest(BaseModel):
     group: str | None = None
     # ttl_hours: 0 falls back to the server default (24h); max 168h = 1 week.
-    ttl_hours: int = Field(default=24, ge=0, le=168, description="Token lifetime in hours; 0 falls back to the default")
-    uses: int = Field(default=1, ge=1, le=10000, description="Max number of agents that can enroll with this token")
+    ttl_hours: int = Field(
+        default=24, ge=0, le=168, description="Token lifetime in hours; 0 falls back to the default"
+    )
+    uses: int = Field(
+        default=1,
+        ge=1,
+        le=10000,
+        description="Max number of agents that can enroll with this token",
+    )
 
 
 class EnrollTokenResponse(BaseModel):
@@ -206,6 +252,7 @@ class RulePack(BaseModel):
     signature: str = ""
     published_at: str = ""
 
+
 # ============================================================
 # Agent monitoring / EDR alert model (Phase 0 of
 # docs/Agent监控告警改造方案.md). All fields are source-agnostic;
@@ -217,6 +264,7 @@ from enum import StrEnum as _StrEnum
 
 class AlertSeverity(_StrEnum):
     """Standard severity levels across all EDR sources."""
+
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
@@ -226,6 +274,7 @@ class AlertSeverity(_StrEnum):
 
 class AlertStatus(_StrEnum):
     """Operator workflow state for an alert."""
+
     NEW = "new"
     ACKNOWLEDGED = "acknowledged"
     IN_PROGRESS = "in_progress"
@@ -236,6 +285,7 @@ class AlertStatus(_StrEnum):
 class AlertSource(_StrEnum):
     """Where the alert originated. Phase 1 wires Wazuh/Elkeid/Syslog;
     Phase 2 adds the in-house secagent source; Phase 4 adds the rest."""
+
     WAZUH = "wazuh"
     ELKEID = "elkeid"
     ELASTIC = "elastic"
@@ -248,6 +298,7 @@ class AlertSource(_StrEnum):
 
 class AlertIOC(BaseModel):
     """Indicators of Compromise extracted from the alert payload."""
+
     ips: list[str] = []
     domains: list[str] = []
     hashes: list[str] = []
@@ -258,6 +309,7 @@ class AlertIOC(BaseModel):
 
 class Alert(BaseModel):
     """Normalized alert. One row per source alert, regardless of vendor."""
+
     alert_id: str  # primary key; deterministic from source when possible
     source: AlertSource
     title: str
@@ -285,6 +337,7 @@ class AlertIngestRequest(BaseModel):
     """Webhook payload from a third-party EDR. The "source" field tells
     the server which adapter to use for normalization. Vendors that do not
     supply source metadata may rely on the URL path (see router)."""
+
     source: str = ""  # any vendor name; normalize() maps UNKNOWN on miss
     payload: dict
 
@@ -293,3 +346,49 @@ class AlertIngestResponse(BaseModel):
     alert_id: str
     received_at: str
     severity: AlertSeverity
+
+
+# ---- User management (Phase 6, 2026-07-28) ----
+RoleLiteral = Literal["admin", "analyst", "viewer", "responder"]
+
+
+class UserPublic(BaseModel):
+    """API representation of a user (no password)."""
+
+    username: str
+    role: RoleLiteral
+    disabled: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    last_login_at: datetime | None = None
+    deleted_at: datetime | None = None
+
+
+class UserCreate(BaseModel):
+    """POST /api/v1/users body. Admin only."""
+
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_]+$")
+    password: str = Field(min_length=12, max_length=128)
+    role: RoleLiteral = "viewer"
+
+
+class UserUpdate(BaseModel):
+    """PATCH /api/v1/users/{username} body. Admin only."""
+
+    username: str | None = Field(
+        default=None, min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_]+$"
+    )
+    role: RoleLiteral | None = None
+    disabled: bool | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    """POST /api/v1/users/me/password body. Any user."""
+
+    old_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class UserListResponse(BaseModel):
+    items: list[UserPublic]
+    count: int

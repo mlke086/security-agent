@@ -1,4 +1,5 @@
-﻿"""Unit tests for vulnscan subgraph nodes."""
+"""Unit tests for vulnscan subgraph nodes."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,11 +28,19 @@ from src.orchestration.subgraphs.vulnscan.nodes import (
 
 def _vuln(**kw):
     defaults = {
-        "finding_id": "f-1", "task_id": "task-1", "agent_id": "agent-a",
-        "hostname": "web-01", "category": ScanModule.SYS_VULN,
-        "name": "CVE-2024-0001", "cve": "CVE-2024-0001",
-        "severity": "high", "ai_severity": "high", "ai_filtered": False,
-        "evidence": "...", "fix_advice": "patch", "status": "open",
+        "finding_id": "f-1",
+        "task_id": "task-1",
+        "agent_id": "agent-a",
+        "hostname": "web-01",
+        "category": ScanModule.SYS_VULN,
+        "name": "CVE-2024-0001",
+        "cve": "CVE-2024-0001",
+        "severity": "high",
+        "ai_severity": "high",
+        "ai_filtered": False,
+        "evidence": "...",
+        "fix_advice": "patch",
+        "status": "open",
         "detected_at": "2026-01-01T00:00:00",
     }
     defaults.update(kw)
@@ -40,8 +49,12 @@ def _vuln(**kw):
 
 def _result(task_id="task-1", agent_id="agent-a", is_final=False, batch=1):
     return ScanResult(
-        task_id=task_id, agent_id=agent_id, hostname="web-01",
-        findings=[_vuln().model_dump()], batch=batch, is_final=is_final,
+        task_id=task_id,
+        agent_id=agent_id,
+        hostname="web-01",
+        findings=[_vuln().model_dump()],
+        batch=batch,
+        is_final=is_final,
         ts="2026-01-01T00:00:00",
     )
 
@@ -114,6 +127,35 @@ def _host(agent_id, hostname, ip, group=None):
                 os="linux", arch="amd64", kernel="5.x")
 
 
+def _make_mock_adapter():
+    """Build an AsyncMock adapter with sensible defaults.
+
+    V9 4.7: production code calls ``adapter.current_model_name`` in
+    multiple places, which used to force every test to repeat
+    ``mock.current_model_name = MagicMock(return_value="")``. Provide
+    it here once so each test gets the default. Tests that need a
+    specific value still set the attribute on their mock (they
+    shadow the default cleanly).
+    """
+    mock = AsyncMock()
+    mock.current_model_name = MagicMock(return_value="")
+    return mock
+
+
+
+    from src.agents.models import Host
+
+    return Host(
+        agent_id=agent_id,
+        hostname=hostname,
+        ip=ip,
+        group=group,
+        os="linux",
+        arch="amd64",
+        kernel="5.x",
+    )
+
+
 class TestResolveTargets:
     """Covers P1-VULN-02: a group target must expand to ALL agents in the
     group, not just the first match."""
@@ -128,7 +170,9 @@ class TestResolveTargets:
         ]
         mock_store = AsyncMock()
         mock_store.list_hosts = AsyncMock(return_value=hosts)
-        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
             result = await _resolve_targets(["prod"])
         assert sorted(result) == ["agent-1", "agent-2", "agent-4"]
 
@@ -137,7 +181,9 @@ class TestResolveTargets:
         hosts = [_host("agent-1", "web-01", "10.0.0.1", group="prod")]
         mock_store = AsyncMock()
         mock_store.list_hosts = AsyncMock(return_value=hosts)
-        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
             result = await _resolve_targets(["web-01"])
         assert result == ["agent-1"]
 
@@ -150,7 +196,9 @@ class TestResolveTargets:
         ]
         mock_store = AsyncMock()
         mock_store.list_hosts = AsyncMock(return_value=hosts)
-        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
             result = await _resolve_targets(["agent-1", "prod"])
         assert sorted(result) == ["agent-1", "agent-2"]
 
@@ -158,7 +206,9 @@ class TestResolveTargets:
     async def test_no_match_returns_targets_as_is(self):
         mock_store = AsyncMock()
         mock_store.list_hosts = AsyncMock(return_value=[])
-        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
             result = await _resolve_targets(["unknown-agent-id"])
         assert result == ["unknown-agent-id"]
 
@@ -189,7 +239,7 @@ class TestParseIntent:
         from src.agents.models import ScanIntent
 
         state = _default_state("dialog", intent_text="scan web servers for vulns")
-        mock_adapter = AsyncMock()
+        mock_adapter = _make_mock_adapter()
         mock_intent = ScanIntent(targets=["web-01", "web-02"], modules=[ScanModule.SYS_VULN])
         mock_adapter.chat_completion.return_value = mock_intent
 
@@ -202,7 +252,7 @@ class TestParseIntent:
     @pytest.mark.asyncio
     async def test_dialog_llm_fails_gracefully(self):
         state = _default_state("dialog", intent_text="scan")
-        mock_adapter = AsyncMock()
+        mock_adapter = _make_mock_adapter()
         mock_adapter.chat_completion.side_effect = RuntimeError("LLM down")
 
         with patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter):
@@ -221,11 +271,22 @@ class TestDispatch:
         mock_gateway = MagicMock()
 
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway", return_value=mock_gateway),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway",
+                return_value=mock_gateway,
+            ),
             patch("src.orchestration.subgraphs.vulnscan.nodes._resolve_targets", return_value=[]),
-            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
         ):
             result = await dispatch(state)
             assert result["status"] == "failed"
@@ -234,13 +295,12 @@ class TestDispatch:
             # P1-VULN-01: failure must be persisted to ES so /tasks/{id}
             # sees "failed" instead of polling collect for 30 minutes.
             failed_updates = [
-                c for c in mock_store.update_task.call_args_list
+                c
+                for c in mock_store.update_task.call_args_list
                 if c.kwargs.get("status") == "failed"
             ]
             assert failed_updates, "expected an update_task(status=failed) call"
             assert failed_updates[0].kwargs.get("error") == "No target agents found"
-
-
 
     # F1.4a (2026-07-21): regression test for the silent 30-minute timeout.
     # The previous collect() read stats["failed"] from the in-memory task
@@ -252,23 +312,39 @@ class TestDispatch:
         state = _default_state("manual", targets=["host-a"])
         state["total_targets"] = 1
         state["task"] = ScanTask(
-            task_id=state["task_id"], source="manual", targets=["host-a"],
-            policy=ScanPolicy(timeout_sec=1800), status="scanning",
+            task_id=state["task_id"],
+            source="manual",
+            targets=["host-a"],
+            policy=ScanPolicy(timeout_sec=1800),
+            status="scanning",
             stats={"total": 1, "done": 0, "failed": 0},
         )
         result = _result(task_id=state["task_id"], is_final=False)
         mock_store = AsyncMock()
         mock_store.list_results.return_value = [result]
         mock_store.update_task = AsyncMock()
-        mock_store.get_task = AsyncMock(return_value=ScanTask(
-            task_id=state["task_id"], source="manual", targets=["host-a"],
-            policy=ScanPolicy(), status="scanning",
-            stats={"total": 1, "done": 0, "failed": 1},
-        ))
+        mock_store.get_task = AsyncMock(
+            return_value=ScanTask(
+                task_id=state["task_id"],
+                source="manual",
+                targets=["host-a"],
+                policy=ScanPolicy(),
+                status="scanning",
+                stats={"total": 1, "done": 0, "failed": 1},
+            )
+        )
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
         ):
             new_state = await collect(state)
         assert new_state["status"] == "analyzing"
@@ -286,15 +362,27 @@ class TestDispatch:
         fake_redis = AsyncMock(exists=AsyncMock(return_value=0))
         fake_redis.publish = AsyncMock()
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway", return_value=mock_gateway),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway",
+                return_value=mock_gateway,
+            ),
             patch("src.orchestration.subgraphs.vulnscan.nodes._resolve_targets", return_value=[]),
             patch("redis.asyncio.from_url", return_value=fake_redis),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
         ):
             await dispatch(state)
-        published = [c for c in fake_redis.publish.call_args_list
-                     if c.args and c.args[0] == f"vulnscan:task:{state['task_id']}"]
+        published = [
+            c
+            for c in fake_redis.publish.call_args_list
+            if c.args and c.args[0] == f"vulnscan:task:{state['task_id']}"
+        ]
         assert published, "dispatch failure must publish to vulnscan:task SSE channel"
 
 
@@ -307,13 +395,18 @@ class TestCollect:
         state["total_targets"] = 0
         state["status"] = "failed"
         state["task"] = ScanTask(
-            task_id=state["task_id"], source="manual", targets=[],
-            policy=ScanPolicy(), status="failed",
+            task_id=state["task_id"],
+            source="manual",
+            targets=[],
+            policy=ScanPolicy(),
+            status="failed",
             stats={"total": 0, "done": 0, "failed": 0},
         )
         mock_store = AsyncMock()  # list_results must NOT be called
         mock_store.get_task = AsyncMock(return_value=None)
-        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
             new_state = await collect(state)
         assert new_state["status"] == "failed"
         mock_store.list_results.assert_not_called()
@@ -323,8 +416,11 @@ class TestCollect:
         state = _default_state("manual", targets=["host-a"])
         state["total_targets"] = 1
         state["task"] = ScanTask(
-            task_id=state["task_id"], source="manual", targets=["agent-a"],
-            policy=ScanPolicy(), status="scanning",
+            task_id=state["task_id"],
+            source="manual",
+            targets=["agent-a"],
+            policy=ScanPolicy(),
+            status="scanning",
             stats={"total": 1, "done": 0, "failed": 0},
         )
         result = _result(task_id=state["task_id"], is_final=True)
@@ -338,9 +434,17 @@ class TestCollect:
         mock_store.get_task = AsyncMock(return_value=None)
 
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
         ):
             new_state = await collect(state)
             assert new_state["status"] == "analyzing"
@@ -359,8 +463,11 @@ class TestCollect:
         state = _default_state("manual", targets=["host-a"])
         state["total_targets"] = 2  # waiting for 2 agents, only 1 done
         state["task"] = ScanTask(
-            task_id=state["task_id"], source="manual", targets=["agent-a", "agent-b"],
-            policy=ScanPolicy(timeout_sec=1800), status="scanning",
+            task_id=state["task_id"],
+            source="manual",
+            targets=["agent-a", "agent-b"],
+            policy=ScanPolicy(timeout_sec=1800),
+            status="scanning",
             stats={"total": 2, "done": 0, "failed": 0},
         )
         result = _result(task_id=state["task_id"], is_final=True)
@@ -378,9 +485,17 @@ class TestCollect:
         fake_loop.time = lambda: next(loop_times)
 
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
             patch("asyncio.get_running_loop", return_value=fake_loop),
             patch("asyncio.sleep", new=AsyncMock()),
         ):
@@ -399,14 +514,30 @@ class TestAggregate:
         f3 = _vuln(finding_id="f-3", cve="CVE-2024-0002")
         mock_store = AsyncMock()
         mock_store.list_results.return_value = [
-            ScanResult(task_id=state["task_id"], agent_id="a", hostname="h1",
-                       findings=[f1.model_dump(), f2.model_dump()], batch=1, is_final=True, ts=""),
-            ScanResult(task_id=state["task_id"], agent_id="b", hostname="h2",
-                       findings=[f3.model_dump()], batch=2, is_final=True, ts=""),
+            ScanResult(
+                task_id=state["task_id"],
+                agent_id="a",
+                hostname="h1",
+                findings=[f1.model_dump(), f2.model_dump()],
+                batch=1,
+                is_final=True,
+                ts="",
+            ),
+            ScanResult(
+                task_id=state["task_id"],
+                agent_id="b",
+                hostname="h2",
+                findings=[f3.model_dump()],
+                batch=2,
+                is_final=True,
+                ts="",
+            ),
         ]
         mock_store.save_vulns = AsyncMock()
 
-        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
             new_state = await aggregate(state)
             assert len(new_state["collected_findings"]) == 2
 
@@ -417,7 +548,9 @@ class TestAggregate:
         mock_store.list_results.return_value = []
         mock_store.save_vulns = AsyncMock()
 
-        with patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store):
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
             new_state = await aggregate(state)
             assert new_state["collected_findings"] == []
 
@@ -427,8 +560,11 @@ class TestBuildAnalysisPrompt:
         findings = [
             _vuln(finding_id="f-1").model_dump(),
             _vuln(
-                finding_id="f-2", cve=None,
-                name="Weak SSH config", category=ScanModule.BASELINE, severity="medium",
+                finding_id="f-2",
+                cve=None,
+                name="Weak SSH config",
+                category=ScanModule.BASELINE,
+                severity="medium",
             ).model_dump(),
         ]
         prompt = _build_analysis_prompt(findings)
@@ -450,23 +586,29 @@ class TestLLMAnalysis:
         f1 = _vuln(finding_id="f-1", cve="CVE-2024-0001", severity="critical").model_dump()
         state["collected_findings"] = [f1]
 
-        mock_adapter = AsyncMock()
+        mock_adapter = _make_mock_adapter()
         from pydantic import BaseModel
+
         class AF(BaseModel):
             finding_id: str = "f-1"
             ai_severity: str = "critical"
             ai_filtered: bool = False
             reason: str = "real vuln"
             fix_advice: str = "patch now"
+
         class AR(BaseModel):
             analyzed: list[AF]
+
         mock_adapter.chat_completion.return_value = AR(analyzed=[AF()])
         mock_store = AsyncMock()
         mock_store.update_vuln = AsyncMock()
 
         with (
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
             result = await llm_analysis(state)
@@ -482,19 +624,35 @@ class TestLLMAnalysis:
 
     @pytest.mark.asyncio
     async def test_llm_analysis_llm_fails_gracefully(self):
+        """2026-07-29 UX upgrade: a batch-level LLM failure now writes a
+        fallback row (ai_processed=False) for every finding whose batch
+        failed, instead of silently leaving ai_severity blank."""
         state = _default_state("manual", targets=["host-a"])
         f1 = _vuln(finding_id="f-1", cve="CVE-2024-0001", severity="high").model_dump()
         state["collected_findings"] = [f1]
 
-        mock_adapter = AsyncMock()
+        mock_adapter = _make_mock_adapter()
         mock_adapter.chat_completion.side_effect = RuntimeError("timeout")
+        mock_store = AsyncMock()
+        mock_store.update_vuln = AsyncMock()
 
         with (
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
             result = await llm_analysis(state)
             assert result["status"] == "reporting"
+            assert result["ai_processed"] is False
+            # Exactly one fallback write for the one unanalysed finding.
+            assert mock_store.update_vuln.await_count == 1
+            kwargs = mock_store.update_vuln.await_args.kwargs
+            assert kwargs["ai_processed"] is False
+            assert kwargs["ai_severity"] == "high"
+            assert "LLM" in (kwargs.get("ai_reason") or "")
 
 
 class TestPubProgress:
@@ -503,7 +661,9 @@ class TestPubProgress:
         mock_redis = AsyncMock()
         mock_redis.publish = AsyncMock()
 
-        with patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")):
+        with patch(
+            "src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")
+        ):
             with patch("redis.asyncio.from_url", return_value=mock_redis):
                 await _pub_progress("task-1", "scan", "running", "step 1 of 3")
                 mock_redis.publish.assert_called_once()
@@ -513,7 +673,9 @@ class TestPubProgress:
         mock_redis = AsyncMock()
         mock_redis.publish.side_effect = RuntimeError("redis down")
 
-        with patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")):
+        with patch(
+            "src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")
+        ):
             with patch("redis.asyncio.from_url", return_value=mock_redis):
                 await _pub_progress("task-1", "scan", "running", "step")
 
@@ -528,14 +690,22 @@ class TestGenerateReport:
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
-        mock_adapter = AsyncMock()
+        mock_adapter = _make_mock_adapter()
         mock_adapter.chat_completion.return_value = "summary text"
 
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
-            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
             result = await generate_report(state)
@@ -553,9 +723,17 @@ class TestGenerateReport:
         mock_store.update_task = AsyncMock()
 
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
             result = await generate_report(state)
@@ -573,14 +751,22 @@ class TestGenerateReport:
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
-        mock_adapter = AsyncMock()
+        mock_adapter = _make_mock_adapter()
         mock_adapter.chat_completion.return_value = "Scan summary"
 
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
-            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
             result = await generate_report(state)
@@ -594,22 +780,33 @@ class TestGenerateReport:
         state = _default_state("manual", targets=["host-a"])
         critical = _vuln(finding_id="f-c", severity="critical")
         baseline = _vuln(
-            finding_id="f-b", severity="low", cve=None,
-            category=ScanModule.BASELINE, name="Weak password policy",
+            finding_id="f-b",
+            severity="low",
+            cve=None,
+            category=ScanModule.BASELINE,
+            name="Weak password policy",
         )
         mock_store = AsyncMock()
         mock_store.list_vulns.return_value = [critical, baseline]
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
-        mock_adapter = AsyncMock()
+        mock_adapter = _make_mock_adapter()
         mock_adapter.chat_completion.return_value = "summary"
 
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
-            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
             result = await generate_report(state)
@@ -621,6 +818,9 @@ class TestGenerateReport:
 
     @pytest.mark.asyncio
     async def test_report_llm_summary_fails_gracefully(self):
+        """2026-07-29 UX upgrade: when the LLM is unavailable the report
+        still completes, but the AI evidence fields mark it honestly as
+        ``ai_processed=False`` and ``ai_model=""``."""
         state = _default_state("manual", targets=["host-a"])
         v = _vuln()
         mock_store = AsyncMock()
@@ -628,19 +828,32 @@ class TestGenerateReport:
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
-        mock_adapter = AsyncMock()
+        mock_adapter = _make_mock_adapter()
         mock_adapter.chat_completion.side_effect = RuntimeError("LLM timeout")
 
         with (
-            patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
             patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
-            patch("redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))),
-            patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
             patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
         ):
             result = await generate_report(state)
             assert result["status"] == "completed"
             assert "Scan completed" in result["report"].summary
+            assert result["report"].ai_processed is False
+            assert result["report"].ai_model == ""
+            assert result["report"].ai_overall_advice == ""
+            assert result["report"].ai_processed_at == ""
+
 
 # ---------------------------------------------------------------
 # P2-1 regression: _is_task_cancelled must fail-CLOSED.
@@ -657,17 +870,17 @@ class TestIsTaskCancelledFailClosed:
     @pytest.mark.asyncio
     async def test_redis_connection_error_returns_true(self):
         from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+
         with patch("redis.asyncio.from_url") as mock_from_url:
             # Simulate redis.from_url raising during connection setup.
             mock_from_url.side_effect = ConnectionError("redis down")
             cancelled = await _is_task_cancelled("task-x")
-        assert cancelled is True, (
-            "redis connection failure must fail-closed; abort the node"
-        )
+        assert cancelled is True, "redis connection failure must fail-closed; abort the node"
 
     @pytest.mark.asyncio
     async def test_redis_exists_raises_returns_true(self):
         from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+
         fake_redis = AsyncMock()
         fake_redis.exists = AsyncMock(side_effect=TimeoutError("slow"))
         with patch("redis.asyncio.from_url", return_value=fake_redis):
@@ -677,6 +890,7 @@ class TestIsTaskCancelledFailClosed:
     @pytest.mark.asyncio
     async def test_key_exists_returns_true(self):
         from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+
         fake_redis = AsyncMock()
         fake_redis.exists = AsyncMock(return_value=1)
         with patch("redis.asyncio.from_url", return_value=fake_redis):
@@ -686,6 +900,7 @@ class TestIsTaskCancelledFailClosed:
     @pytest.mark.asyncio
     async def test_key_missing_returns_false(self):
         from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+
         fake_redis = AsyncMock()
         fake_redis.exists = AsyncMock(return_value=0)
         with patch("redis.asyncio.from_url", return_value=fake_redis):
@@ -695,6 +910,7 @@ class TestIsTaskCancelledFailClosed:
     @pytest.mark.asyncio
     async def test_aclose_failure_does_not_mask_decision(self):
         from src.orchestration.subgraphs.vulnscan.nodes import _is_task_cancelled
+
         fake_redis = AsyncMock()
         fake_redis.exists = AsyncMock(return_value=1)
         fake_redis.aclose = AsyncMock(side_effect=ConnectionError("teardown"))
@@ -712,17 +928,169 @@ class TestIsTaskCancelledFailClosed:
             mock_store = AsyncMock()
             mock_gateway = MagicMock()
             with (
-                patch("src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store),
-                patch("src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway", return_value=mock_gateway),
-                patch("src.orchestration.subgraphs.vulnscan.nodes._resolve_targets", return_value=["agent-a"]),
-                patch("src.common.config.settings.get_settings", return_value=MagicMock(redis_url="redis://x")),
+                patch(
+                    "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                    return_value=mock_store,
+                ),
+                patch(
+                    "src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway",
+                    return_value=mock_gateway,
+                ),
+                patch(
+                    "src.orchestration.subgraphs.vulnscan.nodes._resolve_targets",
+                    return_value=["agent-a"],
+                ),
+                patch(
+                    "src.common.config.settings.get_settings",
+                    return_value=MagicMock(redis_url="redis://x"),
+                ),
             ):
                 result = await dispatch(state)
-        assert result["status"] == "cancelled", (
-            "with redis down, fail-closed dispatch must abort"
-        )
+        assert result["status"] == "cancelled", "with redis down, fail-closed dispatch must abort"
         # Crucially: NO broadcast should have been attempted
         # (we do not waste agent bandwidth on a task we cannot
         # confirm is still wanted).
         mock_gateway.broadcast.assert_not_called()
 
+
+class TestLLMAnalysisFallback:
+    """2026-07-29 UX upgrade: the LLM analysis node must always write back
+    ai_processed/ai_reason for every finding, even when the LLM is
+    completely unavailable. Otherwise the UI shows blank AI columns
+    and operators can't tell whether AI was skipped or just slow.
+    """
+
+    @pytest.mark.asyncio
+    async def test_adapter_unavailable_writes_fallback_for_every_finding(self):
+        state = _default_state("manual", targets=["host-a"])
+        f1 = _vuln(finding_id="f-1", severity="high").model_dump()
+        f2 = _vuln(finding_id="f-2", severity="critical").model_dump()
+        state["collected_findings"] = [f1, f2]
+
+        # get_model_adapter() raises -> the node must fall back to template
+        # mode instead of silently returning "reporting".
+        mock_store = AsyncMock()
+        mock_store.update_vuln = AsyncMock()
+        with (
+            patch(
+                "src.knowledge.models.adapter.get_model_adapter",
+                side_effect=RuntimeError("adapter down"),
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
+        ):
+            result = await llm_analysis(state)
+        assert result["status"] == "reporting"
+        assert result["ai_processed"] is False
+        assert mock_store.update_vuln.await_count == 2
+        for call in mock_store.update_vuln.await_args_list:
+            assert call.kwargs["ai_processed"] is False
+            assert "LLM" in (call.kwargs.get("ai_reason") or "")
+            assert call.kwargs["ai_severity"] in ("high", "critical")
+            assert call.kwargs["ai_processed_at"]
+
+    @pytest.mark.asyncio
+    async def test_adapter_returns_non_structured_payload_falls_back(self):
+        """When the adapter is available but returns a non-AnalyzedResult
+        (e.g. a string instead of the schema), each batch's findings get
+        a fallback write at the end of the loop."""
+        state = _default_state("manual", targets=["host-a"])
+        f1 = _vuln(finding_id="f-1", severity="medium").model_dump()
+        state["collected_findings"] = [f1]
+
+        mock_adapter = _make_mock_adapter()
+        # chat_completion returns a string, not the expected schema
+        mock_adapter.chat_completion.return_value = "not what we wanted"
+        mock_store = AsyncMock()
+        mock_store.update_vuln = AsyncMock()
+        with (
+            patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
+        ):
+            result = await llm_analysis(state)
+        assert result["status"] == "reporting"
+        # the batch call returned a string so result.analyzed AttributeError
+        # fires; the unanalysed finding is then re-written with the fallback.
+        assert mock_store.update_vuln.await_count == 1
+        assert mock_store.update_vuln.await_args.kwargs["ai_processed"] is False
+
+
+class TestGenerateReportAIEvidence:
+    """2026-07-29 UX upgrade: ScanReport now carries ai_processed,
+    ai_model, ai_overall_advice, ai_processed_at. The happy path must
+    populate them all when the LLM succeeds."""
+
+    @pytest.mark.asyncio
+    async def test_report_with_findings_records_ai_evidence(self):
+        state = _default_state("manual", targets=["host-a"])
+        v = _vuln()
+        mock_store = AsyncMock()
+        mock_store.list_vulns.return_value = [v]
+        mock_store.save_report = AsyncMock()
+        mock_store.update_task = AsyncMock()
+
+        # First call = summary, second call = overall_advice
+        mock_adapter = _make_mock_adapter()
+        mock_adapter.chat_completion.side_effect = ["summary text", "advice text"]
+        mock_adapter.current_model_name = MagicMock(return_value="claude-sonnet-4-5")
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch("src.knowledge.models.adapter.get_model_adapter", return_value=mock_adapter),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
+            patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
+        ):
+            result = await generate_report(state)
+        assert result["status"] == "completed"
+        r = result["report"]
+        assert r.ai_processed is True
+        assert r.ai_model == "claude-sonnet-4-5"
+        assert r.ai_overall_advice == "advice text"
+        assert r.ai_processed_at  # non-empty
+        # And the LLM was called exactly twice: once for summary, once for advice
+        assert mock_adapter.chat_completion.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_report_with_no_vulns_marks_ai_not_processed(self):
+        state = _default_state("manual", targets=["host-a"])
+        mock_store = AsyncMock()
+        mock_store.list_vulns.return_value = []
+        mock_store.save_report = AsyncMock()
+        mock_store.update_task = AsyncMock()
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "redis.asyncio.from_url", return_value=AsyncMock(exists=AsyncMock(return_value=0))
+            ),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
+            patch("src.orchestration.subgraphs.vulnscan.nodes._pub_progress", AsyncMock()),
+        ):
+            result = await generate_report(state)
+        r = result["report"]
+        assert r.ai_processed is False
+        assert r.ai_model == ""
+        assert r.ai_overall_advice == ""
+        assert r.ai_processed_at == ""

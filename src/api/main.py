@@ -11,17 +11,18 @@ from src.api.auth import auth_router
 from src.api.auth.routes import require_role
 from src.api.routers.agents import router as agents_router
 from src.api.routers.alerts import router as alerts_router
-from src.api.routers.detection import router as detection_router
 from src.api.routers.chat import router as chat_router
 from src.api.routers.demo import router as demo_router
+from src.api.routers.detection import router as detection_router
 from src.api.routers.models import router as models_router
+from src.api.routers.monitor import router as monitor_router
 from src.api.routers.operations import router as operations_router
 from src.api.routers.responses import router as responses_router
-from src.api.routers.sigma_rules import router as sigma_rules_router
-from src.api.routers.monitor import router as monitor_router
 from src.api.routers.rules import router as rules_router
 from src.api.routers.scan_chat import router as scan_chat_router
+from src.api.routers.sigma_rules import router as sigma_rules_router
 from src.api.routers.stream import router as stream_router
+from src.api.routers.users import router as users_router
 from src.api.routers.vulnscan import router as vulnscan_router
 from src.api.store import get_event_store
 from src.common.audit.audit_logger import get_audit_logger
@@ -119,9 +120,9 @@ async def lifespan(app: FastAPI):
         await load_nacos_settings()
         logger.info("nacos_settings_loaded_in_lifespan")
     except Exception as exc:  # noqa: BLE001
-        # Nacos ?????????,????? env-only?
+        # Nacos 加载失败时静默回退到 env-only 配置
         logger.warning("nacos_settings_load_failed_in_lifespan", error=str(exc))
-    # 2) ???????? ES indices (?? es_hosts) ? PG schema (?? pg_host)?
+    # 2) 启动时确保 ES indices (依赖 es_hosts) 和 PG schema (依赖 pg_host) 存在
     await _ensure_es_indices()
     from src.common.db.pg import init_schema
 
@@ -139,6 +140,7 @@ async def lifespan(app: FastAPI):
     # registry is populated for any worker serving HTTP traffic.
     try:
         from src.detection.detector import init_builtin_rules
+
         n = init_builtin_rules()
         logger.info("detection_rules_loaded_in_lifespan", count=n)
     except Exception as exc:  # noqa: BLE001
@@ -161,13 +163,14 @@ async def lifespan(app: FastAPI):
     # 鍚姩 Vulnscan TaskWorker锛堟秷璐?Redis Stream 寮傛鎵弿浠诲姟锛?
     global _task_worker_handle
     import os as _os
+
     if not _os.environ.get("DISABLE_TASK_WORKER"):
         try:
             from src.orchestration.task_queue import TaskWorker
+
             worker = TaskWorker()
             _task_worker_handle = worker.start()
-            logger.info("vulnscan_task_worker_started",
-                        consumer=worker.consumer)
+            logger.info("vulnscan_task_worker_started", consumer=worker.consumer)
         except Exception as exc:
             logger.warning("vulnscan_task_worker_start_failed", error=str(exc))
 
@@ -311,6 +314,7 @@ app.include_router(auth_router)
 # operations_router. operations has GET /events/{event_id} which would
 # otherwise shadow the literal /events/stream with event_id="stream".
 app.include_router(stream_router)
+app.include_router(users_router)
 app.include_router(operations_router)
 app.include_router(demo_router)
 app.include_router(agents_router)

@@ -1,4 +1,4 @@
-"""PostgreSQL connection pool and schema management.
+﻿"""PostgreSQL connection pool and schema management.
 
 Phase 1 persistence: users & RBAC, enroll tokens, agent auth tokens, HITL approvals.
 Phase 2 adds hosts (agent inventory) and events (event lifecycle records).
@@ -50,8 +50,24 @@ CREATE TABLE IF NOT EXISTS users (
     role            VARCHAR(32) NOT NULL,
     disabled        BOOLEAN NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- last_login_at / deleted_at were lost from the schema in a later
+    -- commit but the auth/jwt + users router still reference them.
+    -- Restored (V9 阶段 2.1, 2026-07-30) so those queries succeed.
+    last_login_at   TIMESTAMPTZ,
+    deleted_at      TIMESTAMPTZ,
+    -- V9 阶段 2.1 (2026-07-30): token_version is bumped on password
+    -- change / disable / soft-delete / restore so existing JWTs are
+    -- invalidated immediately. Default 0 lets fresh users / legacy
+    -- rows work without a backfill; a bump on those events forces
+    -- a 401 for old tokens because their embedded ver no longer
+    -- matches the row.
+    token_version   INTEGER NOT NULL DEFAULT 0
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version  INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users (deleted_at);
 
 -- Agent enroll tokens (Phase 1)
 CREATE TABLE IF NOT EXISTS enroll_tokens (

@@ -1,4 +1,4 @@
-"""Auth API routes — login, token refresh, user info."""
+"""Auth API routes - login, token refresh, user info."""
 
 from typing import Any
 
@@ -41,6 +41,12 @@ async def get_current_user(token: Any = Depends(HTTPBearer(auto_error=False))) -
     P1-API-01: refetch the user on every request so a freshly-disabled
     account is rejected immediately, even when the JWT itself is still
     valid. The token signature is still checked inside decode_token.
+
+    V9 (2026-07-30): also compare the JWT's ``ver`` claim against the
+    row's ``token_version``. Any security state change (password
+    change, disable, soft-delete, restore) bumps ``token_version``,
+    so a JWT issued before the bump fails this check and the request
+    is rejected with 401 -- which is what we want.
     """
     if token is None:
         return None
@@ -50,8 +56,21 @@ async def get_current_user(token: Any = Depends(HTTPBearer(auto_error=False))) -
     username = payload.get("sub")
     if username is None:
         return None
-    user = await get_user(username)
+    # include_deleted=True so we can still see soft-deleted users and
+    # reject them via the deleted_at check below.
+    user = await get_user(username, include_deleted=True)
     if user is None or user.disabled:
+        return None
+    if user.deleted_at is not None:
+        return None
+    # V9 ver check: missing claim is treated as version 0 (matches the
+    # default token_version for fresh rows), so legacy tokens still
+    # pass until a bump happens.
+    try:
+        token_ver = int(payload.get("ver", 0))
+    except (TypeError, ValueError):
+        token_ver = 0
+    if token_ver != user.token_version:
         return None
     return user
 
@@ -78,7 +97,13 @@ async def login(req: LoginRequest):
     user = await authenticate_user(req.username, req.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    token = create_access_token(data={"sub": user.username, "role": user.role})
+    # V9 (2026-07-30): stamp the current token_version into the JWT as
+    # a ``ver`` claim so get_current_user can reject stale tokens after
+    # password change / disable / soft-delete / restore.
+    token = create_access_token(
+        data={"sub": user.username, "role": user.role},
+        token_version=user.token_version,
+    )
     return TokenResponse(access_token=token, role=user.role)
 
 
@@ -92,17 +117,12 @@ async def get_me(
 
 
 class SseTokenRequest(BaseModel):
-    # F3 (2026-07-21): use the Literal alias instead of bare str so
-    # FastAPI returns 422 with a clear "input should be one of ..." message
-    # when the frontend typos the scope. Without this mint_sse_token would
-    # happily store any string and decode_sse_token would reject it with a
-    # generic 401 PermissionError -- hard to debug from the SPA.
     scope: SseScope
 
 
 class SseTokenResponse(BaseModel):
     token: str
-    expires_in: int  # seconds
+    expires_in: int
 
 
 @router.post("/sse-token", response_model=SseTokenResponse)
@@ -110,20 +130,7 @@ async def issue_sse_token(
     req: SseTokenRequest,
     current_user: UserInDB = Depends(require_role("admin", "analyst", "responder", "viewer")),
 ):
-    """Mint a short-lived SSE token scoped to one channel.
-
-    P1-API-04 (2026-07-20): the regular user JWT is too long-lived (120
-    minutes default) to be passed as a query string. Frontend calls this
-    right before opening an EventSource and uses the returned token in
-    the URL -- even if the URL lands in an access log the token expires
-    in 60 seconds and only carries permission for one channel.
-    """
     from src.api.auth.sse_tokens import _SSE_TOKEN_TTL_SECONDS
 
-    # F8 (2026-07-21): skip the wasteful re-sign. The long-lived JWT would
-    # only differ from what the caller already holds if it expired during
-    # the request -- which decode_token would have rejected upstream. The
-    # 60s wrapper carries just (sub, role, scope) and never escapes this
-    # process, so minting from the in-memory current_user is safe.
     short = mint_sse_token_for(current_user.username, current_user.role, req.scope)
     return SseTokenResponse(token=short, expires_in=_SSE_TOKEN_TTL_SECONDS)

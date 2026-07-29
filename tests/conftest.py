@@ -27,6 +27,45 @@ except Exception as _e:
     import warnings
     warnings.warn("PG schema init skipped: " + repr(_e))
 
+
+# P1 follow-up (V9 2.1): ensure the default test passwords are
+# admin123 / analyst123 / ... regardless of state left by prior runs.
+# tests/unit/api/test_users_api.py rotates admin's password to verify
+# the token_version bump; that mutation persists in PG across pytest
+# sessions, so without this reset the next session's _login("admin")
+# would 401 from the first call. The reset uses UPSERT so it is safe
+# even on a fresh DB.
+import os as _os_reset_pwd  # noqa: E402  -- keep near conftest top
+async def _reset_default_passwords() -> None:
+    from passlib.context import CryptContext as _CC
+    from src.common.db.pg import get_pg_pool as _gpp_reset
+    pwd = _CC(schemes=["bcrypt"], deprecated="auto")
+    pool = await _gpp_reset()
+    test_users = [
+        ("admin", "admin123", "admin"),
+        ("analyst", "analyst123", "analyst"),
+        ("viewer", "viewer123", "viewer"),
+        ("responder", "responder123", "responder"),
+    ]
+    async with pool.acquire() as conn:
+        for username, password, role in test_users:
+            await conn.execute(
+                "INSERT INTO users (username, hashed_password, role)"
+                " VALUES ($1, $2, $3)"
+                " ON CONFLICT (username) DO UPDATE SET"
+                " hashed_password = EXCLUDED.hashed_password,"
+                " role = EXCLUDED.role,"
+                " disabled = FALSE,"
+                " deleted_at = NULL,"
+                " token_version = 0",
+                username, pwd.hash(password), role,
+            )
+try:
+    asyncio.run(_reset_default_passwords())
+except Exception as _e:
+    import warnings as _w
+    _w.warn("PG test-password reset skipped: " + repr(_e))
+
 # P1-1: seed the 4 test users (admin / analyst / viewer / responder) with
 # the passwords the test suite hard-codes (admin123 / ...). Production
 # seeder refuses weak passwords (P1-SEC-06); conftest must bypass that.
@@ -59,6 +98,48 @@ try:
 except Exception as _e:
     import warnings
     warnings.warn("PG test-user seed skipped: " + repr(_e))
+
+
+@_pytest.fixture(autouse=True)
+def _reset_test_passwords_each_test():
+    """Reset admin/analyst/viewer/responder passwords to the canonical
+    admin123 / ... at the start of every pytest session. Module-level
+    reset above covers cold starts; this covers sessions where an
+    earlier test in the SAME session mutated the password (e.g.
+    test_token_version_bump_on_password_change_invalidates_old_jwt
+    rotates admin to AdminStrongPwd2026! and never restores).
+    Runs after the module-level reset so the canonical row exists."""
+    import asyncio as _aio_reset
+    from passlib.context import CryptContext as _CC2
+    from src.common.db.pg import get_pg_pool as _gpp_reset2
+    pwd = _CC2(schemes=["bcrypt"], deprecated="auto")
+    test_users = [
+        ("admin", "admin123", "admin"),
+        ("analyst", "analyst123", "analyst"),
+        ("viewer", "viewer123", "viewer"),
+        ("responder", "responder123", "responder"),
+    ]
+    async def _do_reset():
+        pool = await _gpp_reset2()
+        async with pool.acquire() as conn:
+            for username, password, role in test_users:
+                await conn.execute(
+                    "INSERT INTO users (username, hashed_password, role)"
+                    " VALUES ($1, $2, $3)"
+                    " ON CONFLICT (username) DO UPDATE SET"
+                    " hashed_password = EXCLUDED.hashed_password,"
+                    " role = EXCLUDED.role,"
+                    " disabled = FALSE,"
+                    " deleted_at = NULL,"
+                    " token_version = 0",
+                    username, pwd.hash(password), role,
+                )
+    try:
+        _aio_reset.run(_do_reset())
+    except Exception as _exc:
+        import warnings as _w2
+        _w2.warn("PG session password reset skipped: " + repr(_exc))
+    return None
 
 
 @_pytest.fixture(autouse=True)

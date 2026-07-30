@@ -1,5 +1,6 @@
 """Pydantic models for the vulnerability scanning subsystem."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
@@ -131,6 +132,34 @@ class VulnFinding(BaseModel):
     # these to track SLA / re-open history without joining the audit log.
     first_fixed_at: str | None = None
     last_fixed_at: str | None = None
+
+
+@dataclass(frozen=True)
+class VulnFilter:
+    """Filter bundle for ``VulnscanStore.list_vulns`` (V10 阶段 1.1).
+
+    Replaces 11 positional kwargs (Data Clump) with one immutable
+    container so the router / store / test layers can't drift out
+    of sync silently. ``frozen=True`` prevents a caller from
+    mutating the filter after construction (the store reads it more
+    than once during ES query building). Use ``dataclasses.replace``
+    to derive a paged variant.
+    """
+
+    task_id: str | None = None
+    hostname: str | None = None
+    hostnames: list[str] | None = None
+    severity: str | None = None
+    status: str | None = None
+    cve: str | None = None
+    cve_keyword: str | None = None
+    hostname_keyword: str | None = None
+    name_keyword: str | None = None
+    ai_processed: bool | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    limit: int = 200
+    offset: int = 0
 
 
 class ScanResult(BaseModel):

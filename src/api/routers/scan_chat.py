@@ -29,6 +29,12 @@ from src.knowledge.models.adapter import ModelAdapter, ModelNotFoundError, get_m
 
 logger = get_logger(__name__)
 
+# V10 1.2: fire-and-forget task set (see users._audit for the
+# rationale). asyncio.create_task without a strong reference can
+# be GC-ed mid-execution; we keep a module-level set and discard
+# the entry when the task completes.
+_BG_TASKS: set = set()
+
 router = APIRouter(prefix="/api/v1/vulnscan/conversations", tags=["scan-chat"])
 
 SYSTEM_PROMPT = (
@@ -295,10 +301,13 @@ async def api_chat(
     # Persist user + assistant.
     conv = await conv_store.append_message(conv_id, "user", req.message)
     conv = await conv_store.append_message(conv_id, "assistant", str(reply))
-    # Auto-title: kick off in the background after persisting the turn so the
-    # conversation has enough content to summarize. Fire-and-forget; failures
-    # are logged inside the task and never block the chat response.
-    asyncio.create_task(_maybe_generate_title(conv_id, model_id))
+    # V10 1.2: auto-title still runs in the background, but the task
+    # now has a strong reference via _BG_TASKS so CPython cannot GC
+    # it mid-execution. Failures are still logged inside the task
+    # and never block the chat response.
+    t = asyncio.create_task(_maybe_generate_title(conv_id, model_id))
+    _BG_TASKS.add(t)
+    t.add_done_callback(_BG_TASKS.discard)
     if intent is not None:
         await get_audit_logger().log(
             event_id="scan-chat",

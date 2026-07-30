@@ -9,6 +9,7 @@ from src.agents.models import (
     ScanPolicy,
     ScanReport,
     ScanTask,
+    VulnFilter,
     VulnFinding,
 )
 from src.agents.store import get_vulnscan_store
@@ -427,6 +428,48 @@ async def aggregate(state: dict) -> dict:
     }
 
 
+async def _write_fallback(
+    findings: list,
+    reason: str,
+    now_iso: str | None = None,
+) -> None:
+    """Mark every finding as not-AI-processed with a stable reason."""
+
+    # V10 1.3: extracted from the adapter-None and batch-failed
+    # branches of llm_analysis, which were 100 percent identical
+    # except for the reason string. collected_findings is typed
+    # as list[dict] in state.py so the previous defensive
+    # isinstance(f, dict) branches were unreachable code and
+    # have been dropped (V9 4.3 follow-up).
+    # Each per-finding update is awaited in a try/except so a
+    # transient ES failure does not abort the whole fallback
+    # batch; the failure is logged for diagnosis.
+    if not findings:
+        return
+    store = get_vulnscan_store()
+    if now_iso is None:
+        now_iso = datetime.now(UTC).isoformat()
+    for f in findings:
+        fid = f.get("finding_id", "")
+        fsev = f.get("severity", "info")
+        try:
+            await store.update_vuln(
+                fid,
+                ai_severity=fsev,
+                ai_filtered=False,
+                fix_advice=f.get("fix_advice"),
+                ai_processed=False,
+                ai_reason=reason,
+                ai_processed_at=now_iso,
+            )
+        except Exception as exc:
+            logger.warning(
+                "fallback_write_failed",
+                finding_id=fid,
+                reason=reason,
+                error=str(exc) or type(exc).__name__,
+            )
+
 async def llm_analysis(state: dict) -> dict:
     """Use LLM to filter false positives, assign AI severity, and generate fix advice.
 
@@ -461,24 +504,9 @@ async def llm_analysis(state: dict) -> dict:
         # Fallback path: every finding gets ai_severity=original,
         # ai_filtered=False, ai_processed=False, ai_reason="LLM 不可用"
         # so the operator knows AI never touched the row.
-        store = get_vulnscan_store()
-        now_iso = datetime.now(UTC).isoformat()
-        for f in findings:
-            fid = f.get("finding_id", "") if isinstance(f, dict) else f.finding_id
-            fsev = f.get("severity", "info") if isinstance(f, dict) else f.severity
-            if hasattr(fsev, "value"):
-                fsev = str(fsev.value)
-            await store.update_vuln(
-                fid,
-                ai_severity=fsev,
-                ai_filtered=False,
-                fix_advice=f.get("fix_advice")
-                if isinstance(f, dict)
-                else getattr(f, "fix_advice", None),
-                ai_processed=False,
-                ai_reason="LLM 不可用，已按原始等级保留",
-                ai_processed_at=now_iso,
-            )
+        # V10 1.3: delegated to _write_fallback (was 100 percent
+        # duplicate of the batch-failed branch).
+        await _write_fallback(findings, reason="LLM unavailable, kept original severity")
         await _pub_progress(
             task_id,
             "analysis",
@@ -561,69 +589,36 @@ async def llm_analysis(state: dict) -> dict:
 
     # 2026-07-29 UX upgrade: any finding whose batch failed (LLM error)
     # gets a fallback write so its ai_* fields are still meaningful.
-    failed = [
-        f
-        for f in findings
-        if (f.get("finding_id") if isinstance(f, dict) else f.finding_id) not in analyzed_ids
-    ]
-    for f in failed:
-        fid = f.get("finding_id", "") if isinstance(f, dict) else f.finding_id
-        fsev = f.get("severity", "info") if isinstance(f, dict) else f.severity
-        if hasattr(fsev, "value"):
-            fsev = str(fsev.value)
-        await store.update_vuln(
-            fid,
-            ai_severity=fsev,
-            ai_filtered=False,
-            fix_advice=f.get("fix_advice")
-            if isinstance(f, dict)
-            else getattr(f, "fix_advice", None),
-            ai_processed=False,
-            ai_reason="LLM 批次失败，等待补扫",
-            ai_processed_at=now_iso,
-        )
+    failed = [f for f in findings if f.get("finding_id") not in analyzed_ids]
+    if failed:
+        # V10 1.3: delegated to _write_fallback. Dropped the
+        # defensive isinstance(f, dict) -- collected_findings is
+        # always a list[dict] per state.py.
+        await _write_fallback(failed, reason="LLM batch failed, awaiting rescan", now_iso=now_iso)
 
-    logger.info(
-        "llm_analysis_complete",
-        analyzed=len(all_analyzed),
-        failed=len(failed),
-        task_id=task_id,
-    )
-    await _pub_progress(
-        task_id,
-        "analysis",
-        "done",
-        f"AI analysis: {len(all_analyzed)} ok, {len(failed)} fallback",
-    )
-    return {"status": "reporting", "ai_processed": bool(all_analyzed) and not failed}
+    return {"status": "reporting", "ai_processed": bool(analyzed_ids) and not failed}
+
 
 
 def _build_analysis_prompt(findings: list) -> str:
     """Build the LLM analysis prompt for a batch of findings."""
     import json
 
+    # V10 1.3: collected_findings is typed as list[dict] in state.py --
+    # the previous isinstance(f, dict) guards were unreachable code
+    # and have been dropped (V9 4.3 follow-up). ScanModule values come
+    # in as str already (post .model_dump()), so the hasattr checks
+    # below are also dropped.
     findings_json = []
     for f in findings:
-        fid = f.get("finding_id", "") if isinstance(f, dict) else f.finding_id
-        fname = f.get("name", "") if isinstance(f, dict) else f.name
-        fcve = f.get("cve") if isinstance(f, dict) else f.cve
-        fsev = f.get("severity", "info") if isinstance(f, dict) else f.severity
-        if hasattr(fsev, "value"):
-            fsev = str(fsev.value)
-        fcat = f.get("category", "") if isinstance(f, dict) else f.category
-        if hasattr(fcat, "value"):
-            fcat = str(fcat.value)
-        fev = f.get("evidence", "")[:300] if isinstance(f, dict) else (f.evidence or "")[:300]
-        findings_json.append(
-            {
-                "finding_id": fid,
-                "name": fname,
-                "cve": fcve,
-                "severity": fsev,
-                "category": fcat,
-                "evidence": fev,
-            }
-        )
+        findings_json.append({
+            "finding_id": f.get("finding_id", ""),
+            "name": f.get("name", ""),
+            "cve": f.get("cve"),
+            "severity": f.get("severity", "info"),
+            "category": f.get("category", ""),
+            "evidence": f.get("evidence", "")[:300],
+        })
 
     return f"""You are a senior vulnerability analyst for an enterprise security team. For each finding below:
 
@@ -734,7 +729,7 @@ async def generate_report(state: dict) -> dict:
         return {"report": None, "status": "cancelled"}
 
     # Read final vulns
-    vulns = await store.list_vulns(task_id=task_id, limit=10000)
+    vulns = await store.list_vulns(VulnFilter(task_id=task_id, limit=10000))
     if not vulns:
         # Edge case: no findings at all. ai_processed=False because no LLM
         # call has happened; ai_overall_advice is left empty intentionally.

@@ -1008,6 +1008,71 @@ class TestLLMAnalysisFallback:
         assert mock_store.update_vuln.await_args.kwargs["ai_processed"] is False
 
 
+
+
+class TestWriteFallback:
+    # V10 1.3: _write_fallback marks every finding with the same
+    # ai_* fields and only differs by the reason string. Cover both
+    # the happy path and the per-row try/except.
+
+    async def test_write_fallback_calls_update_vuln_per_finding(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _write_fallback
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_store = MagicMock()
+        mock_store.update_vuln = AsyncMock()
+        findings = [
+            {"finding_id": "f-1", "severity": "high", "fix_advice": "patch"},
+            {"finding_id": "f-2", "severity": "low"},
+        ]
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+            return_value=mock_store,
+        ):
+            await _write_fallback(findings, reason="LLM unavailable")
+        assert mock_store.update_vuln.await_count == 2
+        kwargs = mock_store.update_vuln.await_args_list[0].kwargs
+        assert kwargs["ai_processed"] is False
+        assert kwargs["ai_filtered"] is False
+        assert kwargs["ai_reason"] == "LLM unavailable"
+        assert kwargs["ai_severity"] == "high"
+        assert kwargs["fix_advice"] == "patch"
+
+    async def test_write_fallback_continues_on_per_row_failure(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _write_fallback
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_store = MagicMock()
+        # First call fails, second succeeds -- the loop must not abort.
+        mock_store.update_vuln = AsyncMock(
+            side_effect=[RuntimeError("es down"), None]
+        )
+        findings = [
+            {"finding_id": "f-1", "severity": "high"},
+            {"finding_id": "f-2", "severity": "low"},
+        ]
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+            return_value=mock_store,
+        ):
+            await _write_fallback(findings, reason="LLM batch failed")
+        assert mock_store.update_vuln.await_count == 2
+
+    async def test_write_fallback_empty_findings_is_noop(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _write_fallback
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_store = MagicMock()
+        mock_store.update_vuln = AsyncMock()
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+            return_value=mock_store,
+        ):
+            await _write_fallback([], reason="noop")
+        mock_store.update_vuln.assert_not_called()
+
+
+
 class TestGenerateReportAIEvidence:
     """2026-07-29 UX upgrade: ScanReport now carries ai_processed,
     ai_model, ai_overall_advice, ai_processed_at. The happy path must

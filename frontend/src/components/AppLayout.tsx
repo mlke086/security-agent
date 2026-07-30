@@ -4,11 +4,12 @@ import {
   AlertOutlined, DashboardOutlined, ProfileOutlined, AuditOutlined,
   LogoutOutlined, SecurityScanOutlined, BugOutlined,
   CloudServerOutlined, EyeOutlined, FileSearchOutlined,
-  SyncOutlined, SkinOutlined, RobotOutlined,
+  SyncOutlined, SkinOutlined, RobotOutlined, KeyOutlined,
 } from "@ant-design/icons"
 import { useNavigate, useLocation, Outlet } from "react-router-dom"
 import { useAuth } from "../context/AuthContext"
 import { useTheme, THEMES, type ThemeKey } from "../context/ThemeContext"
+import ChangePasswordModal from "./ChangePasswordModal"
 
 const { Header, Sider, Content } = Layout
 
@@ -17,6 +18,7 @@ export default function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
   const { token: themeToken } = theme.useToken()
   const { profile, setThemeKey, themeKey } = useTheme()
   const role = user?.role || ""
@@ -63,12 +65,14 @@ export default function AppLayout() {
               options={Object.values(THEMES).map((t) => ({ label: t.label, value: t.key }))}
             />
             <Typography.Text>{user?.username}</Typography.Text>
+            <Button type="text" icon={<KeyOutlined />} onClick={() => setPasswordOpen(true)} aria-label="change-password">修改密码</Button>
             <Button type="text" icon={<LogoutOutlined />} onClick={logout}>退出</Button>
           </Space>
         </Header>
         <Content style={{ margin: 24 }}>
           <Outlet />
         </Content>
+        <ChangePasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
       </Layout>
     </Layout>
   )

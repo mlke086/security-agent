@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel as _PydanticBaseModel
 
-from src.agents.models import ScanIntent, ScanReport, ScanTask, VulnFinding
+from src.agents.models import ScanIntent, ScanReport, ScanTask, VulnFilter, VulnFinding
 from src.agents.store import get_vulnscan_store
 from src.api.auth.routes import require_role
 from src.common.audit.audit_logger import get_audit_logger
@@ -464,22 +464,25 @@ async def api_list_results(
             # frontend doesn't accidentally show all vulns.
             return {"items": []}
         hostname_terms = [h.hostname for h in hosts if h.hostname]
+    # V10 阶段 1.1: build one VulnFilter dataclass from query params.
+    # Generous limit for the group view so realistic groups are not
+    # truncated; full pagination is a separate follow-up.
     findings = await store.list_vulns(
-        task_id=task_id,
-        hostname=hostname,
-        hostnames=hostname_terms,
-        severity=severity,
-        status=status,
-        cve=cve,
-        cve_keyword=cve_keyword,
-        hostname_keyword=hostname_keyword,
-        name_keyword=name_keyword,
-        ai_processed=ai_processed,
-        date_from=date_from,
-        date_to=date_to,
-        # Generous limit for the group view so realistic groups are not
-        # truncated; full pagination is a separate follow-up.
-        limit=2000 if group else 200,
+        VulnFilter(
+            task_id=task_id,
+            hostname=hostname,
+            hostnames=hostname_terms,
+            severity=severity,
+            status=status,
+            cve=cve,
+            cve_keyword=cve_keyword,
+            hostname_keyword=hostname_keyword,
+            name_keyword=name_keyword,
+            ai_processed=ai_processed,
+            date_from=date_from,
+            date_to=date_to,
+            limit=2000 if group else 200,
+        )
     )
     return {"items": [f.model_dump() for f in findings]}
 
@@ -737,7 +740,7 @@ async def api_host_stats(current_user=Depends(require_role("admin", "analyst", "
 
     # Pre-fetch all vulns once; bucket by group in one pass.
     try:
-        all_vulns = await store.list_vulns(limit=10000)
+        all_vulns = await store.list_vulns(VulnFilter(limit=10000))
     except Exception as exc:
         logger.warning("host_stats_list_vulns_failed", error=str(exc))
         all_vulns = []

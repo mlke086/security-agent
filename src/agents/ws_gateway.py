@@ -25,6 +25,14 @@ _worker_id = os.environ.get("HOSTNAME", socket.gethostname())
 
 _conns: dict[str, WebSocket] = {}
 
+# V10 1.2: fire-and-forget task set. asyncio.create_task() returns
+# a Task that may be garbage-collected mid-execution if no strong
+# reference exists; CPython warns about this in the docs. We keep
+# a module-level set of background tasks and discard the entry
+# from inside the task itself once it finishes, mirroring the
+# pattern used in users._audit.
+_BG_TASKS: set = set()
+
 
 class AgentGateway:
     # P1 (F4) -- agent_ids revoked by the server until the next reconnect.
@@ -405,9 +413,11 @@ class AgentGateway:
         try:
             task_id = payload.get("task_id", "")
             if task_id:
-                import asyncio
-
-                asyncio.create_task(self._pub_async(task_id, payload))
+                # V10 1.2: hold a strong reference via the module-level
+                # task set; the task self-removes on completion.
+                t = asyncio.create_task(self._pub_async(task_id, payload))
+                _BG_TASKS.add(t)
+                t.add_done_callback(_BG_TASKS.discard)
         except Exception:
             pass
 

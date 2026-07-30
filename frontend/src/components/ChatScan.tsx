@@ -164,7 +164,7 @@ export default function ChatScan() {
         }
         // F2 (2026-07-29): the user's scan message + assistant reply are
         // already persisted by /chat (via chatAssistant in handleSend), so
-        // we no longer call chatConversation here -- that fired a redundant
+        // (V9 F2) we used to call chatConversation here too -- a redundant
         // LLM round-trip and persisted a *different* reply than the one the
         // operator saw.
         // sync=true -> backend runs the subgraph inline (writes ES before

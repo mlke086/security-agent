@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty, Switch, Dropdown, Drawer, Spin } from "antd"
 import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined, DownOutlined, PoweroffOutlined, LockOutlined, MonitorOutlined } from "@ant-design/icons"
 import type { Host, HostGroup } from "../api/client"
@@ -92,6 +92,29 @@ export default function HostOnboardPage() {
   const [pollingActionId, setPollingActionId] = useState<string | null>(null)
   const [pollingStatus, setPollingStatus] = useState<string | null>(null)
 
+  // V10 3.2 (2026-07-30): background poller handles. The previous
+  // implementation used ``for (let i = 0; i < 45; i++) await sleep(2s)``
+  // inside the click handler -- the upgrade button stayed ``loading``
+  // for up to 90s, blocking the operator from re-clicking or
+  // navigating. setInterval + a mounted ref is the standard React
+  // fix and also gives us a single clear() point on unmount so we
+  // stop calling setState after the page is gone.
+  const mountedRef = useRef(true)
+  const upgradePollers = useRef<Record<string, ReturnType<typeof setInterval> | null>>({})
+  const actionPoller = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => () => {
+    mountedRef.current = false
+    for (const id of Object.values(upgradePollers.current)) {
+      if (id) clearInterval(id)
+    }
+    upgradePollers.current = {}
+    if (actionPoller.current) {
+      clearInterval(actionPoller.current)
+      actionPoller.current = null
+    }
+  }, [])
+
   // Phase 5: monitor drawer
   const [monitorHost, setMonitorHost] = useState<Host | null>(null)
   const [monitorEvents, setMonitorEvents] = useState<MonitorEvent[]>([])
@@ -107,34 +130,54 @@ export default function HostOnboardPage() {
     setActionSubmitting(false)
     setPollingActionId(null)
     setPollingStatus(null)
+    if (actionPoller.current) {
+      clearInterval(actionPoller.current)
+      actionPoller.current = null
+    }
   }
+  const startActionPoller = (actionId: string) => {
+    if (actionPoller.current) clearInterval(actionPoller.current)
+    const id = setInterval(async () => {
+      if (!mountedRef.current) {
+        clearInterval(actionPoller.current!)
+        actionPoller.current = null
+        return
+      }
+      try {
+        const s = await getAgentActionStatus(actionId)
+        if (!mountedRef.current) return
+        setPollingStatus(s.status)
+        if (s.status === "succeeded" || s.status === "failed") {
+          clearInterval(actionPoller.current!)
+          actionPoller.current = null
+          setActionSubmitting(false)
+          if (s.status === "succeeded") message.success(`执行成功: ${s.detail || ""}`)
+          else message.error(`执行失败: ${s.detail || ""}`)
+        }
+      } catch {
+        // transient -- keep polling until terminal state or unmount.
+      }
+    }, 1000)
+    actionPoller.current = id
+  }
+
   const submitActionModal = async () => {
     if (!actionModal) return
     const { host, action, params, reason } = actionModal
     setActionSubmitting(true)
     try {
       const r = await dispatchAgentAction(host.agent_id, action, params, reason)
+      if (!mountedRef.current) return
       setPollingActionId(r.action_id)
       setPollingStatus(r.status)
       message.success(`已下发: ${action} -> ${host.hostname}`)
-      for (let i = 0; i < 10; i++) {
-        await new Promise((res) => setTimeout(res, 1000))
-        try {
-          const s = await getAgentActionStatus(r.action_id)
-          setPollingStatus(s.status)
-          if (s.status === "succeeded" || s.status === "failed") {
-            if (s.status === "succeeded") message.success(`执行成功: ${s.detail || ""}`)
-            else message.error(`执行失败: ${s.detail || ""}`)
-            break
-          }
-        } catch { /* transient */ }
-      }
+      // Background poll -- the modal is now interactive (operator can
+      // read the live status without the click handler being stuck).
+      startActionPoller(r.action_id)
     } catch (e: any) {
       message.error(e?.response?.data?.detail || "下发失败")
       setActionSubmitting(false)
-      return
     }
-    setActionSubmitting(false)
   }
 
   // Phase 5: monitor drawer
@@ -213,32 +256,63 @@ export default function HostOnboardPage() {
     }
   }
 
+  const startUpgradePoller = (agent: Host) => {
+    // Clear any previous poller for this host (e.g. user clicked twice).
+    if (upgradePollers.current[agent.agent_id]) {
+      clearInterval(upgradePollers.current[agent.agent_id]!)
+    }
+    const id = setInterval(async () => {
+      if (!mountedRef.current) {
+        clearInterval(upgradePollers.current[agent.agent_id]!)
+        upgradePollers.current[agent.agent_id] = null
+        return
+      }
+      try {
+        const status = await getAgentUpgradeStatus(agent.agent_id)
+        if (!mountedRef.current) return
+        setUpgradeById((prev) => ({ ...prev, [agent.agent_id]: status.upgrade }))
+        if (["confirmed", "failed", "already_current"].includes(status.upgrade.state)) {
+          clearInterval(upgradePollers.current[agent.agent_id]!)
+          upgradePollers.current[agent.agent_id] = null
+          setUpgrading((prev) => ({ ...prev, [agent.agent_id]: false }))
+          if (status.upgrade.state === "confirmed") {
+            message.success(`${agent.hostname} 已升级到 ${status.upgrade.current_version}`)
+          } else if (status.upgrade.state === "failed") {
+            message.error(status.upgrade.error || "Agent 升级失败")
+          }
+        }
+      } catch {
+        // Transient failure -- keep polling until terminal state
+        // or unmount. The 90s window was already a soft cap before
+        // this refactor; the only difference is the operator can now
+        // click another row or navigate while it runs.
+      }
+    }, 2000)
+    upgradePollers.current[agent.agent_id] = id
+  }
+
   const handleUpgrade = async (agent: Host) => {
     if (upgrading[agent.agent_id]) return
     setUpgrading((prev) => ({ ...prev, [agent.agent_id]: true }))
     try {
       const r = await upgradeAgent(agent.agent_id)
+      if (!mountedRef.current) return
       if (r.status === "already_current") {
         message.info(`${agent.hostname} 已是最新版本 ${r.version}`)
         await refreshUpgrade(agent.agent_id)
+        setUpgrading((prev) => ({ ...prev, [agent.agent_id]: false }))
         return
       }
       if (r.delivered) message.success(`已向 ${agent.hostname} 下发 ${r.version} 升级`)
       else message.warning("主机当前离线，升级将在重连后下发")
-
-      for (let i = 0; i < 45; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 2000))
-        const status = await getAgentUpgradeStatus(agent.agent_id)
-        setUpgradeById((prev) => ({ ...prev, [agent.agent_id]: status.upgrade }))
-        if (["confirmed", "failed", "already_current"].includes(status.upgrade.state)) {
-          if (status.upgrade.state === "confirmed") message.success(`${agent.hostname} 已升级到 ${status.upgrade.current_version}`)
-          if (status.upgrade.state === "failed") message.error(status.upgrade.error || "Agent 升级失败")
-          break
-        }
-      }    } catch (err: any) {
+      // Background poll; the upgrade button is released immediately
+      // so the operator can re-click or navigate. The poller owns
+      // the ``upgrading`` flag and clears it on terminal state.
+      startUpgradePoller(agent)
+    } catch (err: any) {
+      if (!mountedRef.current) return
       const detail = err?.response?.data?.detail
       message.error(detail || "操作失败")
-    } finally {
       setUpgrading((prev) => ({ ...prev, [agent.agent_id]: false }))
     }
   }

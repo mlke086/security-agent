@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react"
-import { Card, Table, Tag, Select, Button, Space, message, Modal } from "antd"
-import { ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined } from "@ant-design/icons"
-import api from "../api/client"
-
-interface Finding {
-  finding_id: string; hostname: string; cve: string | null; name: string;
-  severity: string; ai_severity: string | null; ai_filtered: boolean;
-  status: string; detected_at: string; category: string; fix_advice: string | null;
-}
+import { Card, Table, Tag, Select, Button, Space, message, Modal, Input, DatePicker, Tooltip } from "antd"
+import { ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined, EyeOutlined, SearchOutlined } from "@ant-design/icons"
+import api, { listVulns, getHostStats, type HostStatsRow, type VulnFinding } from "../api/client"
+import { formatBeijing } from "../utils/time"
+import { useDebouncedValue } from "../utils/useDebouncedValue"
+import AiEvidenceBadge from "../components/AiEvidenceBadge"
+import VulnDetailDrawer from "../components/VulnDetailDrawer"
 
 const SEV_COLORS: Record<string, string> = { critical: "red", high: "volcano", medium: "gold", low: "green", info: "blue" }
 const SEV_LABEL: Record<string, string> = { critical: "严重", high: "高危", medium: "中危", low: "低危", info: "提示" }
@@ -18,24 +16,54 @@ const STATUS_ACTIONS = [
 ]
 
 export default function VulnListPage() {
-  const [findings, setFindings] = useState<Finding[]>([])
+  const [findings, setFindings] = useState<VulnFinding[]>([])
   const [loading, setLoading] = useState(false)
   const [filterSev, setFilterSev] = useState<string | undefined>()
   const [filterStatus, setFilterStatus] = useState<string | undefined>()
+  const [filterCve, setFilterCve] = useState("")
+  const [filterNameKw, setFilterNameKw] = useState("")
+  const [filterHostKw, setFilterHostKw] = useState("")
+  const [filterGroup, setFilterGroup] = useState<string | undefined>()
+  const [filterAiOnly, setFilterAiOnly] = useState<"all" | "ai" | "pending">("all")
+  const [dateRange, setDateRange] = useState<[string, string] | null>(null)
+  const [hostStats, setHostStats] = useState<HostStatsRow[]>([])
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
+  // V10 3.1 (2026-07-30): 300ms debounce on the three free-text
+  // filters so each keystroke does not fire its own GET /vulnscan.
+  // The input state stays immediate for snappy UI; the network
+  // call only sees the debounced value.
+  const debouncedCve = useDebouncedValue(filterCve, 300)
+  const debouncedNameKw = useDebouncedValue(filterNameKw, 300)
+  const debouncedHostKw = useDebouncedValue(filterHostKw, 300)
   const [batchModal, setBatchModal] = useState(false)
+  const [detailId, setDetailId] = useState<string | null>(null)
 
-  // mount + 筛选器变化时自动刷新（修复: 筛选onChange只设state不触发请求）
-  useEffect(() => { fetchData() }, [filterSev, filterStatus])
+  // Load business groups from the /host-stats endpoint so the operator
+  // can pivot by business without leaving this page.
+  useEffect(() => {
+    getHostStats().then((r) => setHostStats(r.items || [])).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetchData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterSev, filterStatus, debouncedCve, debouncedNameKw, debouncedHostKw, filterGroup, filterAiOnly, dateRange])
 
   const fetchData = async () => {
     setLoading(true)
     try {
-      const params: any = {}
-      if (filterSev) params.severity = filterSev
-      if (filterStatus) params.status = filterStatus
-      const res = await api.get("/vulnscan/results", { params })
-      setFindings(res.data.items)
+      const r = await listVulns({
+        severity: filterSev,
+        status: filterStatus,
+        cve_keyword: debouncedCve || undefined,
+        name_keyword: debouncedNameKw || undefined,
+        hostname_keyword: debouncedHostKw || undefined,
+        group: filterGroup,
+        ai_processed: filterAiOnly === "ai" ? true : filterAiOnly === "pending" ? false : undefined,
+        date_from: dateRange?.[0],
+        date_to: dateRange?.[1],
+      })
+      setFindings(r.items)
     } catch { message.error("加载失败") }
     finally { setLoading(false) }
   }
@@ -65,10 +93,19 @@ export default function VulnListPage() {
     { title: "名称", dataIndex: "name", key: "name", ellipsis: true },
     { title: "严重等级", dataIndex: "severity", key: "severity", width: 90, render: (v: string) => <Tag color={SEV_COLORS[v]}>{SEV_LABEL[v] || v}</Tag> },
     { title: "AI 等级", dataIndex: "ai_severity", key: "ai_severity", width: 90, render: (v: string | null) => v ? <Tag color={SEV_COLORS[v]}>{SEV_LABEL[v] || v}</Tag> : "-" },
-    { title: "AI 判定", dataIndex: "ai_filtered", key: "ai_filtered", width: 90, render: (v: boolean) => v ? <Tag color="default">误报</Tag> : null },
+    {
+      title: "AI 处理", dataIndex: "ai_processed", key: "ai_processed", width: 110,
+      render: (v: boolean | undefined, record: VulnFinding) => (
+        <AiEvidenceBadge
+          aiProcessed={v}
+          aiReason={record.ai_reason}
+          size="compact"
+        />
+      ),
+    },
     {
       title: "状态", dataIndex: "status", key: "status", width: 130,
-      render: (v: string, record: Finding) => (
+      render: (v: string, record: VulnFinding) => (
         <Select
           value={v}
           size="small"
@@ -81,18 +118,63 @@ export default function VulnListPage() {
         />
       ),
     },
-    { title: "发现时间", dataIndex: "detected_at", key: "detected_at", width: 160, render: (v: string) => v?.slice(0, 19) || "-" },
+    { title: "发现时间", dataIndex: "detected_at", key: "detected_at", width: 110, render: (v: string) => formatBeijing(v) },
+    { title: "修复时间", dataIndex: "last_fixed_at", key: "last_fixed_at", width: 110,
+      render: (v: string | null | undefined, record: VulnFinding) => v ? <Tooltip title={`首次: ${formatBeijing(record.first_fixed_at)}`}>{formatBeijing(v)}</Tooltip> : "-" },
+    {
+      title: "操作", key: "action", width: 70, fixed: "right" as const,
+      render: (_: VulnFinding, record: VulnFinding) => (
+        <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => setDetailId(record.finding_id)}>详情</Button>
+      ),
+    },
   ]
 
   return (
     <Card
       title="漏洞清单"
       extra={
-        <Space>
-          <Select placeholder="严重等级" allowClear style={{ width: 110 }} onChange={setFilterSev}
+        <Space wrap>
+          <Input
+            placeholder="CVE (如 2024-1234)"
+            allowClear
+            style={{ width: 150 }}
+            value={filterCve}
+            onChange={(e) => setFilterCve(e.target.value)}
+            prefix={<SearchOutlined />}
+          />
+          <Input
+            placeholder="主机关键词"
+            allowClear
+            style={{ width: 140 }}
+            value={filterHostKw}
+            onChange={(e) => setFilterHostKw(e.target.value)}
+          />
+          <Input
+            placeholder="漏洞名关键词"
+            allowClear
+            style={{ width: 140 }}
+            value={filterNameKw}
+            onChange={(e) => setFilterNameKw(e.target.value)}
+          />
+          <Select placeholder="业务归属" allowClear style={{ width: 140 }} value={filterGroup} onChange={setFilterGroup}
+            options={hostStats.map((g) => ({ label: `${g.group} (${g.total})`, value: g.group }))} />
+          <Select placeholder="严重等级" allowClear style={{ width: 110 }} value={filterSev} onChange={setFilterSev}
             options={Object.entries(SEV_LABEL).map(([k, v]) => ({ label: v, value: k }))} />
-          <Select placeholder="状态" allowClear style={{ width: 110 }} onChange={setFilterStatus}
+          <Select placeholder="状态" allowClear style={{ width: 110 }} value={filterStatus} onChange={setFilterStatus}
             options={STATUS_ACTIONS.map(a => ({ label: a.label, value: a.value }))} />
+          <Select placeholder="AI 处理" style={{ width: 120 }} value={filterAiOnly} onChange={setFilterAiOnly}
+            options={[
+              { label: "全部", value: "all" },
+              { label: "AI 已处理", value: "ai" },
+              { label: "等待补扫", value: "pending" },
+            ]} />
+          <DatePicker.RangePicker
+            showTime
+            onChange={(vals) => {
+              if (!vals || !vals[0] || !vals[1]) { setDateRange(null); return }
+              setDateRange([vals[0].toISOString(), vals[1].toISOString()])
+            }}
+          />
           <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
           {selectedKeys.length > 0 && (
             <Button type="primary" size="small" onClick={() => setBatchModal(true)}>
@@ -107,6 +189,7 @@ export default function VulnListPage() {
         columns={columns}
         rowKey="finding_id"
         loading={loading}
+        scroll={{ x: 1300 }}
         rowSelection={{
           selectedRowKeys: selectedKeys,
           onChange: (keys) => setSelectedKeys(keys as string[]),
@@ -116,7 +199,7 @@ export default function VulnListPage() {
       />
 
       <Modal open={batchModal} title="批量更新状态" onCancel={() => setBatchModal(false)} footer={null}>
-        <p>将 {selectedKeys.length} 条漏洞更新为：</p>
+        <p>将 {selectedKeys.length} 条记录更新为：</p>
         <Space direction="vertical" style={{ width: "100%" }}>
           {STATUS_ACTIONS.map(a => (
             <Button key={a.value} block onClick={() => batchUpdateStatus(a.value)}>
@@ -125,6 +208,13 @@ export default function VulnListPage() {
           ))}
         </Space>
       </Modal>
+
+      <VulnDetailDrawer
+        findingId={detailId}
+        onClose={() => setDetailId(null)}
+        onUpdated={() => fetchData()}
+      />
     </Card>
   )
+
 }

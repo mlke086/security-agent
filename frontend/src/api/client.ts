@@ -229,10 +229,11 @@ export async function getAgents() {
 export async function upgradeAgent(agentId: string, version?: string | null) {
   const res = await api.post(`/agents/${agentId}/upgrade`, version ? { version } : {})
   return res.data as {
-    status: string
+    status: "ok" | "already_current"
     version: string
+    current_version?: string
     delivered: boolean
-    binary_path: string
+    binary_path?: string
   }
 }
 
@@ -294,7 +295,7 @@ export async function getRuleVersion() {
 }
 
 export async function syncRules(source: string = "nvd") {
-  const res = await api.post("/rules/sync", { source })
+  const res = await api.post("/rules/sync", { source }, { timeout: 300000 })
   return res.data as { version: string; count: number }
 }
 
@@ -412,15 +413,6 @@ export async function deleteConversation(id: string) {
   return res.data
 }
 
-export async function chatConversation(id: string, message: string, modelId?: number | null, parseIntent?: boolean) {
-  const res = await api.post(`/vulnscan/conversations/${id}/chat`, {
-    message,
-    model_id: modelId ?? null,
-    parse_intent: parseIntent ?? false,
-  })
-  return res.data as { reply: string; intent?: any; conversation: Conversation }
-}
-
 // -- General assistant (project Q&A + web search + scan routing) ----------
 
 export type ChatRoute = "scan" | "project" | "web" | "chat"
@@ -466,12 +458,11 @@ export async function chatAssistant(
     conversation_id: conversationId,
   })
   const body = res.data as ChatAssistantResponse
-  // F2 (2026-07-23): the unified /chat router already calls the LLM
-  // exactly once and the scan_conversation helpers persist the turn
-  // inside the scan_chat router. Calling /chat again from the SPA
-  // would double the model cost and could write a *second* assistant
-  // reply that differs from the one we just rendered. We simply
-  // trust the /chat response as the single source of truth.
+  // F2 (2026-07-29): the unified /chat router now persists the user +
+  // assistant turn itself (via the conversation store), so the reply we
+  // render here is exactly what is stored -- no second LLM call and no
+  // divergent persisted reply. We trust the /chat response as the single
+  // source of truth.
   return body
 }
 
@@ -553,4 +544,136 @@ export async function getInstallScript(token: string, os: "linux" | "windows" = 
 export async function getInstallHelper(token: string, os: "linux" | "windows" = "linux") {
   const res = await api.get("/agents/install-helper", { params: { token, os } })
   return (res.data as any)?.helper ?? (res.data as unknown as string)
+}
+
+// -- User management ------------------------------------------------------
+export type UserRole = "admin" | "analyst" | "viewer" | "responder"
+export interface ManagedUser {
+  username: string
+  role: UserRole
+  disabled: boolean
+  created_at: string | null
+  updated_at: string | null
+  last_login_at: string | null
+  deleted_at: string | null
+}
+export async function listUsers(includeDeleted = false) {
+  const res = await api.get("/users", { params: { include_deleted: includeDeleted } })
+  return res.data as { items: ManagedUser[]; count: number }
+}
+export async function createUser(data: { username: string; password: string; role: UserRole }) {
+  const res = await api.post("/users", data)
+  return res.data as ManagedUser
+}
+export async function updateUser(username: string, data: { username?: string; role?: UserRole; disabled?: boolean }) {
+  const res = await api.patch(`/users/${encodeURIComponent(username)}`, data)
+  return res.data as ManagedUser
+}
+export async function deleteUser(username: string) {
+  const res = await api.delete(`/users/${encodeURIComponent(username)}`)
+  return res.data as { status: string }
+}
+export async function restoreUser(username: string) {
+  const res = await api.post(`/users/${encodeURIComponent(username)}/restore`)
+  return res.data as ManagedUser
+}
+export async function changePassword(oldPassword: string, newPassword: string) {
+  const res = await api.post("/users/me/password", { old_password: oldPassword, new_password: newPassword })
+  return res.data as { status: string }
+}
+
+
+// -- Vuln scan results (2026-07-29 UX upgrade) -------------------------------
+export interface VulnFinding {
+  finding_id: string
+  task_id: string
+  agent_id: string
+  hostname: string
+  category: string
+  cve: string | null
+  name: string
+  severity: string
+  ai_severity: string | null
+  ai_filtered: boolean
+  evidence: string
+  fix_advice: string | null
+  status: "open" | "fixed" | "accepted"
+  detected_at: string
+  // AI evidence (optional; old docs may not have them)
+  ai_processed?: boolean
+  ai_reason?: string | null
+  ai_fix_summary?: string | null
+  ai_processed_at?: string
+  first_fixed_at?: string | null
+  last_fixed_at?: string | null
+}
+
+export interface VulnFilter {
+  task_id?: string
+  hostname?: string
+  severity?: string
+  status?: string
+  cve?: string
+  cve_keyword?: string
+  hostname_keyword?: string
+  name_keyword?: string
+  group?: string
+  ai_processed?: boolean
+  date_from?: string
+  date_to?: string
+}
+
+export async function listVulns(filter: VulnFilter = {}) {
+  // Drop undefined/null/empty params so the URL stays clean.
+  const params: Record<string, string> = {}
+  for (const [k, v] of Object.entries(filter)) {
+    if (v === undefined || v === null || v === "") continue
+    params[k] = String(v)
+  }
+  const res = await api.get("/vulnscan/results", { params })
+  return res.data as { items: VulnFinding[] }
+}
+
+export async function getVuln(findingId: string) {
+  const res = await api.get(`/vulnscan/vulns/${encodeURIComponent(findingId)}`)
+  // 2026-07-29 UX upgrade: backend now attaches the host meta as a
+  // sibling field on the vuln detail. Old responses (pre-upgrade)
+  // simply lack the field, so we keep it optional.
+  return res.data as VulnFinding & { host?: Host }
+}
+
+export interface ScanReport {
+  task_id: string
+  summary: string
+  ai_analysis: string
+  stats: { by_severity: Record<string, number>; by_category: Record<string, number>; total: number; filtered_out: number }
+  top_vulns: Array<{ hostname: string; name: string; cve: string | null; severity: string; ai_severity?: string; fix_advice?: string | null }>
+  recommendations: string[]
+  generated_at: string
+  ai_processed?: boolean
+  ai_model?: string
+  ai_overall_advice?: string
+  ai_processed_at?: string
+}
+
+export async function getReport(taskId: string) {
+  const res = await api.get(`/vulnscan/reports/${encodeURIComponent(taskId)}`)
+  return res.data as ScanReport
+}
+
+export async function patchVulnStatus(findingId: string, status: VulnFinding["status"]) {
+  const res = await api.patch(`/vulnscan/vulns/${encodeURIComponent(findingId)}`, { status })
+  return res.data as { status: string }
+}
+
+export interface HostStatsRow {
+  group: string
+  member_count: number
+  total: number
+  by_severity: Record<string, number>
+}
+
+export async function getHostStats() {
+  const res = await api.get("/vulnscan/host-stats")
+  return res.data as { items: HostStatsRow[] }
 }

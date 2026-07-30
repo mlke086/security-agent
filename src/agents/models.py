@@ -39,6 +39,12 @@ class Host(BaseModel):
 class ScanModule(StrEnum):
     SYS_VULN = "sys_vuln"
     BASELINE = "baseline"
+    # V9 5.3 (2026-07-30): preserve the engine source on the wire.
+    # Previously a Nuclei finding arriving with category="nuclei"
+    # was silently rewritten to "sys_vuln" because the ws_gateway
+    # whitelist only knew about those two values. Frontend already
+    # special-cases "nuclei" in scan reports.
+    NUCLEI = "nuclei"
 
 
 class ScanPolicy(BaseModel):

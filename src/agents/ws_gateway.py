@@ -104,6 +104,7 @@ class AgentGateway:
             name=f"keepalive-{agent_id}",
         )
         logger.info("agent_connected", agent_id=agent_id, worker=self.worker_id)
+        await self._deliver_pending(agent_id, ws)
 
     async def _keepalive_loop(self, ws: WebSocket, agent_id: str) -> None:
         """濮?30s 閸?keepalive 鎼存梻鏁ょ仦鍌涚Х閹垽绱欓棃鐐存櫛閹扮喎鎳℃禒銈忕礉閺冪娀娓剁粵鎯ф倳閿涘鈧?
@@ -130,10 +131,18 @@ class AgentGateway:
     async def disconnect(self, ws: WebSocket) -> None:
         """Clean up connection."""
         agent_id: str = getattr(ws.state, "_agent_id", "")
-        if agent_id:
+        if agent_id and _conns.get(agent_id) is ws:
+            # A stale connection may finish disconnecting after the same Agent
+            # has already reconnected. Only the connection that still owns the
+            # slot may clear routing state; otherwise it would orphan the new
+            # WebSocket while leaving its Redis subscription alive.
             _conns.pop(agent_id, None)
             r = self._redis()
-            await r.delete(f"agent:conn:{agent_id}")
+            try:
+                if await r.get(f"agent:conn:{agent_id}") == self.worker_id:
+                    await r.delete(f"agent:conn:{agent_id}")
+            finally:
+                await r.aclose()
             logger.info("agent_disconnected", agent_id=agent_id)
         pubsub = getattr(ws.state, "_pubsub", None)
         if pubsub:
@@ -244,6 +253,35 @@ class AgentGateway:
                 error=str(exc),
             )
 
+    async def _deliver_pending(self, agent_id: str, ws: WebSocket) -> None:
+        """Deliver the latest command queued while the Agent was offline.
+
+        V9 4.6 (2026-07-30): documented the at-most-once intent. The
+        producer (send_to_agent) stores at most one pending command
+        per agent (24h TTL), and the consumer reads + deletes it in
+        a single round-trip. If the WS send succeeds but the DELETE
+        fails, the next reconnect will replay the same command -- so
+        every queued command MUST be safely replayable (idempotent on
+        the agent side, or use a sequence number the agent tracks).
+        Producers that store NON-idempotent payloads should set a
+        sequence number in ``msg["seq"]`` so the agent can dedupe.
+        """
+        r = self._redis()
+        key = f"agent:pending_cmd:{agent_id}"
+        try:
+            raw = await r.get(key)
+            if not raw:
+                return
+            await ws.send_text(raw)
+            await r.delete(key)
+            logger.info("pending_agent_command_delivered", agent_id=agent_id)
+        except Exception as exc:
+            logger.warning(
+                "pending_agent_command_delivery_failed", agent_id=agent_id, error=str(exc)
+            )
+        finally:
+            await r.aclose()
+
     async def send_to_agent(self, agent_id: str, msg: dict) -> bool:
         """Send a message to an agent. Sensitive commands are signed before sending."""
         msg = sign_message(msg)
@@ -262,7 +300,15 @@ class AgentGateway:
             subscribers = await r.publish(
                 f"agent:cmd:{agent_id}", json.dumps(msg, ensure_ascii=False)
             )
-            return int(subscribers or 0) > 0
+            owner = await r.get(f"agent:conn:{agent_id}")
+            delivered = int(subscribers or 0) > 0 and bool(owner)
+            if not delivered:
+                await r.set(
+                    f"agent:pending_cmd:{agent_id}",
+                    json.dumps(msg, ensure_ascii=False),
+                    ex=24 * 3600,
+                )
+            return delivered
         except Exception as exc:
             logger.warning("redis_publish_failed", agent_id=agent_id, error=str(exc))
             return False
@@ -278,6 +324,7 @@ class AgentGateway:
         operator GET sees succeeded/failed within seconds.
         """
         import time
+
         action_id = str(payload.get("action_id", ""))
         if not action_id:
             logger.warning("response_ack_missing_action_id", agent_id=agent_id, payload=payload)
@@ -332,6 +379,7 @@ class AgentGateway:
         """
         try:
             from src.agents.monitor_store import get_monitor_store
+
             await get_monitor_store().save_event(agent_id, payload)
         except Exception as exc:  # noqa: BLE001
             # ES outage should never cost the agent its socket.
@@ -460,7 +508,11 @@ class AgentGateway:
         if sev not in ("critical", "high", "medium", "low", "info"):
             sev = "info"
         cat = str(f.get("category", "sys_vuln"))
-        if cat not in ("sys_vuln", "baseline"):
+        # V9 5.3 (F6): accept "nuclei" alongside the matcher outputs so
+        # Nuclei-sourced findings keep their engine provenance. Any
+        # other unexpected value still falls back to sys_vuln rather
+        # than being silently dropped.
+        if cat not in ("sys_vuln", "baseline", "nuclei"):
             cat = "sys_vuln"
         return VulnFinding(
             finding_id=f.get("finding_id") or str(uuid.uuid4()),

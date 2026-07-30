@@ -31,12 +31,22 @@ from src.common.config.nacos_loader import (
 def _isolate_env(monkeypatch):
     """Strip well-known keys so each test starts from a clean baseline."""
     for key in (
-        "PG_HOST", "REDIS_URL", "ES_HOSTS", "NACOS_SERVER",
-        "API_SECRET_KEY", "AGENT_SIGNING_KEY", "AGENT_HMAC_KEY",
-        "PG_PASSWORD", "NACOS_PASSWORD",
+        "PG_HOST",
+        "REDIS_URL",
+        "ES_HOSTS",
+        "NACOS_SERVER",
+        "API_SECRET_KEY",
+        "AGENT_SIGNING_KEY",
+        "AGENT_HMAC_KEY",
+        "PG_PASSWORD",
+        "NACOS_PASSWORD",
         "OPENAI_API_KEY",
-        "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-        "NO_PROXY", "no_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "NO_PROXY",
+        "no_proxy",
     ):
         monkeypatch.delenv(key, raising=False)
     yield
@@ -45,6 +55,7 @@ def _isolate_env(monkeypatch):
 def _settings_field_names() -> set:
     """Helper: lazily import Settings only after env is isolated."""
     from src.common.config.settings import Settings
+
     return set(Settings.model_fields.keys())
 
 
@@ -189,6 +200,7 @@ def test_make_client_disables_proxy_trust(monkeypatch):
         )
     finally:
         import asyncio
+
         try:
             loop = asyncio.new_event_loop()
             loop.run_until_complete(client.aclose())
@@ -221,3 +233,44 @@ def test_format_exception_uses_str_when_available():
     info = _format_exception(ValueError("api secret too short"))
     assert info["error"] == "api secret too short"
     assert info["error_type"] == "ValueError"
+
+
+# V9 5.3 (SP6): lock down the startup order. main.py\'s lifespan
+# must call load_nacos_settings() BEFORE _ensure_es_indices() and
+# init_schema(), otherwise the wrong env defaults get baked into ES
+# / PG connections on multi-host deployments. We assert the order
+# by patching the relevant functions and recording the call order.
+def test_startup_order_loads_nacos_before_es_and_pg(monkeypatch):
+    calls = []
+
+    async def _fake_load_nacos():
+        calls.append("nacos")
+
+    async def _fake_ensure_es():
+        calls.append("es")
+
+    async def _fake_init_pg():
+        calls.append("pg")
+
+    monkeypatch.setattr("src.common.config.settings.load_nacos_settings", _fake_load_nacos)
+    monkeypatch.setattr("src.api.main._ensure_es_indices", _fake_ensure_es)
+    monkeypatch.setattr("src.common.db.pg.init_schema", _fake_init_pg)
+
+    import asyncio
+    from src.api.main import lifespan
+    from src.api.main import app
+
+    async def _run():
+        async with app.router.lifespan_context(app):
+            pass
+
+    asyncio.run(_run())
+
+    # Nacos must come first; ES / PG may follow in either order but
+    # both must come AFTER Nacos.
+    assert "nacos" in calls, calls
+    nacos_idx = calls.index("nacos")
+    es_idx = calls.index("es") if "es" in calls else len(calls)
+    pg_idx = calls.index("pg") if "pg" in calls else len(calls)
+    assert nacos_idx < es_idx, calls
+    assert nacos_idx < pg_idx, calls

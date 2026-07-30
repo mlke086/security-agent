@@ -270,6 +270,10 @@ func main() {
 		}
 		if cfgUpdate.HeartbeatInterval > 0 {
 			cfg.HeartbeatSec = cfgUpdate.HeartbeatInterval
+			// V9 5.1: actually apply the new interval to the running
+			// heartbeat ticker (was a no-op -- ticker was created once
+			// at connect time with the old interval).
+			client.ApplyHeartbeatInterval(cfgUpdate.HeartbeatInterval)
 		}
 		log.Printf("[agent] config updated: heartbeat=%ds, cpu=%d%%, mem=%d%%",
 			cfg.HeartbeatSec,

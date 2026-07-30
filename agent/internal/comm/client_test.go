@@ -303,3 +303,53 @@ func TestFWSL_Connect_ClosesOnReadDeadline(t *testing.T) {
 		}
 	}
 }
+
+
+// TestApplyHeartbeatInterval stores the new value and signals the
+// reset channel. Without the signal, the heartbeat loop would never
+// pick up a config_update (the ticker was created with the original
+// duration and time.NewTicker ignores later cfg.HeartbeatSec writes).
+func TestApplyHeartbeatInterval(t *testing.T) {
+	client, _ := NewClient(&config.Config{HeartbeatSec: 30})
+	// First apply: should be pending in the channel.
+	client.ApplyHeartbeatInterval(15)
+	client.heartbeatMu.Lock()
+	got := client.currentHeartbeatSec
+	client.heartbeatMu.Unlock()
+	if got != 15 {
+		t.Fatalf("currentHeartbeatSec = %d, want 15", got)
+	}
+	select {
+	case <-client.heartbeatReset:
+		// expected
+	default:
+		t.Fatal("heartbeatReset channel should have a pending item")
+	}
+	// Second apply while one is already pending: the second signal is
+	// dropped (the receiver will see the latest value when it reads).
+	client.ApplyHeartbeatInterval(60)
+	// Drain the pending signal.
+	select {
+	case <-client.heartbeatReset:
+	default:
+	}
+	// The receiver only sees the value stored in currentHeartbeatSec,
+	// which is the latest -- so even if multiple signals were queued,
+	// the latest value is what gets applied. Apply one more and
+	// confirm it shows up.
+	client.ApplyHeartbeatInterval(45)
+	select {
+	case <-client.heartbeatReset:
+	default:
+		t.Fatal("a third apply should enqueue a signal")
+	}
+	// Invalid (zero / negative): rejected.
+	client.ApplyHeartbeatInterval(0)
+	client.ApplyHeartbeatInterval(-5)
+	client.heartbeatMu.Lock()
+	got = client.currentHeartbeatSec
+	client.heartbeatMu.Unlock()
+	if got != 45 {
+		t.Fatalf("invalid ApplyHeartbeatInterval should be ignored; got %d", got)
+	}
+}

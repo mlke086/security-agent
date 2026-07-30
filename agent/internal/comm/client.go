@@ -49,6 +49,19 @@ type Client struct {
 
 	done chan struct{}
 
+	// heartbeatReset (V9 5.1): a sender pushes on this channel when
+	// the server sends a config_update with a new heartbeat interval.
+	// The heartbeat loop listens on it and ticker.Reset()s to the new
+	// duration without restarting the loop. Buffered so the sender
+	// never blocks.
+	heartbeatReset chan struct{}
+
+	// currentHeartbeatSec (V9 5.1): the interval the heartbeat loop
+	// will use on the next ticker.Reset(). Stored here so
+	// heartbeatReset's receiver knows what to apply.
+	heartbeatMu         sync.Mutex
+	currentHeartbeatSec int
+
 	// Message handlers
 	OnScanCommand  func(payload json.RawMessage)
 	OnRuleUpdate   func(payload json.RawMessage)
@@ -63,9 +76,13 @@ type Client struct {
 // NewClient creates a new WebSocket client.
 func NewClient(cfg *config.Config) (*Client, error) {
 	c := &Client{
-		cfg:  cfg,
-		done: make(chan struct{}),
+		cfg:            cfg,
+		done:           make(chan struct{}),
+		heartbeatReset: make(chan struct{}, 1),
 	}
+	c.heartbeatMu.Lock()
+	c.currentHeartbeatSec = cfg.HeartbeatSec
+	c.heartbeatMu.Unlock()
 	c.ruleVersion.Store(cfg.RuleVersion)
 	return c, nil
 }
@@ -85,6 +102,25 @@ func (c *Client) RuleVersion() string {
 		}
 	}
 	return ""
+}
+
+// ApplyHeartbeatInterval requests that the heartbeat ticker be reset
+// to a new interval. Safe to call from any goroutine; the next
+// ticker tick will pick up the new duration. V9 5.1 fix for F3:
+// previously changing HeartbeatSec did nothing because the ticker was
+// created once at connect time with the original interval.
+func (c *Client) ApplyHeartbeatInterval(seconds int) {
+	if seconds <= 0 {
+		return
+	}
+	c.heartbeatMu.Lock()
+	c.currentHeartbeatSec = seconds
+	c.heartbeatMu.Unlock()
+	select {
+	case c.heartbeatReset <- struct{}{}:
+	default:
+		// already pending; the receiver will see the latest value.
+	}
 }
 
 // SetStatusReason records a self-protection reason (e.g. "paused:cpu_high")
@@ -225,7 +261,10 @@ func (c *Client) Connect(ctx context.Context) error {
 }
 
 func (c *Client) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(time.Duration(c.cfg.HeartbeatSec) * time.Second)
+	c.heartbeatMu.Lock()
+	interval := time.Duration(c.currentHeartbeatSec) * time.Second
+	c.heartbeatMu.Unlock()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	// 连上后立即发首个心跳，让服务端尽快比对规则版本下发 rule_update，
 	// 不必等首个 ticker（60s）-- 加速首次规则分发。
@@ -238,6 +277,17 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 			return
 		case <-c.done:
 			return
+		case <-c.heartbeatReset:
+			// V9 5.1: server pushed a new heartbeat interval.
+			// Re-read the duration under the mutex and reset
+			// the ticker without restarting the loop.
+			c.heartbeatMu.Lock()
+			newInterval := time.Duration(c.currentHeartbeatSec) * time.Second
+			c.heartbeatMu.Unlock()
+			if newInterval > 0 {
+				ticker.Reset(newInterval)
+			}
+			continue
 		case <-immediate:
 		case <-ticker.C:
 		}

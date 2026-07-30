@@ -22,9 +22,11 @@ os.environ.setdefault("NACOS_SERVER", "")  # disable nacos in tests; settings co
 # (in a throwaway loop) is safely discarded; schema/users persist in PG.
 try:
     from src.common.db.pg import init_schema as _init_schema
+
     asyncio.run(_init_schema())
 except Exception as _e:
     import warnings
+
     warnings.warn("PG schema init skipped: " + repr(_e))
 
 
@@ -36,9 +38,12 @@ except Exception as _e:
 # would 401 from the first call. The reset uses UPSERT so it is safe
 # even on a fresh DB.
 import os as _os_reset_pwd  # noqa: E402  -- keep near conftest top
+
+
 async def _reset_default_passwords() -> None:
     from passlib.context import CryptContext as _CC
     from src.common.db.pg import get_pg_pool as _gpp_reset
+
     pwd = _CC(schemes=["bcrypt"], deprecated="auto")
     pool = await _gpp_reset()
     test_users = [
@@ -58,12 +63,17 @@ async def _reset_default_passwords() -> None:
                 " disabled = FALSE,"
                 " deleted_at = NULL,"
                 " token_version = 0",
-                username, pwd.hash(password), role,
+                username,
+                pwd.hash(password),
+                role,
             )
+
+
 try:
     asyncio.run(_reset_default_passwords())
 except Exception as _e:
     import warnings as _w
+
     _w.warn("PG test-password reset skipped: " + repr(_e))
 
 # P1-1: seed the 4 test users (admin / analyst / viewer / responder) with
@@ -92,11 +102,15 @@ try:
                     " hashed_password = EXCLUDED.hashed_password,"
                     " role = EXCLUDED.role,"
                     " disabled = FALSE",
-                    username, pwd.hash(password), role,
+                    username,
+                    pwd.hash(password),
+                    role,
                 )
+
     asyncio.run(_seed_test_users())
 except Exception as _e:
     import warnings
+
     warnings.warn("PG test-user seed skipped: " + repr(_e))
 
 
@@ -112,6 +126,7 @@ def _reset_test_passwords_each_test():
     import asyncio as _aio_reset
     from passlib.context import CryptContext as _CC2
     from src.common.db.pg import get_pg_pool as _gpp_reset2
+
     pwd = _CC2(schemes=["bcrypt"], deprecated="auto")
     test_users = [
         ("admin", "admin123", "admin"),
@@ -119,6 +134,7 @@ def _reset_test_passwords_each_test():
         ("viewer", "viewer123", "viewer"),
         ("responder", "responder123", "responder"),
     ]
+
     async def _do_reset():
         pool = await _gpp_reset2()
         async with pool.acquire() as conn:
@@ -132,12 +148,16 @@ def _reset_test_passwords_each_test():
                     " disabled = FALSE,"
                     " deleted_at = NULL,"
                     " token_version = 0",
-                    username, pwd.hash(password), role,
+                    username,
+                    pwd.hash(password),
+                    role,
                 )
+
     try:
         _aio_reset.run(_do_reset())
     except Exception as _exc:
         import warnings as _w2
+
         _w2.warn("PG session password reset skipped: " + repr(_exc))
     return None
 
@@ -153,8 +173,62 @@ async def _truncate_events() -> None:
         return
     try:
         from src.common.db.pg import get_pg_pool as _gpp
+
         pool = await _gpp()
         async with pool.acquire() as conn:
             await conn.execute("TRUNCATE events")
     except Exception:
         pass
+
+
+
+# V9 5.2: auth_headers fixture. Returns a function ``auth(role) -> dict``
+# that logs in via the live FastAPI TestClient and returns a fresh
+# Authorization header. Tests use this instead of hard-coding passwords
+# so the suite stays correct even if a prior run mutated the password
+# table.
+@_pytest.fixture(scope="session")
+def auth_headers():
+    from fastapi.testclient import TestClient
+    from src.api.main import app
+    from src.api.auth.jwt import create_access_token
+    # Build a per-role mapping by minting a JWT directly: it is
+    # cheaper than a full login round-trip per test, and the
+    # token_version reset fixture above guarantees the ver claim
+    # matches the row.
+    passwords = {
+        "admin": "admin123",
+        "analyst": "analyst123",
+        "viewer": "viewer123",
+        "responder": "responder123",
+    }
+    minted = {
+        role: {"Authorization": "Bearer " + create_access_token(
+            data={"sub": role, "role": role},
+            token_version=0,
+        )}
+        for role in passwords
+    }
+    # Sanity-check by calling /auth/me with one of them; if the
+    # login still fails because the password has drifted (e.g. the
+    # TestClient was constructed before the reset fixture ran), the
+    # suite surfaces a clear error rather than silent 401s downstream.
+    client = TestClient(app)
+    me = client.get("/api/v1/auth/me", headers=minted["admin"])
+    if me.status_code != 200:
+        raise RuntimeError(
+            f"conftest auth_headers fixture: /auth/me returned {me.status_code} "
+            f"-- the password reset fixture may not have run yet. Body: {me.text}"
+        )
+    return minted.__getitem__
+
+
+# V9 5.2: convenience fixture that hands out a single TestClient
+# initialised AFTER the password reset so it sees the canonical
+# state. Tests that previously called ``TestClient(app)`` themselves
+# should switch to this one.
+@_pytest.fixture(scope="session")
+def http_client():
+    from fastapi.testclient import TestClient
+    from src.api.main import app
+    return TestClient(app)

@@ -470,6 +470,7 @@ async def _write_fallback(
                 error=str(exc) or type(exc).__name__,
             )
 
+
 async def llm_analysis(state: dict) -> dict:
     """Use LLM to filter false positives, assign AI severity, and generate fix advice.
 
@@ -599,7 +600,6 @@ async def llm_analysis(state: dict) -> dict:
     return {"status": "reporting", "ai_processed": bool(analyzed_ids) and not failed}
 
 
-
 def _build_analysis_prompt(findings: list) -> str:
     """Build the LLM analysis prompt for a batch of findings."""
     import json
@@ -611,14 +611,16 @@ def _build_analysis_prompt(findings: list) -> str:
     # below are also dropped.
     findings_json = []
     for f in findings:
-        findings_json.append({
-            "finding_id": f.get("finding_id", ""),
-            "name": f.get("name", ""),
-            "cve": f.get("cve"),
-            "severity": f.get("severity", "info"),
-            "category": f.get("category", ""),
-            "evidence": f.get("evidence", "")[:300],
-        })
+        findings_json.append(
+            {
+                "finding_id": f.get("finding_id", ""),
+                "name": f.get("name", ""),
+                "cve": f.get("cve"),
+                "severity": f.get("severity", "info"),
+                "category": f.get("category", ""),
+                "evidence": f.get("evidence", "")[:300],
+            }
+        )
 
     return f"""You are a senior vulnerability analyst for an enterprise security team. For each finding below:
 
@@ -813,7 +815,16 @@ async def generate_report(state: dict) -> dict:
     summary = f"Scan completed: {len(vulns)} findings ({len(not_filtered)} non-filtered) across {len(by_category)} categories"
     ai_analysis_text = ""
     ai_overall_advice_text = ""
-    ai_processed = False
+    # V10 2.2 (2026-07-30): ai_processed used to be computed locally
+    # from whether the summary LLM call returned a non-empty string,
+    # which silently disagreed with the upstream llm_analysis node --
+    # that node already returns ai_processed=True once any finding
+    # was scored. Read the upstream value from state so the report
+    # badge matches what the operator saw on the findings table. The
+    # summary text and ai_analysis block below still reflect this
+    # node own LLM call; on failure the fallback summary and empty
+    # ai_analysis text surface the difference.
+    ai_processed = bool(state.get("ai_processed", False))
     ai_model_name = ""
     try:
         from src.knowledge.models.adapter import get_model_adapter
@@ -851,7 +862,6 @@ Top hosts affected: {sorted({v.get("hostname", "") for v in top_vulns if v.get("
             ai_analysis_text = ""
         elif isinstance(summary_result, str) and len(summary_result) > 5:
             summary = summary_result
-            ai_processed = True
             ai_analysis_text = summary_result
         else:
             ai_analysis_text = ""

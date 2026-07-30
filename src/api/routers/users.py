@@ -13,6 +13,7 @@ Endpoints:
 All write actions are audit-logged (actor + target + before/after).
 Self-protection: admins cannot delete/disable/rename themselves.
 """
+
 from __future__ import annotations
 
 import re
@@ -141,8 +142,7 @@ def _validate_password(
         raise HTTPException(
             status_code=400,
             detail=(
-                "password must contain at least 3 of 4 classes: "
-                "lowercase, uppercase, digit, symbol"
+                "password must contain at least 3 of 4 classes: lowercase, uppercase, digit, symbol"
             ),
         )
     if username and new_password.lower() == username.lower():
@@ -166,6 +166,7 @@ def _validate_username_format(username: str) -> None:
 
 
 # ---- /me (any user) -------------------------------------------------
+
 
 @router.get("/me", response_model=UserPublic)
 async def get_me(
@@ -218,6 +219,7 @@ async def change_own_password(
 
 # ---- admin-only endpoints --------------------------------------------
 
+
 @router.get("", response_model=UserListResponse)
 async def list_users(
     include_deleted: bool = Query(default=False, description="include soft-deleted users"),
@@ -228,12 +230,18 @@ async def list_users(
     if not include_deleted:
         where = " WHERE deleted_at IS NULL"
     rows = await pool.fetch(
-        f"SELECT username, hashed_password, role, disabled, created_at, updated_at, last_login_at, deleted_at FROM users{where} ORDER BY username"
+        f"SELECT username, role, disabled, created_at, updated_at, last_login_at, deleted_at FROM users{where} ORDER BY username"
     )
     items = [
         UserInDB(
             username=r["username"],
-            hashed_password=r["hashed_password"],
+            # hashed_password intentionally not selected: UserInDB
+            # requires the field, but this endpoint only renders
+            # UserPublic which never carries it. An empty string is
+            # safe because the only caller that compares
+            # hashed_password is /me/password, which re-fetches the
+            # row through get_user() and never sees this list.
+            hashed_password="",
             role=r["role"],
             disabled=r["disabled"],
             created_at=r["created_at"],
@@ -270,7 +278,9 @@ async def create_user(
     try:
         await pool.execute(
             "INSERT INTO users (username, hashed_password, role) VALUES ($1, $2, $3)",
-            body.username, new_hash, body.role,
+            body.username,
+            new_hash,
+            body.role,
         )
     except Exception as exc:  # likely UniqueViolationError
         # asyncpg UniqueViolationError is the right signal, but we do
@@ -356,6 +366,7 @@ async def update_user(
             # typed exception instead of substring sniffing the message,
             # which broke across asyncpg/PG versions. (S-P2 2.4)
             import asyncpg
+
             if isinstance(exc, asyncpg.UniqueViolationError):
                 raise HTTPException(status_code=409, detail="username already exists")
             # Fallback in case some non-asyncpg driver surfaces it as a
@@ -380,8 +391,6 @@ async def update_user(
         },
     )
     return _to_public(after)
-
-
 
 
 async def _count_active_admins(pool, exclude_username: str | None = None) -> int:
@@ -430,9 +439,7 @@ async def _hard_delete_blockers(pool: Any, username: str) -> list[str]:
     )
     if n_tokens:
         blockers.append(f"enroll_tokens (created_by): {n_tokens}")
-    n_votes = await pool.fetchval(
-        "SELECT COUNT(*) FROM approval_votes WHERE voter = $1", username
-    )
+    n_votes = await pool.fetchval("SELECT COUNT(*) FROM approval_votes WHERE voter = $1", username)
     if n_votes:
         blockers.append(f"approval_votes (voter): {n_votes}")
     # Audit chain: actor/target are bare usernames in ES; a physical

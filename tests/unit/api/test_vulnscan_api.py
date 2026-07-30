@@ -12,21 +12,6 @@ from src.api.main import app
 client = TestClient(app)
 
 
-def _login(role="admin"):
-    passwords = {
-        "admin": "admin123",
-        "analyst": "analyst123",
-        "viewer": "viewer123",
-        "responder": "responder123",
-    }
-    resp = client.post("/api/v1/auth/login", json={"username": role, "password": passwords[role]})
-    assert resp.status_code == 200, resp.text
-    return resp.json()["access_token"]
-
-
-def _auth_headers(role="admin"):
-    return {"Authorization": f"Bearer {_login(role)}"}
-
 
 def _mock_store():
     store = AsyncMock()
@@ -46,8 +31,8 @@ def _mock_store():
 
 
 class TestParseIntent:
-    def test_parse_as_analyst(self):
-        headers = _auth_headers("analyst")
+    def test_parse_as_analyst(self, auth_headers):
+        headers = auth_headers("analyst")
         from src.agents.models import ScanIntent
 
         mock = AsyncMock()
@@ -62,8 +47,8 @@ class TestParseIntent:
         resp = client.post("/api/v1/vulnscan/tasks/parse", json={"intent_text": "scan"})
         assert resp.status_code == 401
 
-    def test_parse_as_viewer_403(self):
-        headers = _auth_headers("viewer")
+    def test_parse_as_viewer_403(self, auth_headers):
+        headers = auth_headers("viewer")
         resp = client.post(
             "/api/v1/vulnscan/tasks/parse", json={"intent_text": "scan"}, headers=headers
         )
@@ -74,8 +59,8 @@ class TestParseIntent:
 
 
 class TestTasks:
-    def test_create_task_as_admin(self):
-        headers = _auth_headers("admin")
+    def test_create_task_as_admin(self, auth_headers):
+        headers = auth_headers("admin")
         with (
             patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs,
             patch("src.api.routers.vulnscan.get_audit_logger") as mock_audit,
@@ -96,8 +81,8 @@ class TestTasks:
         resp = client.post("/api/v1/vulnscan/tasks", json={"targets": ["h1"]})
         assert resp.status_code == 401
 
-    def test_list_tasks(self):
-        headers = _auth_headers("analyst")
+    def test_list_tasks(self, auth_headers):
+        headers = auth_headers("analyst")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             mock_vs.return_value = store
@@ -105,8 +90,8 @@ class TestTasks:
             assert resp.status_code == 200
             assert "items" in resp.json()
 
-    def test_get_task_not_found(self):
-        headers = _auth_headers("admin")
+    def test_get_task_not_found(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             store.get_task.return_value = None
@@ -114,8 +99,8 @@ class TestTasks:
             resp = client.get("/api/v1/vulnscan/tasks/task-99", headers=headers)
             assert resp.status_code == 404
 
-    def test_cancel_task_not_found(self):
-        headers = _auth_headers("admin")
+    def test_cancel_task_not_found(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             store.get_task.return_value = None
@@ -123,8 +108,8 @@ class TestTasks:
             resp = client.post("/api/v1/vulnscan/tasks/task-99/cancel", headers=headers)
             assert resp.status_code == 404
 
-    def test_cancel_task_as_viewer_403(self):
-        headers = _auth_headers("viewer")
+    def test_cancel_task_as_viewer_403(self, auth_headers):
+        headers = auth_headers("viewer")
         resp = client.post("/api/v1/vulnscan/tasks/task-1/cancel", headers=headers)
         assert resp.status_code == 403
 
@@ -142,8 +127,8 @@ class TestStream:
 
 
 class TestResults:
-    def test_list_results(self):
-        headers = _auth_headers("viewer")
+    def test_list_results(self, auth_headers):
+        headers = auth_headers("viewer")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             mock_vs.return_value = store
@@ -151,8 +136,8 @@ class TestResults:
             assert resp.status_code == 200
             assert "items" in resp.json()
 
-    def test_filter_by_severity(self):
-        headers = _auth_headers("admin")
+    def test_filter_by_severity(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             mock_vs.return_value = store
@@ -166,8 +151,8 @@ class TestResults:
 
 
 class TestReports:
-    def test_get_report_not_found(self):
-        headers = _auth_headers("viewer")
+    def test_get_report_not_found(self, auth_headers):
+        headers = auth_headers("viewer")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             store.get_report.return_value = None
@@ -184,8 +169,8 @@ class TestReports:
 
 
 class TestVulns:
-    def test_get_vuln_not_found(self):
-        headers = _auth_headers("viewer")
+    def test_get_vuln_not_found(self, auth_headers):
+        headers = auth_headers("viewer")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             store.list_vulns.return_value = []
@@ -193,8 +178,8 @@ class TestVulns:
             resp = client.get("/api/v1/vulnscan/vulns/f-99", headers=headers)
             assert resp.status_code == 404
 
-    def test_patch_vuln_invalid_status_422(self):
-        headers = _auth_headers("admin")
+    def test_patch_vuln_invalid_status_422(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             mock_vs.return_value = store
@@ -203,8 +188,8 @@ class TestVulns:
             )
             assert resp.status_code == 422
 
-    def test_patch_vuln_as_viewer_403(self):
-        headers = _auth_headers("viewer")
+    def test_patch_vuln_as_viewer_403(self, auth_headers):
+        headers = auth_headers("viewer")
         resp = client.patch("/api/v1/vulnscan/vulns/f-1", json={"status": "open"}, headers=headers)
         assert resp.status_code == 403
 
@@ -217,8 +202,8 @@ class TestResultsExtendedFilters:
     hostname_keyword, name_keyword, group, ai_processed, date_from,
     date_to) all reach the store layer with the right kwargs."""
 
-    def test_extended_filters_forwarded_to_store(self):
-        headers = _auth_headers("admin")
+    def test_extended_filters_forwarded_to_store(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             mock_vs.return_value = store
@@ -246,7 +231,7 @@ class TestResultsExtendedFilters:
             assert filt.date_from == "2026-07-01T00:00:00Z"
             assert filt.date_to == "2026-07-29T23:59:59Z"
 
-    def test_group_filter_pushes_hostnames_server_side(self):
+    def test_group_filter_pushes_hostnames_server_side(self, auth_headers):
         """S-P1-4: when the operator passes group=order-svc, the router
         looks up the group's hosts and pushes the hostname set into the ES
         query as a server-side ``terms`` filter (hostnames=...), instead of
@@ -254,7 +239,7 @@ class TestResultsExtendedFilters:
         silently dropped group members beyond the cap)."""
         from src.agents.models import Host, ScanModule, VulnFinding
 
-        headers = _auth_headers("analyst")
+        headers = auth_headers("analyst")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             store.list_hosts = AsyncMock(
@@ -303,10 +288,10 @@ class TestVulnPatchFixTime:
     when status transitions to fixed/accepted, so the vuln list can
     display SLA / re-open history without joining the audit log."""
 
-    def test_patch_to_fixed_records_fix_time(self):
+    def test_patch_to_fixed_records_fix_time(self, auth_headers):
         from src.agents.models import ScanModule, VulnFinding
 
-        headers = _auth_headers("admin")
+        headers = auth_headers("admin")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             existing = VulnFinding(
@@ -333,13 +318,13 @@ class TestVulnPatchFixTime:
             assert kwargs["first_fixed_at"]
             assert kwargs["last_fixed_at"] == kwargs["first_fixed_at"]
 
-    def test_patch_to_fixed_preserves_first_fixed_at(self):
+    def test_patch_to_fixed_preserves_first_fixed_at(self, auth_headers):
         """When the vuln was already fixed once before, re-fixing must
         update last_fixed_at but NOT overwrite first_fixed_at (the router
         only forwards first_fixed_at when it is currently empty)."""
         from src.agents.models import ScanModule, VulnFinding
 
-        headers = _auth_headers("admin")
+        headers = auth_headers("admin")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             existing = VulnFinding(
@@ -423,10 +408,10 @@ class TestHostStats:
     the test independent of the actual ES / PG stack.
     """
 
-    def test_host_stats_returns_per_group_breakdown(self):
+    def test_host_stats_returns_per_group_breakdown(self, auth_headers):
         from src.agents.models import Host, ScanModule, VulnFinding
 
-        headers = _auth_headers("analyst")
+        headers = auth_headers("analyst")
         # S-P1-3: /host-stats now uses the shared singleton (was VulnscanStore()),
         # so we mock get_vulnscan_store() with a fully-configured store.
         with (
@@ -572,10 +557,10 @@ class TestVulnDetailHostMeta:
       (no ``host`` key) for backwards compatibility.
     """
 
-    def test_get_vuln_includes_host_meta_by_agent_id(self):
+    def test_get_vuln_includes_host_meta_by_agent_id(self, auth_headers):
         from src.agents.models import Host, ScanModule, VulnFinding
 
-        headers = _auth_headers("analyst")
+        headers = auth_headers("analyst")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             v = VulnFinding(
@@ -614,10 +599,10 @@ class TestVulnDetailHostMeta:
         # list_hosts must not be called when get_host succeeds
         store.list_hosts.assert_not_called()
 
-    def test_get_vuln_falls_back_to_hostname(self):
+    def test_get_vuln_falls_back_to_hostname(self, auth_headers):
         from src.agents.models import Host, ScanModule, VulnFinding
 
-        headers = _auth_headers("analyst")
+        headers = auth_headers("analyst")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             v = VulnFinding(
@@ -650,10 +635,10 @@ class TestVulnDetailHostMeta:
         store.list_hosts.assert_called_once()
         assert store.list_hosts.await_args.kwargs.get("hostname") == "order-1"
 
-    def test_get_vuln_omits_host_when_lookup_fails(self):
+    def test_get_vuln_omits_host_when_lookup_fails(self, auth_headers):
         from src.agents.models import ScanModule, VulnFinding
 
-        headers = _auth_headers("viewer")
+        headers = auth_headers("viewer")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             v = VulnFinding(
@@ -681,10 +666,10 @@ class TestVulnDetailHostMeta:
         # The vuln fields themselves are still in the response.
         assert body["finding_id"] == "f-1"
 
-    def test_host_stats_uses_singleton_store(self):
+    def test_host_stats_uses_singleton_store(self, auth_headers):
         """V9 3.1: /host-stats must use the shared singleton and must
         NOT instantiate VulnscanStore() per request."""
-        headers = _auth_headers("analyst")
+        headers = auth_headers("analyst")
         with (
             patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs,
             patch("src.agents.store.VulnscanStore") as mock_cls,
@@ -703,10 +688,10 @@ class TestVulnDetailHostMeta:
             mock_vs.assert_called()
             mock_cls.assert_not_called()
 
-    def test_host_stats_calls_store_a_fixed_number_of_times(self):
+    def test_host_stats_calls_store_a_fixed_number_of_times(self, auth_headers):
         """V9 3.1: the endpoint makes O(1) store calls regardless of
         how many groups exist (was N+1, one list_hosts per group)."""
-        headers = _auth_headers("analyst")
+        headers = auth_headers("analyst")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
             store.list_groups = AsyncMock(
@@ -735,7 +720,7 @@ class TestVulnDetailHostMeta:
             assert store.list_vulns.await_count == 1
 
 
-    def test_target_groups_resolution_uses_cache(self):
+    def test_target_groups_resolution_uses_cache(self, auth_headers):
         """V9 3.2: target_groups resolution must hit list_hosts at most
         once across burst task creates (30s in-process cache)."""
         import src.api.routers.vulnscan as _vmod
@@ -743,7 +728,7 @@ class TestVulnDetailHostMeta:
         _vmod._HOST_STATS_CACHE.pop("host_to_group", None)
         _vmod._HOST_STATS_CACHE.pop("ts_target_groups", None)
         from src.agents.models import Host
-        headers = _auth_headers("admin")
+        headers = auth_headers("admin")
         with (
             patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs,
             patch("src.api.routers.vulnscan.get_audit_logger") as mock_audit,

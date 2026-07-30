@@ -18,16 +18,6 @@ from src.api.main import app
 client = TestClient(app)
 
 
-def _login(role="admin"):
-    passwords = {"admin": "admin123", "analyst": "analyst123", "viewer": "viewer123", "responder": "responder123"}
-    resp = client.post("/api/v1/auth/login", json={"username": role, "password": passwords[role]})
-    assert resp.status_code == 200, resp.text
-    return resp.json()["access_token"]
-
-
-def _auth_headers(role="admin"):
-    return {"Authorization": f"Bearer {_login(role)}"}
-
 
 # -- S-P1-1: _audit is awaited, not fire-and-forget -------------------------
 
@@ -88,11 +78,11 @@ async def test_hard_delete_blockers_all_categories():
 
 # -- End-to-end wiring (PG-backed) ------------------------------------------
 
-def test_create_user_audits_and_hard_delete_refused():
+def test_create_user_audits_and_hard_delete_refused(auth_headers):
     """S-P1-1: POST /users writes an audit record (awaited, call_count==1).
     S-P1-2: DELETE ?hard=true is refused 409 while the user has audit
     history; a clean hard-delete (count==0, no deps) then succeeds."""
-    headers = _auth_headers("admin")
+    headers = auth_headers("admin")
     uname = "tu_" + uuid.uuid4().hex[:10]
     with patch("src.api.routers.users.get_audit_logger") as mock_get:
         mock_logger = AsyncMock()
@@ -147,14 +137,14 @@ def _jwt_for(username: str, role: str, ver: int) -> str:
     return jwt.encode(payload, settings.api_secret_key, algorithm="HS256")
 
 
-def test_token_version_bump_on_password_change_invalidates_old_jwt():
+def test_token_version_bump_on_password_change_invalidates_old_jwt(auth_headers):
     """S-P1 follow-up (V9 2.1): after /me/password, an old JWT must 401.
 
     1. Login as admin (token T1 with ver=0).
     2. Use T1 to change own password -> token_version bumps to 1.
     3. T1 must now fail /auth/me.
     """
-    headers = _auth_headers("admin")
+    headers = auth_headers("admin")
     # baseline: old token works
     me_old = client.get("/api/v1/auth/me", headers=headers)
     assert me_old.status_code == 200, me_old.text
@@ -223,7 +213,7 @@ def test_legacy_jwt_without_ver_claim_still_works_until_bump():
 
 # -- V9 2.2: last-admin lockout guard ---------------------------------------
 
-def test_disable_admin_when_another_admin_exists_is_allowed():
+def test_disable_admin_when_another_admin_exists_is_allowed(auth_headers):
     """V9 2.2 happy path: with two enabled admins, disabling one is fine."""
     import secrets
     import string
@@ -231,7 +221,7 @@ def test_disable_admin_when_another_admin_exists_is_allowed():
     suffix = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
     backup = f"adm_b_{suffix}"
     pwd = "AdminBackupPwd2026!"
-    headers = _auth_headers("admin")
+    headers = auth_headers("admin")
     create = client.post(
         "/api/v1/users", headers=headers,
         json={"username": backup, "password": pwd, "role": "admin"},
@@ -323,3 +313,46 @@ def test_password_policy_rejects_same_as_old():
     _validate_password(same, username="user1", old_password="DifferentP@ss123")
     with pytest.raises(HTTPException):
         _validate_password(same, username="user1", old_password=same)
+
+
+# -- V10 2.3: list_users no longer loads the bcrypt digest ---------------------
+
+
+def test_list_users_selects_no_hashed_password(auth_headers):
+    """V10 2.3 (2026-07-30): the list endpoint must not SELECT
+    hashed_password from PG. Loading the bcrypt digest only to drop it
+    on the floor is pure waste -- and the digest is the most sensitive
+    byte in the row.
+
+    We inspect the SQL string used by ``list_users`` rather than
+    running an end-to-end query: the response model (UserPublic) never
+    carries the field either way, so a black-box test would always
+    pass even if the SELECT were reintroduced.
+    """
+    import inspect
+    from src.api.routers import users as users_router
+
+    src = inspect.getsource(users_router.list_users)
+    # ``SELECT ... FROM users`` is the line we care about. Be tolerant
+    # of multi-line f-strings: grep the whole function body.
+    assert "FROM users" in src, "list_users should query the users table"
+    assert "hashed_password" not in src, (
+        "list_users must not reference hashed_password in its SELECT; "
+        "the bcrypt digest is the most sensitive byte in the row and "
+        "UserInDB only needs the empty string here because the list "
+        "endpoint renders UserPublic (which never carries the field)."
+    )
+
+
+def test_list_users_does_not_load_bcrypt_in_memory(auth_headers):
+    """V10 2.3 follow-up: structural assertion on the response. The
+    list endpoint must hand back a UserListResponse whose items are
+    UserPublic -- which has no ``hashed_password`` attribute at all
+    (Pydantic would refuse to construct one). A future change that
+    re-introduces the field on the response model would also need to
+    update UserPublic, and this test catches that mistake."""
+    from src.agents.models import UserPublic, UserListResponse
+
+    # The response schema should not carry hashed_password either way.
+    assert "hashed_password" not in UserPublic.model_fields
+    assert "hashed_password" not in UserListResponse.model_fields

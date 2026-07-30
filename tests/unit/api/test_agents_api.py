@@ -16,15 +16,6 @@ client = TestClient(app)
 
 # -- helpers ------------------------------------------------------------------
 
-def _login(role="admin"):
-    passwords = {"admin": "admin123", "analyst": "analyst123", "viewer": "viewer123", "responder": "responder123"}
-    resp = client.post("/api/v1/auth/login", json={"username": role, "password": passwords[role]})
-    assert resp.status_code == 200, resp.text
-    return resp.json()["access_token"]
-
-
-def _auth_headers(role="admin"):
-    return {"Authorization": f"Bearer {_login(role)}"}
 
 
 # -- auth ---------------------------------------------------------------------
@@ -45,8 +36,8 @@ class TestAuth:
         resp = client.post("/api/v1/auth/login", json={"username": "admin"})
         assert resp.status_code == 422
 
-    def test_me_returns_user(self):
-        headers = _auth_headers("admin")
+    def test_me_returns_user(self, auth_headers):
+        headers = auth_headers("admin")
         resp = client.get("/api/v1/auth/me", headers=headers)
         assert resp.status_code == 200
         assert resp.json()["username"] == "admin"
@@ -81,10 +72,10 @@ class TestAuth:
         finally:
             jwt_module.get_user = original
 
-    def test_sse_token_endpoint_returns_short_lived_jwt(self):
+    def test_sse_token_endpoint_returns_short_lived_jwt(self, auth_headers):
         # P1-API-04 (2026-07-20): /auth/sse-token mints a token scoped
         # to one channel with a 60s TTL.
-        headers = _auth_headers("admin")
+        headers = auth_headers("admin")
         resp = client.post(
             "/api/v1/auth/sse-token",
             json={"scope": "events"},
@@ -112,16 +103,16 @@ class TestHealth:
 # -- enroll-tokens ------------------------------------------------------------
 
 class TestEnrollTokens:
-    def test_create_token_as_admin(self):
-        headers = _auth_headers("admin")
+    def test_create_token_as_admin(self, auth_headers):
+        headers = auth_headers("admin")
         resp = client.post("/api/v1/agents/enroll-tokens", json={"group": "prod", "ttl_hours": 24, "uses": 1}, headers=headers)
         assert resp.status_code == 200
         data = resp.json()
         assert "token" in data
         assert "expires" in data
 
-    def test_create_token_as_viewer_403(self):
-        headers = _auth_headers("viewer")
+    def test_create_token_as_viewer_403(self, auth_headers):
+        headers = auth_headers("viewer")
         resp = client.post("/api/v1/agents/enroll-tokens", json={"group": "prod"}, headers=headers)
         assert resp.status_code == 403
 
@@ -554,8 +545,8 @@ class TestEnroll:
 # -- host management ----------------------------------------------------------
 
 class TestHostManagement:
-    def test_list_hosts_as_admin(self):
-        headers = _auth_headers("admin")
+    def test_list_hosts_as_admin(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.api.routers.agents.list_hosts", AsyncMock(return_value=[])):
             resp = client.get("/api/v1/agents", headers=headers)
             assert resp.status_code == 200
@@ -565,14 +556,14 @@ class TestHostManagement:
         resp = client.get("/api/v1/agents")
         assert resp.status_code == 401
 
-    def test_get_host_as_admin(self):
-        headers = _auth_headers("admin")
+    def test_get_host_as_admin(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.api.routers.agents.get_host", AsyncMock(return_value=None)):
             resp = client.get("/api/v1/agents/host-1", headers=headers)
             assert resp.status_code == 404
 
-    def test_delete_host_as_admin(self):
-        headers = _auth_headers("admin")
+    def test_delete_host_as_admin(self, auth_headers):
+        headers = auth_headers("admin")
         with (
             patch("src.api.routers.agents.get_host", AsyncMock(return_value=AsyncMock())),
             patch("src.api.routers.agents.decommission_host", AsyncMock()),
@@ -583,8 +574,8 @@ class TestHostManagement:
             assert resp.status_code == 200
             assert resp.json()["status"] == "ok"
 
-    def test_delete_host_not_found(self):
-        headers = _auth_headers("admin")
+    def test_delete_host_not_found(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.api.routers.agents.get_host", AsyncMock(return_value=None)):
             resp = client.delete("/api/v1/agents/host-1", headers=headers)
             assert resp.status_code == 404
@@ -597,21 +588,21 @@ class TestHostManagement:
 # -- upgrade / config ---------------------------------------------------------
 
 class TestUpgrade:
-    def test_upgrade_missing_fields_422(self):
-        headers = _auth_headers("admin")
+    def test_upgrade_missing_fields_422(self, auth_headers):
+        headers = auth_headers("admin")
         # UpgradeRequest.version is Optional with default None; Pydantic
         # accepts {} without raising 422. The route still rejects because
         # the agent is not enrolled. Expected behavior: 404 (no host).
         resp = client.post("/api/v1/agents/agent-1/upgrade", json={}, headers=headers)
         assert resp.status_code == 404
 
-    def test_upgrade_as_viewer_403(self):
-        headers = _auth_headers("viewer")
+    def test_upgrade_as_viewer_403(self, auth_headers):
+        headers = auth_headers("viewer")
         resp = client.post("/api/v1/agents/agent-1/upgrade", json={"version": "v1", "download_url": "http://x"}, headers=headers)
         assert resp.status_code == 403
 
-    def test_upgrade_agent_not_connected(self):
-        headers = _auth_headers("admin")
+    def test_upgrade_agent_not_connected(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.agents.ws_gateway.get_agent_gateway") as mock_gw:
             mock_gateway = AsyncMock()
             mock_gateway.send_to_agent.return_value = False
@@ -621,8 +612,8 @@ class TestUpgrade:
 
 
 class TestAgentConfig:
-    def test_config_update_success(self):
-        headers = _auth_headers("admin")
+    def test_config_update_success(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.agents.ws_gateway.get_agent_gateway") as mock_gw:
             mock_gateway = AsyncMock()
             mock_gateway.send_to_agent.return_value = True
@@ -631,8 +622,8 @@ class TestAgentConfig:
             assert resp.status_code == 200
             assert resp.json()["status"] == "ok"
 
-    def test_config_update_agent_not_connected(self):
-        headers = _auth_headers("admin")
+    def test_config_update_agent_not_connected(self, auth_headers):
+        headers = auth_headers("admin")
         with patch("src.agents.ws_gateway.get_agent_gateway") as mock_gw:
             mock_gateway = AsyncMock()
             mock_gateway.send_to_agent.return_value = False

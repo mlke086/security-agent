@@ -13,6 +13,10 @@ __pycache__/
 security_agent.egg-info/
 .venv/
 venv/
+# Local py3.12 venv (was tracked by accident via an early commit
+# that pre-dated this .gitignore entry; untracked via follow-up).
+.venv312/
+
 .coverage
 .coverage.*
 .pytest_cache/
@@ -54,6 +58,11 @@ _store_*.b64
 diag_*.txt
 session_*.md
 debug/
+
+# Generated dev artifacts (repo root only - keep frontend/openapi.json tracked)
+/openapi.json
+/enroll_token.json
+/E2E_TEST_REPORT.md
 
 # Coverage
 .coverage

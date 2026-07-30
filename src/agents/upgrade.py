@@ -62,6 +62,11 @@ def _version_key(value: str) -> tuple[int, ...]:
     contract (no pre-release GA path), but flag this in the upgrade
     release notes if/when we ship a 0.x-rc line.
     """
+    # V10 4.2 (2026-07-30): ``re.findall(r"\d+", ...)`` only
+    # sees digits -- so Chinese version labels like
+    # ``v0.2.1-正式`` rank the same as ``0.2.1`` (digits 0/2/1).
+    # Acceptable for the current upgrade contract; flag the
+    # release notes if/when we ship a localised versioning scheme.
     numbers = re.findall(r"\d+", value or "")
     return tuple(int(part) for part in numbers) if numbers else (0,)
 

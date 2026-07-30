@@ -7,9 +7,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# V9 4.3 (2026-07-30): re-export the canonical ``Role`` alias from
-# src.api.auth.jwt so there is one role literal in the codebase.
-# Defining it here as well would let the two drift apart silently.
+# V9 4.3 / V10 4.3 (2026-07-30): re-export the canonical ``Role``
+# alias from src.api.auth.jwt so there is one role literal in the
+# codebase. Defining it here as well would let the two drift apart
+# silently. The canonical definition lives in
+# ``src/api/auth/jwt.py:Role`` -- new code SHOULD import that one
+# directly (``from src.api.auth.jwt import Role``). The
+# ``RoleLiteral`` name here is kept for back-compat with modules
+# that pre-date the V9 4.3 re-export; do not add new callers of it.
 from src.api.auth.jwt import Role as RoleLiteral  # noqa: F401
 
 
@@ -299,7 +304,7 @@ class RulePack(BaseModel):
 # edr_adapter/* in src/preprocessing normalizes vendor JSON into
 # this shape before persistence.
 # ============================================================
-from enum import StrEnum as _StrEnum
+from enum import StrEnum as _StrEnum  # noqa: E402,I001 -- project convention: section-scoped dependency marker (V10 4.4)
 
 
 class AlertSeverity(_StrEnum):
@@ -389,9 +394,11 @@ class AlertIngestResponse(BaseModel):
 
 
 # ---- User management (Phase 6, 2026-07-28) ----
-# V9 4.3 (2026-07-30): RoleLiteral re-exported from src.api.auth.jwt
-# (top-of-module import below) so the two definitions can't drift
-# apart silently.
+# V9 4.3 / V10 4.3 (2026-07-30): RoleLiteral re-exported from
+# src.api.auth.jwt (top-of-module import below) so the two
+# definitions can't drift apart silently. New code should use
+# ``Role`` directly; ``RoleLiteral`` is preserved for back-compat
+# and SHOULD NOT gain new callers.
 
 
 class UserPublic(BaseModel):

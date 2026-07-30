@@ -264,15 +264,15 @@ class AgentGateway:
     async def _deliver_pending(self, agent_id: str, ws: WebSocket) -> None:
         """Deliver the latest command queued while the Agent was offline.
 
-        V9 4.6 (2026-07-30): documented the at-most-once intent. The
-        producer (send_to_agent) stores at most one pending command
-        per agent (24h TTL), and the consumer reads + deletes it in
-        a single round-trip. If the WS send succeeds but the DELETE
-        fails, the next reconnect will replay the same command -- so
-        every queued command MUST be safely replayable (idempotent on
-        the agent side, or use a sequence number the agent tracks).
-        Producers that store NON-idempotent payloads should set a
-        sequence number in ``msg["seq"]`` so the agent can dedupe.
+        V9 4.6 + V10 4.2 (2026-07-30): the producer
+        (send_to_agent) stores at most one pending command per
+        agent (24h TTL); the consumer reads + deletes it in a
+        single round-trip. If the WS send succeeds but the DELETE
+        fails, the next reconnect will replay the same command --
+        so the current contract is ``trust the producer to send
+        idempotent payloads``; we do not yet stamp a ``msg["seq"]``
+        for the agent to dedupe, see follow-up issue #V10-4.2-seq
+        (out of scope for this PR; tracked separately).
         """
         r = self._redis()
         key = f"agent:pending_cmd:{agent_id}"

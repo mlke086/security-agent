@@ -12,6 +12,16 @@ from src.common.config.settings import get_settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# V10 4.3 (2026-07-30): ``Role`` is the single source of truth for
+# the user-role vocabulary. New code MUST import this directly:
+#
+#     from src.api.auth.jwt import Role
+#
+# ``src.agents.models.RoleLiteral`` is a re-export kept for back
+# compat with modules that pre-date the V9 4.3 re-export (see
+# ``src/agents/models.py`` near the import). Adding a new role is a
+# one-line change here; do not redefine the Literal elsewhere --
+# that path is what Divergent Change is supposed to prevent.
 Role = Literal["admin", "analyst", "viewer", "responder"]
 
 

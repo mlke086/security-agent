@@ -69,7 +69,8 @@ async def get_user(username: str, include_deleted: bool = False):
     row = await pool.fetchrow(
         # token_version added in V9 so get_current_user can detect a
         # stale JWT (claim ver no longer matches the row).
-        "SELECT username, hashed_password, role, disabled, created_at, updated_at, last_login_at, deleted_at, token_version FROM users " + where,
+        "SELECT username, hashed_password, role, disabled, created_at, updated_at, last_login_at, deleted_at, token_version FROM users "
+        + where,
         username,
     )
     if row:

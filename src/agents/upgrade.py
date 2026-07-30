@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +50,25 @@ def packaged_version() -> str:
         if version:
             return version
     return settings.agent_binary_version.strip() or "0.1.0"
+
+
+def _version_key(value: str) -> tuple[int, ...]:
+    """Return a conservative numeric key for semver-like Agent versions.
+
+    V9 4.8 (2026-07-30): pre-release tags (``-rc1`` / ``-beta2``) and
+    build metadata (``+sha.abc123``) are stripped -- only digits
+    participate. Side effect: ``0.2.1-rc1`` and ``0.2.1`` compare
+    equal. Acceptable for the current "upgrade only older agents"
+    contract (no pre-release GA path), but flag this in the upgrade
+    release notes if/when we ship a 0.x-rc line.
+    """
+    numbers = re.findall(r"\d+", value or "")
+    return tuple(int(part) for part in numbers) if numbers else (0,)
+
+
+def upgrade_needed(current_version: str, target_version: str) -> bool:
+    """Only older Agents should receive an upgrade command."""
+    return _version_key(current_version) < _version_key(target_version)
 
 
 def prepare_upgrade(host: Host, requested_version: str | None = None) -> PreparedUpgrade:
@@ -133,11 +153,15 @@ async def get_upgrade_status(agent_id: str) -> dict[str, Any] | None:
 async def record_upgrade_ack(agent_id: str, payload: dict[str, Any]) -> None:
     if payload.get("kind") != "agent":
         return
+    status = await get_upgrade_status(agent_id)
+    ack_version = str(payload.get("version") or "")
+    if not status or ack_version != str(status.get("target_version") or ""):
+        return
     ok = bool(payload.get("ok"))
     await update_upgrade_status(
         agent_id,
         state="restarting" if ok else "failed",
-        target_version=str(payload.get("version") or ""),
+        ack_received=True,
         message="Agent verified the package and is restarting" if ok else "Upgrade failed",
         error=str(payload.get("error") or ""),
     )
@@ -145,7 +169,7 @@ async def record_upgrade_ack(agent_id: str, payload: dict[str, Any]) -> None:
 
 async def confirm_upgrade_from_heartbeat(agent_id: str, current_version: str) -> None:
     status = await get_upgrade_status(agent_id)
-    if not status or status.get("state") not in {"sent", "restarting"}:
+    if not status or status.get("state") != "restarting" or not status.get("ack_received"):
         return
     changes: dict[str, Any] = {"current_version": current_version}
     if current_version and current_version == status.get("target_version"):

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from "react"
 import {
-  Input, Button, Select, message, List, Popconfirm, Tooltip,
+  Input, Button, Select, message, List, Popconfirm, Tooltip, Tag,
 } from "antd"
 import {
   SendOutlined, PlusOutlined, ThunderboltOutlined, DeleteOutlined,
@@ -10,8 +10,8 @@ import {
 import { useNavigate } from "react-router-dom"
 import {
   listConversations, createConversation, getConversation, deleteConversation,
-  chatConversation, updateConversation, listModels,
-  chatAssistant, createScanTask,
+  updateConversation, listModels,
+  chatAssistant, createScanTask, listGroups, listHosts, type Host, type HostGroup,
   type ConversationSummary, type ChatMessage, type LlmModel,
   type ChatRoute, type ChatSource,
 } from "../api/client"
@@ -162,11 +162,11 @@ export default function ChatScan() {
             .filter(Boolean)
           body.nuclei_timeout_sec = Number(nuclei.nuclei_timeout_sec) || 0
         }
-        // Persist this turn to the scan conversation (keeps history in
-        // sync with the sidebar list).
-        try {
-          await chatConversation(activeId!, body.intent_text, modelId, false)
-        } catch { /* best-effort */ }
+        // F2 (2026-07-29): the user's scan message + assistant reply are
+        // already persisted by /chat (via chatAssistant in handleSend), so
+        // we no longer call chatConversation here -- that fired a redundant
+        // LLM round-trip and persisted a *different* reply than the one the
+        // operator saw.
         // sync=true -> backend runs the subgraph inline (writes ES before
         // returning, so /scan-monitor and /scan task list see the record
         // immediately). sync=false -> enqueues to Redis Stream; needs a
@@ -252,8 +252,40 @@ export default function ChatScan() {
 
 
 
+  // 2026-07-29 UX upgrade: dedup against existing "new" conversations.
+  // Default titles are produced by the backend (newConversation) and by
+  // the Chinese UI ("新对话") / English fallback ("Untitled"). If any
+  // of those exists we switch to it instead of creating a duplicate.
+  const EMPTY_TITLES = new Set(["", "新对话", "新会话", "未命名对话", "Untitled", "Untitled Chat"])
   const handleNew = useCallback(async () => {
+    // 2026-07-29 UX upgrade: dedup against existing "untouched" new
+    // conversations. A conversation counts as "untouched" only if:
+    //   1) its title is still the default placeholder, AND
+    //   2) it has zero messages in the persisted history.
+    // The original implementation only checked the title, which would
+    // mis-classify a conversation whose user has since typed a
+    // question and then deleted the placeholder title.
     try {
+      for (const c of conversations) {
+        if (!EMPTY_TITLES.has(c.title || "")) continue
+        try {
+          const conv = await getConversation(c.id)
+          if ((conv.messages || []).length === 0) {
+            setActiveId(c.id)
+            setMessages([])
+            setModelId(conv.model_id)
+            message.info("已存在未使用的新对话，已为您切换")
+            return
+          }
+          // Has a placeholder title but already has turns; skip and
+          // keep looking so we can find a truly empty one. If none
+          // exists the for-loop falls through to createConversation.
+        } catch {
+          // GET failed; treat as "occupied" so we create a new one
+          // rather than risk overwriting another window.
+          continue
+        }
+      }
       const conv = await createConversation()
       setActiveId(conv.id)
       setMessages([])
@@ -261,7 +293,7 @@ export default function ChatScan() {
     } catch {
       message.error("新建对话失败")
     }
-  }, [refreshList])
+  }, [refreshList, conversations])
 
   const handleSelect = useCallback(async (id: string) => {
     setLoadingConv(true)
@@ -368,6 +400,9 @@ export default function ChatScan() {
             />
             <RobotOutlined className="title-icon" />
             <span>SecAgent 助手</span>
+            <Tag color="blue" icon={<RobotOutlined />} style={{ marginRight: 0 }}>
+              AI · {currentModelLabel}
+            </Tag>
             <span className="badge">扫描 · 项目问答 · 联网搜索</span>
           </div>
           <div className="right">
@@ -541,7 +576,51 @@ function IntentCard({
   onConfirm: (i: ScanIntentData, nuclei: NucleiOptions, sync: boolean) => void
   disabled: boolean
 }) {
-  const targets = intent.targets?.length ? intent.targets : ["（未指定，请在对话中补充）"]
+  // 2026-07-29 UX upgrade: business-group fast-path. If the LLM didn't
+  // pick concrete targets (very common when the operator asks to scan
+  // "all order-service hosts"), the operator can pick a business group
+  // here and we expand it into the host list before confirming.
+  const initialTargets = intent.targets?.length ? intent.targets : []
+  // V9 4.5: single Set tracks every host added by either the group
+  // shortcut or the per-host multi-select. The operator can remove
+  // any host (the Set supports add / delete / clear). Previously
+  // the group shortcut pushed items into extraTargets which had no
+  // way to retract them.
+  const [pickedHosts, setPickedHosts] = useState<Set<string>>(new Set())
+  const [groups, setGroups] = useState<HostGroup[]>([])
+  const [hostByGroup, setHostByGroup] = useState<Record<string, string[]>>({})
+  const [pickedGroup, setPickedGroup] = useState<string | undefined>(undefined)
+  const [allHosts, setAllHosts] = useState<Host[]>([])
+  useEffect(() => {
+    listGroups().then((r) => setGroups((r.items as HostGroup[]) || [])).catch(() => {})
+  }, [])
+  useEffect(() => {
+    // Lazy: only fetch when the user opens the multi-select. A
+    // hard 500-host cap keeps the payload small for large fleets.
+    let alive = true
+    listHosts({}).then((r) => {
+      if (alive) setAllHosts((r.items as Host[]) || [])
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+  const onPickGroup = async (g: string | undefined) => {
+    setPickedGroup(g)
+    if (!g || hostByGroup[g]) return
+    try {
+      const r = await listHosts({ group: g })
+      const hosts = (r.items || []).map((h: Host) => h.hostname).filter(Boolean)
+      setHostByGroup((prev) => ({ ...prev, [g]: hosts }))
+      // Fold into the single Set so the operator can later remove
+      // individual hosts via the multi-select.
+      setPickedHosts((prev) => {
+        const next = new Set(prev)
+        for (const h of hosts) next.add(h)
+        return next
+      })
+    } catch { /* ignore */ }
+  }
+  const mergedTargets = Array.from(new Set([...initialTargets, ...pickedHosts]))
+  const targets = mergedTargets.length ? mergedTargets : ["（未指定，请在对话中补充）"]
   const modules = intent.modules?.length ? intent.modules : ["sys_vuln", "baseline"]
   const engine = intent.engine || "matcher"
   const showNuclei = engine === "nuclei"
@@ -553,7 +632,7 @@ function IntentCard({
   })
   const [sync, setSync] = useState(false)
   const [advanced, setAdvanced] = useState(false)
-  const canConfirm = (intent.targets?.length ?? 0) > 0
+  const canConfirm = mergedTargets.length > 0
   return (
     <div className="intent-card">
       <h4><ThunderboltOutlined /> 已识别扫描意图</h4>
@@ -561,6 +640,41 @@ function IntentCard({
         <span className="label">目标：</span>
         {targets.map((t, i) => <span key={i} className="value">{t}</span>)}
       </div>
+        <div className="intent-row" style={{ flexWrap: "wrap" }}>
+          <span className="label">业务分组：</span>
+          <Select
+            size="small"
+            allowClear
+            placeholder={pickedGroup ? "已选：" + pickedGroup : "从业务分组添加目标"}
+            style={{ minWidth: 200 }}
+            value={pickedGroup}
+            onChange={onPickGroup}
+            options={groups.map((g) => ({ label: g.name + " (" + (g.member_count ?? 0) + ")", value: g.name }))}
+          />
+          {pickedGroup && (
+            <span style={{ marginLeft: 8, color: "#888", fontSize: 12 }}>
+              已添加 {hostByGroup[pickedGroup]?.length || 0} 个主机
+            </span>
+          )}
+        </div>
+        <div className="intent-row" style={{ flexWrap: "wrap" }}>
+          <span className="label">主机多选：</span>
+          <Select
+            mode="multiple"
+            size="small"
+            allowClear
+            placeholder={pickedHosts.size ? "已选 " + pickedHosts.size + " 台" : "从所有主机里勾选目标"}
+            style={{ minWidth: 240, maxWidth: 360 }}
+            value={pickedHosts}
+            onChange={setPickedHosts}
+            optionFilterProp="label"
+            maxTagCount={3}
+            options={allHosts.map((h) => ({
+              label: h.hostname + (h.group ? " [" + h.group + "]" : ""),
+              value: h.hostname,
+            }))}
+          />
+        </div>
       <div className="intent-row">
         <span className="label">模块：</span>
         {modules.map((m, i) => <span key={i} className="value">{MODULE_NAME[m] || m}</span>)}
@@ -642,7 +756,7 @@ function IntentCard({
         <button
           className="btn-confirm"
           disabled={disabled || !canConfirm}
-          onClick={() => onConfirm(intent, nuclei, sync)}
+          onClick={() => onConfirm({ ...intent, targets: mergedTargets }, nuclei, sync)}
         >
           {disabled ? "创建中…" : (sync ? "立即执行" : "入队执行")}
         </button>

@@ -3,6 +3,8 @@ Phase 2: Host CRUD uses PG as primary store with ES mirror for search.
 Tasks/Results/Vulns/Reports remain ES-only (full-text / aggregation).
 """
 
+import asyncio
+import re
 from datetime import UTC, datetime
 
 from elasticsearch import AsyncElasticsearch
@@ -67,6 +69,12 @@ _MAPPINGS = {
                 "hostname": {"type": "keyword"},
                 "category": {"type": "keyword"},
                 "detected_at": {"type": "date"},
+                # 2026-07-29 UX upgrade: AI processing evidence on each finding.
+                "ai_processed": {"type": "boolean"},
+                "ai_reason": {"type": "text"},
+                "ai_processed_at": {"type": "date"},
+                "first_fixed_at": {"type": "date"},
+                "last_fixed_at": {"type": "date"},
             }
         },
     },
@@ -76,35 +84,40 @@ _MAPPINGS = {
             "properties": {
                 "task_id": {"type": "keyword"},
                 "generated_at": {"type": "date"},
+                # 2026-07-29 UX upgrade: report-level AI evidence.
+                "ai_processed": {"type": "boolean"},
+                "ai_model": {"type": "keyword"},
+                "ai_processed_at": {"type": "date"},
             }
         },
     },
-INDEX_ALERTS: {
-    "settings": {"number_of_shards": 1, "number_of_replicas": 0},
-    "mappings": {
-        "properties": {
-            "alert_id": {"type": "keyword"},
-            "source": {"type": "keyword"},
-            "severity": {"type": "keyword"},
-            "status": {"type": "keyword"},
-            "hostname": {"type": "keyword"},
-            "host_ip": {"type": "ip"},
-            "agent_id": {"type": "keyword"},
-            "rule_id": {"type": "keyword"},
-            "mitre_attack": {"type": "keyword"},
-            "tags": {"type": "keyword"},
-            "iocs.ips": {"type": "ip"},
-            "iocs.domains": {"type": "keyword"},
-            "iocs.hashes": {"type": "keyword"},
-            "iocs.urls": {"type": "keyword"},
-            "title": {"type": "text"},
-            "description": {"type": "text"},
-            "occurred_at": {"type": "date"},
-            "received_at": {"type": "date"},
-            "raw": {"type": "object", "enabled": False},
+    INDEX_ALERTS: {
+        "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+        "mappings": {
+            "properties": {
+                "alert_id": {"type": "keyword"},
+                "source": {"type": "keyword"},
+                "severity": {"type": "keyword"},
+                "status": {"type": "keyword"},
+                "hostname": {"type": "keyword"},
+                "host_ip": {"type": "ip"},
+                "agent_id": {"type": "keyword"},
+                "rule_id": {"type": "keyword"},
+                "mitre_attack": {"type": "keyword"},
+                "tags": {"type": "keyword"},
+                "iocs.ips": {"type": "ip"},
+                "iocs.domains": {"type": "keyword"},
+                "iocs.hashes": {"type": "keyword"},
+                "iocs.urls": {"type": "keyword"},
+                "title": {"type": "text"},
+                "description": {"type": "text"},
+                "occurred_at": {"type": "date"},
+                "received_at": {"type": "date"},
+                "raw": {"type": "object", "enabled": False},
+            },
         },
     },
-},}
+}
 
 
 def _parse_ts(value):
@@ -216,6 +229,7 @@ class VulnscanStore:
                     status=row["status"],
                     group=row["group_name"],
                     agent_version=row["agent_version"],
+                    rule_version=row["rule_version"] or "",
                     last_heartbeat=lhb,
                     created_at=row["created_at"].isoformat(),
                 )
@@ -234,6 +248,11 @@ class VulnscanStore:
         limit: int = 100,
         offset: int = 0,
         exclude_decommissioned: bool = True,
+        # 2026-07-29 UX upgrade: hostname exact-match filter, used by
+        # the vuln-detail host lookup (when agent_id is unknown) and
+        # any "find a host by its name" call. Optional; old callers
+        # are unaffected.
+        hostname: str | None = None,
     ) -> list[Host]:
         # PG primary
         try:
@@ -253,6 +272,10 @@ class VulnscanStore:
                     idx += 1
                     where.append(f"group_name=${idx}")
                     params.append(group)
+                if hostname:
+                    idx += 1
+                    where.append(f"hostname=${idx}")
+                    params.append(hostname)
                 sql = "SELECT * FROM hosts"
                 if where:
                     sql += " WHERE " + " AND ".join(where)
@@ -271,6 +294,7 @@ class VulnscanStore:
                         status=r["status"],
                         group=r["group_name"],
                         agent_version=r["agent_version"],
+                        rule_version=r["rule_version"] or "",
                         last_heartbeat=r["last_heartbeat"].isoformat()
                         if r["last_heartbeat"]
                         else "",
@@ -289,6 +313,8 @@ class VulnscanStore:
             must.append({"bool": {"must_not": [{"term": {"status": "decommissioned"}}]}})
         if group:
             must.append({"term": {"group": group}})
+        if hostname:
+            must.append({"term": {"hostname": hostname}})
         query = {"bool": {"must": must}} if must else {"match_all": {}}
         resp = await self._es.search(
             index=INDEX_HOSTS,
@@ -561,20 +587,85 @@ class VulnscanStore:
         self,
         task_id: str | None = None,
         hostname: str | None = None,
+        hostnames: list[str] | None = None,
         severity: str | None = None,
         status: str | None = None,
         limit: int = 200,
         offset: int = 0,
+        # 2026-07-29 UX upgrade: extended filter set. All optional, so the
+        # call signature stays backwards compatible. Keyword filters use
+        # ES wildcard (case-insensitive) on .keyword; date_from/to are
+        # inclusive ISO 8601 strings parsed by ES.
+        cve: str | None = None,
+        cve_keyword: str | None = None,
+        hostname_keyword: str | None = None,
+        name_keyword: str | None = None,
+        ai_processed: bool | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> list[VulnFinding]:
-        must = []
+        must: list[dict] = []
         if task_id:
             must.append({"term": {"task_id": task_id}})
         if hostname:
             must.append({"term": {"hostname": hostname}})
+        if hostnames:
+            # Server-side multi-host filter (business-group view). Pushing
+            # the host set into the query as a `terms` filter avoids the
+            # silent truncation of post-filtering a capped result set.
+            must.append({"terms": {"hostname": hostnames}})
         if severity:
             must.append({"term": {"severity": severity}})
         if status:
             must.append({"term": {"status": status}})
+        if cve:
+            must.append({"term": {"cve": cve}})
+        if cve_keyword:
+            # case-insensitive substring on CVE id
+            must.append(
+                {
+                    "wildcard": {
+                        # V9 3.5: re.escape the user input so a literal
+                        # ``?`` / ``*`` / ``\`` is treated as text rather
+                        # than an ES wildcard metacharacter (which would
+                        # otherwise return unexpected matches).
+                        "cve": {
+                            "value": f"*{re.escape(cve_keyword.upper())}*",
+                            "case_insensitive": True,
+                        }
+                    }
+                }
+            )
+        if hostname_keyword:
+            must.append(
+                {
+                    "wildcard": {
+                        "hostname": {
+                            "value": f"*{hostname_keyword.lower()}*",
+                            "case_insensitive": True,
+                        }
+                    }
+                }
+            )
+        if name_keyword:
+            # name is free text; ES dynamic-mapped as text + keyword. Use
+            # the keyword sub-field so the wildcard is fast and exact-ish.
+            must.append(
+                {
+                    "wildcard": {
+                        "name.keyword": {"value": f"*{name_keyword}*", "case_insensitive": True}
+                    }
+                }
+            )
+        if ai_processed is not None:
+            must.append({"term": {"ai_processed": ai_processed}})
+        if date_from or date_to:
+            rng: dict = {}
+            if date_from:
+                rng["gte"] = date_from
+            if date_to:
+                rng["lte"] = date_to
+            must.append({"range": {"detected_at": rng}})
         query = {"bool": {"must": must}} if must else {"match_all": {}}
         resp = await self._es.search(
             index=INDEX_VULNS,
@@ -616,7 +707,6 @@ class VulnscanStore:
         await self._es.close()
 
 
-import asyncio
 _store: VulnscanStore | None = None
 _store_loop: asyncio.AbstractEventLoop | None = None
 

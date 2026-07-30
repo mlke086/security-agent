@@ -1,5 +1,6 @@
 """ "VulnScan subgraph node implementations."""
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -28,6 +29,7 @@ def _default_state(
     nuclei_tags: list[str] | None = None,
     nuclei_templates: list[str] | None = None,
     nuclei_timeout_sec: int = 0,
+    target_groups: list[str] | None = None,
 ) -> dict:
     """Build the initial VulnScanState from input params.
 
@@ -52,6 +54,7 @@ def _default_state(
         "nuclei_templates": nuclei_templates or [],
         "nuclei_timeout_sec": nuclei_timeout_sec,
         "resource_limit": {"cpu_percent": 30, "mem_percent": 30},
+        "target_groups": target_groups or [],
         "schedule": None,
         "task": None,
         "dispatched": False,
@@ -140,6 +143,7 @@ async def dispatch(state: dict) -> dict:
         status="dispatching",
         created_at=datetime.now(UTC).isoformat(),
         stats={"total": len(agent_ids), "done": 0, "failed": 0},
+        target_groups=list(state.get("target_groups") or []),
     )
     await store.save_task(task)
 
@@ -440,13 +444,48 @@ async def llm_analysis(state: dict) -> dict:
     all_analyzed: list[dict] = []
     batches_total = (len(findings) + batch_size - 1) // batch_size
 
+    # 2026-07-29 UX upgrade: when the LLM adapter is unavailable we used
+    # to silently skip the whole AI step, leaving every ai_* field blank
+    # and the report looking like AI was never involved. Now we always
+    # write a fallback row per finding so the UI can show "等待补扫"
+    # instead of an empty column.
+    adapter = None
     try:
         from src.knowledge.models.adapter import get_model_adapter
 
         adapter = get_model_adapter()
-    except Exception:
-        logger.warning("llm_adapter_unavailable")
-        return {"status": "reporting"}
+    except Exception as exc:
+        logger.warning("llm_adapter_unavailable", error=str(exc))
+
+    if adapter is None:
+        # Fallback path: every finding gets ai_severity=original,
+        # ai_filtered=False, ai_processed=False, ai_reason="LLM 不可用"
+        # so the operator knows AI never touched the row.
+        store = get_vulnscan_store()
+        now_iso = datetime.now(UTC).isoformat()
+        for f in findings:
+            fid = f.get("finding_id", "") if isinstance(f, dict) else f.finding_id
+            fsev = f.get("severity", "info") if isinstance(f, dict) else f.severity
+            if hasattr(fsev, "value"):
+                fsev = str(fsev.value)
+            await store.update_vuln(
+                fid,
+                ai_severity=fsev,
+                ai_filtered=False,
+                fix_advice=f.get("fix_advice")
+                if isinstance(f, dict)
+                else getattr(f, "fix_advice", None),
+                ai_processed=False,
+                ai_reason="LLM 不可用，已按原始等级保留",
+                ai_processed_at=now_iso,
+            )
+        await _pub_progress(
+            task_id,
+            "analysis",
+            "done",
+            f"AI unavailable - {len(findings)} findings marked 等待补扫",
+        )
+        return {"status": "reporting", "ai_processed": False}
 
     # Publish analysis start
     await _pub_progress(
@@ -506,19 +545,57 @@ async def llm_analysis(state: dict) -> dict:
 
     # Write back AI analysis to vulns
     store = get_vulnscan_store()
+    analyzed_ids = set()
+    now_iso = datetime.now(UTC).isoformat()
     for item in all_analyzed:
         await store.update_vuln(
             item["finding_id"],
             ai_severity=item["ai_severity"],
             ai_filtered=item["ai_filtered"],
             fix_advice=item.get("fix_advice"),
+            ai_processed=True,
+            ai_reason=item.get("reason"),
+            ai_processed_at=now_iso,
+        )
+        analyzed_ids.add(item["finding_id"])
+
+    # 2026-07-29 UX upgrade: any finding whose batch failed (LLM error)
+    # gets a fallback write so its ai_* fields are still meaningful.
+    failed = [
+        f
+        for f in findings
+        if (f.get("finding_id") if isinstance(f, dict) else f.finding_id) not in analyzed_ids
+    ]
+    for f in failed:
+        fid = f.get("finding_id", "") if isinstance(f, dict) else f.finding_id
+        fsev = f.get("severity", "info") if isinstance(f, dict) else f.severity
+        if hasattr(fsev, "value"):
+            fsev = str(fsev.value)
+        await store.update_vuln(
+            fid,
+            ai_severity=fsev,
+            ai_filtered=False,
+            fix_advice=f.get("fix_advice")
+            if isinstance(f, dict)
+            else getattr(f, "fix_advice", None),
+            ai_processed=False,
+            ai_reason="LLM 批次失败，等待补扫",
+            ai_processed_at=now_iso,
         )
 
-    logger.info("llm_analysis_complete", count=len(all_analyzed), task_id=task_id)
-    await _pub_progress(
-        task_id, "analysis", "done", f"AI analysis complete: {len(all_analyzed)} findings analysed"
+    logger.info(
+        "llm_analysis_complete",
+        analyzed=len(all_analyzed),
+        failed=len(failed),
+        task_id=task_id,
     )
-    return {"status": "reporting"}
+    await _pub_progress(
+        task_id,
+        "analysis",
+        "done",
+        f"AI analysis: {len(all_analyzed)} ok, {len(failed)} fallback",
+    )
+    return {"status": "reporting", "ai_processed": bool(all_analyzed) and not failed}
 
 
 def _build_analysis_prompt(findings: list) -> str:
@@ -659,7 +736,8 @@ async def generate_report(state: dict) -> dict:
     # Read final vulns
     vulns = await store.list_vulns(task_id=task_id, limit=10000)
     if not vulns:
-        # Edge case: no findings at all
+        # Edge case: no findings at all. ai_processed=False because no LLM
+        # call has happened; ai_overall_advice is left empty intentionally.
         report = ScanReport(
             task_id=task_id,
             summary="Scan completed: no vulnerabilities found.",
@@ -668,6 +746,10 @@ async def generate_report(state: dict) -> dict:
             top_vulns=[],
             recommendations=["No issues detected - system within expected security baseline."],
             generated_at=datetime.now(UTC).isoformat(),
+            ai_processed=False,
+            ai_model="",
+            ai_overall_advice="",
+            ai_processed_at="",
         )
         await store.save_report(report)
         await store.update_task(
@@ -728,9 +810,16 @@ async def generate_report(state: dict) -> dict:
         )
     recommendations.append("Re-scan affected hosts after remediation to verify fixes")
 
-    # AI summary generation (lightweight, non-blocking)
+    # AI summary generation (lightweight, non-blocking). The summary is
+    # 2-3 sentences; the SEPARATE ai_overall_advice block below answers
+    # "why this matters and what to do next" from a business angle. They
+    # live in the same card on the UI but as two distinct blocks so the
+    # operator can tell the difference at a glance.
     summary = f"Scan completed: {len(vulns)} findings ({len(not_filtered)} non-filtered) across {len(by_category)} categories"
     ai_analysis_text = ""
+    ai_overall_advice_text = ""
+    ai_processed = False
+    ai_model_name = ""
     try:
         from src.knowledge.models.adapter import get_model_adapter
 
@@ -741,18 +830,43 @@ Total findings: {len(vulns)}
 After AI filtering: {len(not_filtered)}
 By severity: {by_severity}
 By category: {by_category}
-Top risk: {top_vulns[0].get('name', 'N/A') if top_vulns else 'None'}
+Top risk: {top_vulns[0].get("name", "N/A") if top_vulns else "None"}
 
 Focus on actionable risk posture and top remediation priority."""
-        ai_analysis_text = await adapter.chat_completion(
-            messages=[{"role": "user", "content": summary_prompt}],
+        # V9 3.4 (2026-07-30): summary_prompt + advice_prompt are two
+        # independent LLM calls; run them concurrently via asyncio.gather
+        # so wall-clock drops from (summary + advice) to max(summary, advice).
+        advice_prompt = f"""Based on the following scan summary, give 2-4 sentences of executive advice in Chinese.
+Focus on business impact, attack chains across hosts (if any), and what
+the security team should prioritise in the next 24-72 hours.
+
+Total findings: {len(vulns)}
+After AI filtering: {len(not_filtered)}
+By severity: {by_severity}
+By category: {by_category}
+Top risk: {top_vulns[0].get("name", "N/A") if top_vulns else "None"}
+Top hosts affected: {sorted({v.get("hostname", "") for v in top_vulns if v.get("hostname")})[:5]}"""
+        summary_result, advice_result = await asyncio.gather(
+            adapter.chat_completion(messages=[{"role": "user", "content": summary_prompt}]),
+            adapter.chat_completion(messages=[{"role": "user", "content": advice_prompt}]),
+            return_exceptions=True,
         )
-        if isinstance(ai_analysis_text, str) and len(ai_analysis_text) > 5:
-            summary = ai_analysis_text
+        if isinstance(summary_result, Exception):
+            logger.warning("report_summary_llm_failed", task_id=task_id, error=str(summary_result))
+            ai_analysis_text = ""
+        elif isinstance(summary_result, str) and len(summary_result) > 5:
+            summary = summary_result
+            ai_processed = True
+            ai_analysis_text = summary_result
         else:
             ai_analysis_text = ""
-    except Exception:
-        logger.warning("report_summary_llm_failed", task_id=task_id)
+        if isinstance(advice_result, Exception):
+            logger.warning("report_advice_llm_failed", task_id=task_id, error=str(advice_result))
+        elif isinstance(advice_result, str) and len(advice_result) > 5:
+            ai_overall_advice_text = advice_result
+        ai_model_name = adapter.current_model_name() or ""
+    except Exception as exc:
+        logger.warning("report_summary_llm_failed", task_id=task_id, error=str(exc))
 
     report = ScanReport(
         task_id=task_id,
@@ -767,6 +881,10 @@ Focus on actionable risk posture and top remediation priority."""
         top_vulns=top_vulns,
         recommendations=recommendations,
         generated_at=datetime.now(UTC).isoformat(),
+        ai_processed=ai_processed,
+        ai_model=ai_model_name,
+        ai_overall_advice=ai_overall_advice_text[:1000],
+        ai_processed_at=datetime.now(UTC).isoformat() if ai_processed else "",
     )
 
     await store.save_report(report)

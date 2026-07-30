@@ -173,7 +173,7 @@ async def api_install_helper(
     if not valid:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
     settings = get_settings()
     configured = (settings.agent_console_external_url or "").strip()
@@ -223,7 +223,7 @@ async def api_enroll_host(req: EnrollRequest, request: Request):
     if not valid:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
 
     # 闁规亽鍔岄閬嶅嫉瀹ュ懎顫ょ紒鏃戝灠瑜板弶绌?IP闁挎稒鐭槐顓㈠礂閸粌鏁╅柣鐐叉閻楀孩顨ュ畝鍐畺闁?X-Forwarded-For 濡絾鐗楅宀勬晬鐏炶姤绀€闂侇偀鍋撻柛?    # request.client.host闁靛棗鍊风悮閬嶆嚀閸涙潙鍘村☉鎾崇Т瑜版煡鎮介妸锔筋槯閻犲搫鐤囩换?IP 闁告ê顭烽崳鎼佹晬閸粎鐟濋梻鍐帛閺屽洤鈻旈妸銉ユ杸闁挎稑顦埀?    server_ip = ""
@@ -326,7 +326,7 @@ async def api_download_binary(
     if not effective:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
     # try enrollment token first, fall back to agent token for self-upgrade
     valid = await peek_enroll_token(effective)
@@ -340,7 +340,7 @@ async def api_download_binary(
     if not valid:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
 
     settings = get_settings()
@@ -375,13 +375,13 @@ async def api_download_ca(
     if not effective:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
     valid = await peek_enroll_token(effective)
     if not valid:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
 
     settings = get_settings()
@@ -389,7 +389,7 @@ async def api_download_ca(
     if not ca_path or not Path(ca_path).is_file():
         raise HTTPException(
             status_code=404,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
 
     return FileResponse(
@@ -522,7 +522,7 @@ async def api_update_host(
     if not host:
         raise HTTPException(
             status_code=404,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="agent not found (cannot change group)",
         )
     await get_audit_logger().log(
         event_id="agent",
@@ -593,7 +593,7 @@ async def api_get_host(
     if not host:
         raise HTTPException(
             status_code=404,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
     return host
 
@@ -611,7 +611,7 @@ async def api_delete_host(
     if not host:
         raise HTTPException(
             status_code=404,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
     if purge:
         # 闁绘せ鏅濋幃濠囧礆閻樼粯鐝熼柨娑欑煯缁骸顔忛煫顓犵憮缂佹儳銇樼€靛矂寮甸崫鍕笒閻犱線娼荤槐婵嬫焼閸喖甯抽悹鍥跺灠閸ㄥ綊宕烽妸褍娈犲☉鎾剁帛濠р偓
@@ -619,7 +619,7 @@ async def api_delete_host(
         if not ok:
             raise HTTPException(
                 status_code=422,
-                detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+                detail="enroll token is invalid, expired, or already used",
                 node="agents.router",
                 action="delete_permanent",
                 actor=current_user.username,
@@ -661,7 +661,7 @@ async def api_upgrade_agent(
     if host is None:
         raise HTTPException(
             status_code=404,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="enroll token is invalid, expired, or already used",
         )
     try:
         prepared = prepare_upgrade(host, body.version)
@@ -703,7 +703,7 @@ async def api_upgrade_status(
     if await get_host(agent_id) is None:
         raise HTTPException(
             status_code=404,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="agent not found",
         )
     status = await get_upgrade_status(agent_id)
     return {"agent_id": agent_id, "upgrade": status or {"state": "idle"}}
@@ -739,7 +739,7 @@ async def api_update_agent_config(
     if not ok:
         raise HTTPException(
             status_code=404,
-            detail="Enroll token mint rate limit exceeded. Wait a few minutes and try again.",
+            detail="agent is not currently connected to this server",
         )
     return {"status": "ok"}
 

@@ -1,3 +1,4 @@
+import json
 from typing import TypeVar, overload
 
 from langchain_anthropic import ChatAnthropic
@@ -208,11 +209,66 @@ class ModelAdapter:
         bound = llm.bind(temperature=temperature)
 
         if schema is not None:
-            structured_llm = bound.with_structured_output(schema)
-            result = await structured_llm.ainvoke(lc_messages)
-            return result
+            # Reasoning/thinking models (e.g. deepseek-v4-pro/flash) reject
+            # the default function-calling path (tool_choice) with 400
+            # "Thinking mode does not support this tool_choice". Retry the
+            # structured call via json_mode (response_format: json_object),
+            # which those models accept (thinking output lands in
+            # reasoning_content; the JSON we need is in content). Models that
+            # do support tool_choice (minimax etc.) keep the faster default
+            # path -- only the specific incompatibility triggers the fallback.
+            try:
+                structured_llm = bound.with_structured_output(schema)
+                return await structured_llm.ainvoke(lc_messages)
+            except Exception as exc:
+                msg = str(exc)
+                if "tool_choice" in msg or "thinking mode" in msg.lower():
+                    logger.warning("structured_output_fallback_json_mode", error=msg[:200])
+                    # json_mode does NOT inject the schema into the prompt
+                    # (langchain leaves that to the caller), and deepseek
+                    # requires the prompt to contain the word "json". Prepend
+                    # a system message carrying both so any caller prompt works.
+                    schema_doc = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+                    json_instruction = SystemMessage(
+                        content=(
+                            "Respond ONLY with a single valid JSON object "
+                            "matching this schema (no markdown, no prose):\n"
+                            f"{schema_doc}"
+                        )
+                    )
+                    structured_llm = bound.with_structured_output(schema, method="json_mode")
+                    return await structured_llm.ainvoke([json_instruction, *lc_messages])
+                raise
         response = await bound.ainvoke(lc_messages)
         return str(response.content)
+
+    def current_model_name(self) -> str:
+        """Return the most recently resolved default model name (best-effort).
+
+        V9 4.3 (2026-07-30): collapsed three nested try/excepts into one
+        (the inner ones just masked upstream failures). Reports should
+        still see a stable name -- prefer the resolved LangChain model
+        name, fall back to the env-configured name so reports advertise
+        a model even before any LLM call has happened, and return ""
+        if both lookups fail.
+        """
+        cached = self._cache.get("default")
+        if cached:
+            llm = cached[1]
+            name = getattr(llm, "model_name", "") or ""
+            if name:
+                return name
+        try:
+            s = get_settings()
+            if s.llm_provider == "claude":
+                return "claude-sonnet-4-5"
+            if s.llm_provider == "openai":
+                return s.openai_model
+            if s.llm_provider == "vllm":
+                return s.vllm_model
+        except Exception:
+            return ""
+        return ""
 
 
 _adapter: ModelAdapter | None = None

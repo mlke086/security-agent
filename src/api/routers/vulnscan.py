@@ -45,8 +45,10 @@ from src.orchestration.task_queue.keys import (
 class _TaskListResponse(_PydanticBaseModel):
     items: list[ScanTask]
 
+
 class _VulnListResponse(_PydanticBaseModel):
     items: list[VulnFinding]
+
 
 class _VulnDetailResponse(VulnFinding):
     """GET /vulnscan/vulns/{id} response. The router attaches
@@ -54,7 +56,9 @@ class _VulnDetailResponse(VulnFinding):
     succeeds; otherwise the field is absent. Modelling the host
     as Optional keeps the OpenAPI schema honest about the union.
     """
+
     host: dict | None = None
+
 
 class _HostStatsItem(_PydanticBaseModel):
     group: str
@@ -62,9 +66,11 @@ class _HostStatsItem(_PydanticBaseModel):
     total: int
     by_severity: dict[str, int] = {}
 
+
 class _HostStatsResponse(_PydanticBaseModel):
     items: list[_HostStatsItem]
     cached: bool = False
+
 
 router = APIRouter(prefix="/api/v1/vulnscan", tags=["vulnscan"])
 logger = get_logger(__name__)
@@ -116,21 +122,38 @@ async def api_create_task(
     # 2026-07-29 UX upgrade: resolve the targets to their business
     # group(s) ONCE at enqueue time, then persist on the ScanTask so
     # the task list page does not need an N+1 list_hosts() join.
-    # Best-effort: a Redis/PG blip or a target that points at a
-    # decommissioned host simply leaves target_groups empty.
+    # V9 3.2 (2026-07-30): cache the hostname/agent_id -> group map
+    # for 30s in-process so burst task creates don't each issue a
+    # list_hosts() query. Best-effort: a Redis/PG blip or a target
+    # that points at a decommissioned host simply leaves target_groups
+    # empty.
     target_groups: list[str] = []
     try:
-        # S-P1-3: use the shared singleton instead of constructing a new
-        # VulnscanStore() (which leaks an Elasticsearch client per request).
-        _all_hosts = await get_vulnscan_store().list_hosts(limit=2000)
-        _name_to_group: dict[str, str] = {}
-        for _h in _all_hosts:
-            if _h.group:
-                if _h.hostname:
-                    _name_to_group[_h.hostname] = _h.group
-                if _h.agent_id:
-                    _name_to_group[_h.agent_id] = _h.group
-        target_groups = sorted({_name_to_group[t] for t in (targets or []) if t in _name_to_group})
+        import time as _time_target_groups
+
+        now = _time_target_groups.monotonic()
+        cached = _HOST_STATS_CACHE
+        if (
+            now - cached.get("ts_target_groups", 0.0) >= _HOST_STATS_TTL_SEC
+            or "host_to_group" not in cached
+        ):
+            # S-P1-3: use the shared singleton instead of constructing a
+            # new VulnscanStore() (which leaks an Elasticsearch client
+            # per request).
+            _all_hosts = await get_vulnscan_store().list_hosts(limit=2000)
+            _name_to_group: dict[str, str] = {}
+            for _h in _all_hosts:
+                if _h.group:
+                    if _h.hostname:
+                        _name_to_group[_h.hostname] = _h.group
+                    if _h.agent_id:
+                        _name_to_group[_h.agent_id] = _h.group
+            cached["host_to_group"] = _name_to_group
+            cached["ts_target_groups"] = now
+        _name_to_group = cached["host_to_group"]
+        target_groups = sorted(
+            {_name_to_group[t] for t in (targets or []) if t in _name_to_group}
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("target_groups_resolve_failed", error=str(exc))
 
@@ -150,7 +173,13 @@ async def api_create_task(
             nuclei_timeout_sec=int(body.get("nuclei_timeout_sec", 0) or 0),
             target_groups=target_groups,
         )
-        return {"task_id": task_id, "status": "completed", "engine": engine, "sync": True, "target_groups": target_groups}
+        return {
+            "task_id": task_id,
+            "status": "completed",
+            "engine": engine,
+            "sync": True,
+            "target_groups": target_groups,
+        }
 
     # P2 async path: enqueue to Redis Stream, return immediately.
     envelope = await enqueue_task(
@@ -163,7 +192,7 @@ async def api_create_task(
         nuclei_tags=body.get("nuclei_tags", []),
         nuclei_templates=body.get("nuclei_templates", []),
         nuclei_timeout_sec=int(body.get("nuclei_timeout_sec", 0) or 0),
-            target_groups=target_groups,
+        target_groups=target_groups,
         actor=current_user.username,
     )
 
@@ -406,8 +435,12 @@ async def api_list_results(
     # breaking existing dashboards that only pass the old params.
     cve: str | None = Query(None, description="Exact CVE id, e.g. CVE-2024-0001"),
     cve_keyword: str | None = Query(None, description="Case-insensitive substring on CVE id"),
-    hostname_keyword: str | None = Query(None, description="Case-insensitive substring on hostname"),
-    name_keyword: str | None = Query(None, description="Case-insensitive substring on finding name"),
+    hostname_keyword: str | None = Query(
+        None, description="Case-insensitive substring on hostname"
+    ),
+    name_keyword: str | None = Query(
+        None, description="Case-insensitive substring on finding name"
+    ),
     group: str | None = Query(None, description="Filter by business group (host.group)"),
     ai_processed: bool | None = Query(None, description="Filter by AI processing state"),
     date_from: str | None = Query(None, description="ISO 8601, e.g. 2026-07-01T00:00:00Z"),
@@ -544,19 +577,19 @@ def _render_report_html(task_id: str, report) -> str:
 </head>
 <body>
   <h1>漏洞扫描报告</h1>
-  <div class="meta">任务 ID：{esc(task_id)}　|　生成时间：{esc(report.generated_at or '')}</div>
+  <div class="meta">任务 ID：{esc(task_id)}　|　生成时间：{esc(report.generated_at or "")}</div>
 
   <h2>扫描摘要</h2>
   <div class="summary">
-    {esc(report.summary or '无摘要')}
+    {esc(report.summary or "无摘要")}
   </div>
-  {f'<div class="ai"><strong>AI 分析：</strong>{esc(report.ai_analysis)}</div>' if report.ai_analysis else ''}
+  {f'<div class="ai"><strong>AI 分析：</strong>{esc(report.ai_analysis)}</div>' if report.ai_analysis else ""}
 
   <h2>统计概览</h2>
   <table>
     <tr><th>严重等级</th><th>数量</th></tr>
     {sev_rows}
-    <tr><td>已过滤(误报)</td><td>{esc(stats.get('filtered_out', 0))}</td></tr>
+    <tr><td>已过滤(误报)</td><td>{esc(stats.get("filtered_out", 0))}</td></tr>
   </table>
 
   <h2>Top 漏洞</h2>
@@ -616,6 +649,7 @@ async def api_get_vuln(
         # with the same field names the Host pydantic model uses.
         return {**f.model_dump(), "host": host_meta.model_dump()}
     return f
+
 
 @router.patch("/vulns/{finding_id}")
 async def api_update_vuln_status(
@@ -727,14 +761,9 @@ async def api_host_stats(current_user=Depends(require_role("admin", "analyst", "
             continue
         sev = v.ai_severity or v.severity or "info"
         groups_by_name[g]["total"] += 1
-        groups_by_name[g]["by_severity"][sev] = (
-            groups_by_name[g]["by_severity"].get(sev, 0) + 1
-        )
+        groups_by_name[g]["by_severity"][sev] = groups_by_name[g]["by_severity"].get(sev, 0) + 1
 
-    out = [
-        {"group": name, **stats}
-        for name, stats in groups_by_name.items()
-    ]
+    out = [{"group": name, **stats} for name, stats in groups_by_name.items()]
 
     _HOST_STATS_CACHE["ts"] = now
     _HOST_STATS_CACHE["items"] = out

@@ -1,8 +1,8 @@
 """ "Rules online sync -- fetch CVEs from NVD, transform into rule packs, sign, and distribute."""
 
+import asyncio
 import hashlib
 import hmac
-import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -417,7 +417,7 @@ async def _fetch_nvd_cves(since: str | None) -> list[dict[str, Any]]:
     start_index = 0
 
     # 需求2.2：国内访问 NVD 常超时，支持代理（settings.nvd_proxy）
-    client_kwargs: dict[str, Any] = {"timeout": 30.0}
+    client_kwargs: dict[str, Any] = {"timeout": float(settings.nvd_timeout_sec)}
     if settings.nvd_proxy:
         client_kwargs["proxy"] = settings.nvd_proxy
         logger.info("nvd_fetch_via_proxy", proxy=settings.nvd_proxy)
@@ -447,7 +447,7 @@ async def _fetch_nvd_cves(since: str | None) -> list[dict[str, Any]]:
                     break
 
                 # Rate limit: NVD allows 5 req/30s without key
-                time.sleep(6.1)
+                await asyncio.sleep(6.1)
 
             except httpx.HTTPError as exc:
                 logger.warning("nvd_fetch_failed", error=str(exc))
@@ -475,7 +475,7 @@ async def _fetch_github_advisories() -> list[dict[str, Any]]:
     now_year = datetime.now(UTC).year
     years = [now_year] if lookback <= 365 else list(range(now_year - 1, now_year + 1))
 
-    client_kwargs: dict[str, Any] = {"timeout": 30.0}
+    client_kwargs: dict[str, Any] = {"timeout": float(settings.nvd_timeout_sec)}
     if settings.nvd_proxy:
         client_kwargs["proxy"] = settings.nvd_proxy
     headers = {"User-Agent": "Security-Agent/0.1.0", "Accept": "application/vnd.github+json"}
@@ -506,9 +506,7 @@ async def _fetch_github_advisories() -> list[dict[str, Any]]:
             logger.info("advisory_candidates", total=len(candidates), years=years)
 
             # 并发下载（raw.githubusercontent.com 不限速），按 published 过滤近期
-            import asyncio as _asyncio
-
-            sem = _asyncio.Semaphore(20)
+            sem = asyncio.Semaphore(20)
 
             async def fetch_one(path: str) -> dict[str, Any] | None:
                 async with sem:
@@ -523,7 +521,7 @@ async def _fetch_github_advisories() -> list[dict[str, Any]]:
                     except Exception:
                         return None
 
-            results = await _asyncio.gather(*[fetch_one(p) for p in candidates])
+            results = await asyncio.gather(*[fetch_one(p) for p in candidates])
             all_downloaded = [a for a in results if a]
             # 按 published 过滤近期；若过滤后为空则保留全部（不空手，让用户拿到规则）
             recent = []

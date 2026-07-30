@@ -1,13 +1,14 @@
 import { useState, useEffect } from "react"
-import { Card, Tabs, Form, Input, Button, Select, message, Table, Tag, Popconfirm } from "antd"
-import { ThunderboltOutlined, MessageOutlined, DeleteOutlined } from "@ant-design/icons"
+import { Card, Tabs, Form, Input, Button, Select, message, Table, Tag, Popconfirm, Tooltip } from "antd"
+import { ThunderboltOutlined, MessageOutlined, DeleteOutlined, RobotOutlined } from "@ant-design/icons"
 import { useNavigate } from "react-router-dom"
-import api from "../api/client"
+import api, { listHosts, getReport, type Host } from "../api/client"
 import { deleteScanTask } from "../api/client"
+import { formatBeijing } from "../utils/time"
 import TargetSelector from "../components/TargetSelector"
 import ChatScan from "../components/ChatScan"
 
-interface ScanTask { task_id: string; source: string; targets: string[]; status: string; created_at: string; stats: { total: number; done: number; failed: number } }
+interface ScanTask { task_id: string; source: string; targets: string[]; target_groups?: string[]; status: string; created_at: string; stats: { total: number; done: number; failed: number } }
 
 export default function ScanTaskPage() {
   const [submitting, setSubmitting] = useState(false)
@@ -15,6 +16,11 @@ export default function ScanTaskPage() {
   const [loading, setLoading] = useState(false)
   // 受控 tab：默认 tasks（用户从监控页返回时停留在任务列表，而非对话式）。
   const [activeTab, setActiveTab] = useState("tasks")
+  // 2026-07-29 UX upgrade: cache host -> group lookup so the task table
+  // can show a "业务归属" column without N+1 queries.
+  const [hostGroupByName, setHostGroupByName] = useState<Record<string, string>>({})
+  // AI 处理进度: task_id -> {total, processed, pending, model}
+  const [aiProgress, setAiProgress] = useState<Record<string, { processed: number; pending: number; model?: string; aiProcessed?: boolean }>>({})
   const navigate = useNavigate()
 
   // mount 时默认在 tasks tab，自动加载任务列表
@@ -38,6 +44,59 @@ export default function ScanTaskPage() {
     return () => window.removeEventListener("storage", onStorage)
   }, [])
 
+  // 2026-07-29 UX upgrade: load host->group mapping once and refresh
+  // AI progress for the most recent N tasks so the columns don't stay
+  // empty.
+  useEffect(() => {
+    let alive = true
+    listHosts({}).then((r) => {
+      if (!alive) return
+      const m: Record<string, string> = {}
+      ;(r.items || []).forEach((h: Host) => { if (h.hostname && h.group) m[h.hostname] = h.group })
+      setHostGroupByName(m)
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+
+  const refreshAiProgress = async (taskList: ScanTask[]) => {
+    // V9 3.3 (2026-07-30): previously a serial for-loop fired
+    // 2N requests for the 20 most recent tasks. Now we run them in
+    // parallel via Promise.all (so wall-clock = single round-trip)
+    // and feed the responses back into the existing aiProgress map.
+    // Per-task failures are swallowed (best-effort UX hint).
+    const recent = taskList.slice(0, 20)
+    const settled = await Promise.all(
+      recent.map(async (t) => {
+        try {
+          const [r, vulnsResp] = await Promise.all([
+            getReport(t.task_id),
+            api.get<{ items: Array<{ ai_processed?: boolean }> }>("/vulnscan/results", {
+              params: { task_id: t.task_id, limit: 1000 },
+            }),
+          ])
+          const items = vulnsResp.data?.items || []
+          const processed = items.filter((v) => v.ai_processed === true).length
+          return {
+            taskId: t.task_id,
+            progress: {
+              processed,
+              pending: items.length - processed,
+              model: r?.ai_model,
+              aiProcessed: r?.ai_processed,
+            },
+          }
+        } catch {
+          return null
+        }
+      }),
+    )
+    const updates: typeof aiProgress = {}
+    for (const s of settled) {
+      if (s) updates[s.taskId] = s.progress
+    }
+    setAiProgress((prev) => ({ ...prev, ...updates }))
+  }
+
   const handleSubmit = async (source: string, extra?: any) => {
     setSubmitting(true)
     try {
@@ -60,7 +119,10 @@ export default function ScanTaskPage() {
     setLoading(true)
     try {
       const res = await api.get("/vulnscan/tasks")
-      setTasks(res.data.items)
+      const items: ScanTask[] = res.data.items
+      setTasks(items)
+      // Fire and forget; updates state when each task resolves.
+      void refreshAiProgress(items)
     } catch { message.error("加载失败") }
     finally { setLoading(false) }
   }
@@ -73,16 +135,50 @@ export default function ScanTaskPage() {
     } catch { message.error("删除失败") }
   }
 
+  // 2026-07-29 UX upgrade: prefer the target_groups field that the
+  // server now persists on the ScanTask; fall back to the host
+  // name -> group map for legacy tasks created before this field
+  // existed (and for dialog-driven tasks where the group is unknown
+  // at enqueue time).
+  const renderGroups = (_: any, r: ScanTask) => {
+    const fromServer = Array.isArray(r.target_groups) ? r.target_groups : []
+    const fromJoin = Array.from(new Set((r.targets || []).map((t) => hostGroupByName[t]).filter(Boolean)))
+    const groups = Array.from(new Set([...fromServer, ...fromJoin]))
+    if (!groups.length) return <span style={{ color: "#bbb" }}>-</span>
+    const shown = groups.slice(0, 2)
+    const rest = groups.length - shown.length
+    return (
+      <>
+        {shown.map((g) => <Tag key={g} color="geekblue">{g}</Tag>)}
+        {rest > 0 && <Tooltip title={groups.join(", ")}><Tag>+{rest}</Tag></Tooltip>}
+      </>
+    )
+  }
+
+  const renderAiProgress = (_: any, r: ScanTask) => {
+    const p = aiProgress[r.task_id]
+    if (!p) return <span style={{ color: "#bbb" }}>-</span>
+    if (p.aiProcessed) {
+      return <Tag icon={<RobotOutlined />} color="blue">AI 已处理{p.model ? " · " + p.model : ""}</Tag>
+    }
+    if (p.processed === 0 && p.pending > 0) {
+      return <Tag color="default">等待补扫 ({p.pending})</Tag>
+    }
+    return <Tag color="orange">部分处理 {p.processed}/{p.pending + p.processed}</Tag>
+  }
+
   const columns = [
     { title: "任务ID", dataIndex: "task_id", key: "task_id", ellipsis: true, width: 150 },
-    { title: "源", dataIndex: "source", key: "source", width: 80, render: (v: string) => v === "dialog" ? "对话" : "手动" },
+    { title: "来源", dataIndex: "source", key: "source", width: 70, render: (v: string) => v === "dialog" ? "对话" : "手动" },
+    { title: "业务归属", key: "groups", width: 200, render: renderGroups },
     { title: "目标数", key: "targets", width: 80, render: (_: any, r: ScanTask) => r.targets?.length || 0 },
-    { title: "进度", key: "progress", width: 120, render: (_: any, r: ScanTask) => `${r.stats?.done || 0}/${r.stats?.total || 0}` },
+    { title: "进度", key: "progress", width: 110, render: (_: any, r: ScanTask) => `${r.stats?.done || 0}/${r.stats?.total || 0}` },
+    { title: "AI 处理", key: "ai", width: 180, render: renderAiProgress },
     { title: "状态", dataIndex: "status", key: "status", width: 100, render: (v: string) => {
       const colors: any = { queued: "default", dispatching: "processing", scanning: "processing", analyzing: "processing", completed: "success", failed: "error" }
       return <Tag color={colors[v] || "default"}>{v}</Tag>
     }},
-    { title: "创建时间", dataIndex: "created_at", key: "created_at", width: 180, render: (v: string) => v?.slice(0, 19) || "-" },
+    { title: "创建时间", dataIndex: "created_at", key: "created_at", width: 110, render: (v: string) => formatBeijing(v) },
     { title: "操作", key: "action", width: 140, render: (_: any, r: ScanTask) => (
       <>
         <Button size="small" type="link" onClick={() => navigate(`/scan-monitor/${r.task_id}`)}>监控</Button>

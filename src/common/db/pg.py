@@ -1,4 +1,4 @@
-﻿"""PostgreSQL connection pool and schema management.
+"""PostgreSQL connection pool and schema management.
 
 Phase 1 persistence: users & RBAC, enroll tokens, agent auth tokens, HITL approvals.
 Phase 2 adds hosts (agent inventory) and events (event lifecycle records).
@@ -43,6 +43,20 @@ logger = get_logger(__name__)
 _pool: asyncpg.Pool | None = None
 
 _SCHEMA_SQL = """
+-- V9 4.8 (2026-07-30) migration story:
+--   For each table we declare every column directly in CREATE TABLE,
+--   AND we backfill missing columns with ALTER TABLE ... ADD COLUMN
+--   IF NOT EXISTS. Why both:
+--     1. Fresh deploys (the common case) get the full schema from
+--        CREATE TABLE in one go.
+--     2. Existing deploys (the upgrade case) pick up new columns
+--        without losing rows. ALTER IF NOT EXISTS is idempotent, so
+--        the schema is also re-runnable.
+--   When to drop a column or change its TYPE: ALTER IF NOT EXISTS
+--   only ADDs. Type changes need a separate one-shot migration
+--   (see deploys/prod/docker/init-pg.sql for examples); do not
+--   silently rewrite the CREATE TABLE for existing deploys.
+
 -- Users & RBAC (Phase 1)
 CREATE TABLE IF NOT EXISTS users (
     username        VARCHAR(64) PRIMARY KEY,

@@ -349,7 +349,10 @@ class AlertIngestResponse(BaseModel):
 
 
 # ---- User management (Phase 6, 2026-07-28) ----
-RoleLiteral = Literal["admin", "analyst", "viewer", "responder"]
+# V9 4.3 (2026-07-30): re-export the canonical ``Role`` alias from
+# src.api.auth.jwt so there is one role literal in the codebase.
+# Defining it here as well would let the two drift apart silently.
+from src.api.auth.jwt import Role as RoleLiteral  # noqa: F401
 
 
 class UserPublic(BaseModel):

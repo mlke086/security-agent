@@ -142,20 +142,6 @@ def _make_mock_adapter():
     return mock
 
 
-
-    from src.agents.models import Host
-
-    return Host(
-        agent_id=agent_id,
-        hostname=hostname,
-        ip=ip,
-        group=group,
-        os="linux",
-        arch="amd64",
-        kernel="5.x",
-    )
-
-
 class TestResolveTargets:
     """Covers P1-VULN-02: a group target must expand to ALL agents in the
     group, not just the first match."""

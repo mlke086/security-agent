@@ -12,7 +12,17 @@ from src.common.logging.logger import get_logger
 logger = get_logger(__name__)
 
 # Commands that MUST be signed (Agent rejects unsigned sensitive commands)
-SENSITIVE_TYPES = {"scan_command", "rule_update", "agent_upgrade", "scan_cancel", "config_update", "response_action"}
+SENSITIVE_TYPES = {
+    "scan_command",
+    "rule_update",
+    "agent_upgrade",
+    "nuclei_upgrade",
+    "nuclei_templates_update",
+    "scan_cancel",
+    "config_update",
+    "response_action",
+    "agent_shutdown",
+}
 
 
 def _get_private_key() -> ed25519.Ed25519PrivateKey | None:

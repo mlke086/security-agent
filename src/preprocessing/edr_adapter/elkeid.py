@@ -1,4 +1,5 @@
 """Elkeid adapter (bytedance/Elkeid plugin alerts)."""
+
 from src.agents.models import AlertIOC, AlertSeverity, AlertSource
 from src.preprocessing.edr_adapter.base import EDRAdapter
 
@@ -19,10 +20,14 @@ class ElkeidAdapter(EDRAdapter):
 
     def _severity(self):
         lvl = int(self.raw.get("data", {}).get("level", 3))
-        if lvl >= 5: return AlertSeverity.CRITICAL
-        if lvl >= 4: return AlertSeverity.HIGH
-        if lvl >= 3: return AlertSeverity.MEDIUM
-        if lvl >= 2: return AlertSeverity.LOW
+        if lvl >= 5:
+            return AlertSeverity.CRITICAL
+        if lvl >= 4:
+            return AlertSeverity.HIGH
+        if lvl >= 3:
+            return AlertSeverity.MEDIUM
+        if lvl >= 2:
+            return AlertSeverity.LOW
         return AlertSeverity.INFO
 
     def _occurred_at(self):

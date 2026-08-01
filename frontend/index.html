@@ -21,6 +21,11 @@
           var lightBg = { light: "#ffffff", "eye-green": "#f0f7ed" };
           if (t && darkBg[t]) { document.documentElement.style.background = darkBg[t]; }
           else if (t && lightBg[t]) { document.documentElement.style.background = lightBg[t]; }
+          // Also mirror onto data-theme so [data-theme] custom CSS (chat /
+          // markdown) applies before React mounts -- no theme flash.
+          if (t && (darkBg[t] || lightBg[t])) {
+            document.documentElement.setAttribute("data-theme", t);
+          }
         } catch (e) { /* localStorage 不可用(隐私模式)，忽略 */ }
       })();
     </script>

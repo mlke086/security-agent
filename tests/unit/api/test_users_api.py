@@ -330,13 +330,18 @@ def test_list_users_selects_no_hashed_password(auth_headers):
     pass even if the SELECT were reintroduced.
     """
     import inspect
+
     from src.api.routers import users as users_router
 
     src = inspect.getsource(users_router.list_users)
-    # ``SELECT ... FROM users`` is the line we care about. Be tolerant
-    # of multi-line f-strings: grep the whole function body.
-    assert "FROM users" in src, "list_users should query the users table"
-    assert "hashed_password" not in src, (
+    # Focus the leak check on the SQL statement itself. The function body
+    # legitimately names hashed_password in a comment and the UserInDB
+    # empty-string shim (UserInDB requires the field; the list endpoint
+    # renders UserPublic which never carries it) -- neither is a leak.
+    # Only the SELECT line is the leak vector we guard against.
+    sql_line = next((ln for ln in src.splitlines() if "FROM users" in ln), "")
+    assert sql_line, "list_users should query the users table"
+    assert "hashed_password" not in sql_line, (
         "list_users must not reference hashed_password in its SELECT; "
         "the bcrypt digest is the most sensitive byte in the row and "
         "UserInDB only needs the empty string here because the list "
@@ -351,7 +356,7 @@ def test_list_users_does_not_load_bcrypt_in_memory(auth_headers):
     (Pydantic would refuse to construct one). A future change that
     re-introduces the field on the response model would also need to
     update UserPublic, and this test catches that mistake."""
-    from src.agents.models import UserPublic, UserListResponse
+    from src.agents.models import UserListResponse, UserPublic
 
     # The response schema should not carry hashed_password either way.
     assert "hashed_password" not in UserPublic.model_fields

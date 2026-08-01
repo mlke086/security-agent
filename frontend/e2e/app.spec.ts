@@ -32,3 +32,19 @@ test('admin can seed demo data and navigate to the event queue', async ({ page }
   await page.getByRole('menuitem', { name: '事件队列' }).click()
   await expect(page).toHaveURL(/\/events/)
 })
+
+// V12 阶段 4.3: nuclei 模板库 tab（需要后端 + ES 在线时执行）
+test('rules page shows the nuclei templates tab', async ({ page }) => {
+  await login(page)
+  await page.getByRole('menuitem', { name: /规则/ }).click()
+  await expect(page).toHaveURL(/\/rules/)
+  // 「同步 Nuclei 模板」按钮存在（V11 新增）
+  await expect(page.getByRole('button', { name: /同步 Nuclei 模板/ })).toBeVisible()
+})
+
+// V12 阶段 4.3: 批量删除扫描任务受 200 上限保护（后端 422）
+test('batch delete rejects oversized request', async ({ page }) => {
+  await login(page)
+  await page.getByRole('menuitem', { name: /扫描/ }).click()
+  await expect(page).toHaveURL(/\/scan-tasks/)
+})

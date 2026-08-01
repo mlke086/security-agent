@@ -1,4 +1,4 @@
-﻿"""Sigma rule importer (Phase 6 of monitoring plan).
+"""Sigma rule importer (Phase 6 of monitoring plan).
 
 Walks a directory of Sigma YAML files, parses each, and produces an
 ``ImportResult`` summarising what was accepted / rejected / skipped.
@@ -25,17 +25,17 @@ copy the .yml into ``src/detection/rules/`` and restart, or call
 ``Detector.add_rule`` for each). Keeping the write step explicit
 makes the import dry-run-able and avoids surprise rule activations.
 """
+
 from __future__ import annotations
 
 import json
 import logging
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
-
-import yaml
+from typing import Any
 
 from src.detection.sigma import SigmaRule, parse_sigma_yaml
 
@@ -131,9 +131,7 @@ class ImportResult:
             "by_category": self.by_category(),
             "by_os": self.by_os(),
             "by_level": self.by_level(),
-            "skipped_reasons": [
-                {"path": s.path, "reason": s.reason} for s in self.skipped
-            ],
+            "skipped_reasons": [{"path": s.path, "reason": s.reason} for s in self.skipped],
         }
 
 
@@ -262,6 +260,7 @@ def write_manifest(result: ImportResult, dest: Path) -> Path:
 
 
 # ---------- convenience: read a manifest back -----------------------------
+
 
 def read_manifest(path: str | Path) -> dict[str, Any] | None:
     p = Path(path)

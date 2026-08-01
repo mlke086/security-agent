@@ -1,8 +1,10 @@
-import { useState, useEffect, useRef } from "react"
+﻿import { useState, useEffect, useRef } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { Card, Progress, Tag, Descriptions, Button, Space, Spin, Popconfirm, message } from "antd"
 import { ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, ExclamationCircleOutlined, SyncOutlined, FileTextOutlined, DownloadOutlined } from "@ant-design/icons"
 import api, { cancelScanTask, getSseToken } from "../api/client"
+import { formatBeijing } from "../utils/time"
+import { sseBaseUrl } from "../utils/sseBaseUrl"
 
 const SEV_COLOR: Record<string, string> = { critical: "red", high: "volcano", medium: "gold", low: "green", info: "blue" }
 const SEV_LABEL: Record<string, string> = { critical: "严重", high: "高危", medium: "中危", low: "低危", info: "提示" }
@@ -24,10 +26,13 @@ export default function ScanMonitorPage() {
     try {
       const r = await api.get(`/vulnscan/tasks/${taskId}`)
       setTask(r.data)
-      // 已完成/失败的任务无新 SSE 事件，拉取 findings 展示扫描结果摘要
+      // 已完成/失败的任务无新 SSE 事件，拉取 findings 展示扫描结果摘要。
+      // V12 5.7 (问题1 修复): 改用 /tasks/{id}/findings 读 results 索引 --
+      // 原 /vulnscan/results 查的是 vulns 索引，被 reconcile 合并走归属的
+      // 任务会显示 0 findings。
       if (r.data.status === "completed" || r.data.status === "failed") {
         try {
-          const fr = await api.get(`/vulnscan/results`, { params: { task_id: taskId } })
+          const fr = await api.get(`/vulnscan/tasks/${taskId}/findings`)
           setFindings(fr.data.items || [])
         } catch { /* findings 拉取失败不阻断 */ }
       }
@@ -55,7 +60,7 @@ export default function ScanMonitorPage() {
         const shortToken = await getSseToken("events")
         // 用户已离开（cleanup 置 cancelled）则不再创建 EventSource，避免泄漏。
         if (cancelled) return
-        const base = (api.defaults.baseURL || "").replace(/\/+$/, "")
+        const base = sseBaseUrl()
         const source = new EventSource(`${base}/vulnscan/tasks/${taskId}/stream?token=${shortToken}`)
         // 立即存 ref，确保 cleanup（即便在 onmessage 绑定前）也能 close，
         // 避免快速进出监控页时 EventSource 未被关闭累积泄漏，占满浏览器
@@ -268,7 +273,7 @@ export default function ScanMonitorPage() {
             ) : (
               [...events].reverse().map((ev, i) => (
                 <div key={i} style={{ padding: "4px 0", borderBottom: "1px solid #f0f0f0", fontSize: 12, display: "flex", gap: 8 }}>
-                  <span style={{ color: "#999" }}>{new Date(ev.ts).toLocaleTimeString()}</span>
+                  <span style={{ color: "#999" }}>{formatBeijing(ev.ts)}</span>
                   <Tag style={{ fontSize: 11 }}>{ev.type || ev.step || ""}</Tag>
                   <span>{ev.status || ev.message || ev.step || JSON.stringify(ev)}</span>
                 </div>

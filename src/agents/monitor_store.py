@@ -29,9 +29,9 @@ The agent's ``agent_id`` is stamped by the WS gateway on receipt
 (same trust boundary as scan_result / heartbeat), not trusted from
 the wire.
 """
+
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -139,8 +139,14 @@ class MonitorStore:
                     # the .keyword sub-field gives us exact match.
                     "query": {"term": {"agent_id.keyword": agent_id}},
                     "_source": [
-                        "agent_id", "hostname", "collected_at", "received_at",
-                        "interval_sec", "total_count", "truncated", "process_count",
+                        "agent_id",
+                        "hostname",
+                        "collected_at",
+                        "received_at",
+                        "interval_sec",
+                        "total_count",
+                        "truncated",
+                        "process_count",
                     ],
                 },
             )

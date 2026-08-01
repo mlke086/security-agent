@@ -1,4 +1,5 @@
 """Wazuh adapter (manager alerts JSON)."""
+
 from src.agents.models import AlertIOC, AlertSeverity, AlertSource
 from src.preprocessing.edr_adapter.base import EDRAdapter
 
@@ -19,10 +20,14 @@ class WazuhAdapter(EDRAdapter):
 
     def _severity(self):
         level = int(self.raw.get("rule", {}).get("level", 5))
-        if level >= 12: return AlertSeverity.CRITICAL
-        if level >= 10: return AlertSeverity.HIGH
-        if level >= 7:  return AlertSeverity.MEDIUM
-        if level >= 4:  return AlertSeverity.LOW
+        if level >= 12:
+            return AlertSeverity.CRITICAL
+        if level >= 10:
+            return AlertSeverity.HIGH
+        if level >= 7:
+            return AlertSeverity.MEDIUM
+        if level >= 4:
+            return AlertSeverity.LOW
         return AlertSeverity.INFO
 
     def _occurred_at(self):

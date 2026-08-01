@@ -1,5 +1,7 @@
 """Agent host manager: online/offline tracking, heartbeat, host CRUD."""
 
+import asyncio
+
 import redis.asyncio as aioredis
 
 from src.agents.models import Host
@@ -9,9 +11,43 @@ from src.common.logging.logger import get_logger
 
 logger = get_logger(__name__)
 
+# 心跳路径 fire-and-forget 任务的强引用集合。create_task 返回的 task 若无强引用，
+# 可能被 GC 回收 -> "Task was destroyed but it is pending" + httpcoro GeneratorExit。
+# done-callback 里 discard，集合只暂存运行中的任务。
+_heartbeat_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_hb_task(coro, *, fail_event: str, agent_id: str) -> None:
+    """创建一个心跳路径的后台任务，保留强引用直到完成，异常记日志。"""
+
+    task = asyncio.create_task(coro)
+    _heartbeat_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _heartbeat_tasks.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc:
+            logger.warning(fail_event, agent_id=agent_id, error=str(exc))
+
+    task.add_done_callback(_done)
+
+
+# V12 阶段 5.6 (2026-08-02): heartbeat path leak fix. Every call used to
+# build a brand-new redis client (register_online / heartbeat / decommission /
+# delete) and NEVER close it -- with 30s heartbeats × N agents this leaked
+# one connection per beat, eventually exhausting the dev machine's TCP
+# resources so ALL new connections (PG/ES/Redis/Nacos) failed and the whole
+# console returned 500s. One shared lazy client per process.
+_redis_client = None
+
 
 def _redis() -> aioredis.Redis:
-    return aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    return _redis_client
 
 
 async def register_online(agent_id: str, worker_id: str) -> None:
@@ -65,26 +101,39 @@ async def heartbeat(agent_id: str, payload: dict) -> None:
     # 视为 "0"，触发全量更新检查（diff_versions 内部会判断服务端是否有
     # pack 可下发、版本是否已最新，幂等安全）。
     agent_rule_version = payload.get("rule_version", "") or "0"
-    # P2-6 修复：fire-and-forget 但用 done_callback 记录异常，避免规则推送
-    # 失败被静默吞掉（仅产生 "Task exception was never retrieved" 警告）。
-    # 不 await 以免心跳路径被规则下发（含 WS 发送）拖慢。
+    # fire-and-forget：不 await 以免心跳路径被规则下发（含 WS 发送）拖慢。
+    # _spawn_hb_task 保留强引用防 GC，异常记日志（不再产生 "Task exception
+    # was never retrieved" 警告）。
     try:
-        import asyncio
-
         from src.agents.rules_sync import trigger_update_if_outdated
 
-        task = asyncio.create_task(trigger_update_if_outdated(agent_id, agent_rule_version))
-
-        def _on_done(t: asyncio.Task) -> None:
-            if t.cancelled():
-                return
-            exc = t.exception()
-            if exc:
-                logger.warning("rule_update_failed", agent_id=agent_id, error=str(exc))
-
-        task.add_done_callback(_on_done)
+        _spawn_hb_task(
+            trigger_update_if_outdated(agent_id, agent_rule_version),
+            fail_event="rule_update_failed",
+            agent_id=agent_id,
+        )
     except Exception as exc:
         logger.warning("rule_update_schedule_failed", agent_id=agent_id, error=str(exc))
+
+    # Nuclei 版本对齐：agent 心跳上报 nuclei_version，与 Nacos 配置的
+    # nuclei_version 比对，不一致则下发 nuclei_upgrade（内网 nginx 下载替换
+    # 二进制，无需重启 agent）。空版本（nuclei 未装）也会触发下发。fire-and-
+    # forget 同规则下发；trigger_nuclei_upgrade 内有 5min Redis 冷却锁防风暴。
+    try:
+        from src.agents.upgrade import _norm_nuclei_version, trigger_nuclei_upgrade
+
+        expected_nuclei = _norm_nuclei_version(get_settings().nuclei_version)
+        agent_nuclei = _norm_nuclei_version(payload.get("nuclei_version", ""))
+        if expected_nuclei and agent_nuclei != expected_nuclei:
+            os_name = payload.get("os", "") or "linux"
+            arch = payload.get("arch", "") or "amd64"
+            _spawn_hb_task(
+                trigger_nuclei_upgrade(agent_id, expected_nuclei, os_name, arch),
+                fail_event="nuclei_upgrade_failed",
+                agent_id=agent_id,
+            )
+    except Exception as exc:
+        logger.warning("nuclei_upgrade_schedule_failed", agent_id=agent_id, error=str(exc))
 
 
 async def mark_offline_expired() -> int:

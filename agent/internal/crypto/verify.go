@@ -15,11 +15,14 @@ import (
 
 // SensitiveTypes lists command types that MUST be signed.
 var SensitiveTypes = map[string]bool{
-	"scan_command":   true,
-	"rule_update":    true,
-	"agent_upgrade":  true,
-	"scan_cancel":    true,
-	"config_update":  true,
+	"scan_command":            true,
+	"rule_update":             true,
+	"agent_upgrade":           true,
+	"nuclei_upgrade":          true,
+	"nuclei_templates_update": true,
+	"scan_cancel":             true,
+	"config_update":           true,
+	"agent_shutdown":          true,
 }
 
 // PublicKey is the server's Ed25519 public key (hex-encoded).

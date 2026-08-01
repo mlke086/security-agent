@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,8 +35,8 @@ type CLIRunner struct {
 // NewCLIRunner returns a runner with the default install paths.
 func NewCLIRunner() *CLIRunner {
 	return &CLIRunner{
-		BinaryPath:       filepath.Join(defaultInstallDir(), "bin", "nuclei"),
-		TemplatesDir:     filepath.Join(defaultInstallDir(), "templates"),
+		BinaryPath:        filepath.Join(defaultInstallDir(), "bin", "nuclei"),
+		TemplatesDir:      filepath.Join(defaultInstallDir(), "templates"),
 		DefaultTimeoutSec: 600,
 	}
 }
@@ -60,22 +61,26 @@ func (r *CLIRunner) Available() bool {
 }
 
 type nucleiFinding struct {
-	TemplateID    string   `json:"template-id"`
-	TemplatePath  string   `json:"template-path"`
-	Info          struct {
-		Name        string   `json:"name"`
-		Severity    string   `json:"severity"`
-		Description string   `json:"description"`
-		Reference   string   `json:"reference"`
-		Tags        []string `json:"tags"`
+	TemplateID   string `json:"template-id"`
+	TemplatePath string `json:"template-path"`
+	Info         struct {
+		Name        string `json:"name"`
+		Severity    string `json:"severity"`
+		Description string `json:"description"`
+		// Reference is a json.RawMessage so we can accept either a string
+		// (single URL) or an array of strings (most CVE templates). The
+		// stream() helper below coerces the array form into a newline-
+		// joined string before handing the finding off.
+		Reference json.RawMessage `json:"reference,omitempty"`
+		Tags      []string        `json:"tags"`
 	} `json:"info"`
-	Type          string   `json:"type"`
-	Host          string   `json:"host"`
-	MatchedAt     string   `json:"matched-at"`
-	MatchedLine   string   `json:"matched-line"`
-	MatcherName   string   `json:"matcher-name"`
+	Type             string   `json:"type"`
+	Host             string   `json:"host"`
+	MatchedAt        string   `json:"matched-at"`
+	MatchedLine      string   `json:"matched-line"`
+	MatcherName      string   `json:"matcher-name"`
 	ExtractedResults []string `json:"extracted-results"`
-	IP            string   `json:"ip"`
+	IP               string   `json:"ip"`
 }
 
 // Run implements Runner.
@@ -90,13 +95,13 @@ func (r *CLIRunner) Run(ctx context.Context, req Request) (<-chan Result, Summar
 	}
 
 	args := []string{
-		"-silent",                  // suppress progress output
-		"-json",                    // one JSON object per line (NDJSON)
-		"-no-stdin",                 // do not wait for interactive stdin
-		"-t", r.TemplatesDir,        // template directory
+		"-silent",            // suppress progress output
+		"-jsonl",             // nuclei v3: NDJSON output (was -json in v2)
+		"-no-stdin",          // do not wait for interactive stdin
+		"-t", r.TemplatesDir, // template directory
 	}
 	if len(req.TemplateIDs) > 0 {
-		args = append(args, "-templates", strings.Join(req.TemplateIDs, ","))
+		args = append(args, "-id", strings.Join(req.TemplateIDs, ","))
 	}
 	if len(req.Severity) > 0 {
 		args = append(args, "-severity", strings.Join(req.Severity, ","))
@@ -105,7 +110,16 @@ func (r *CLIRunner) Run(ctx context.Context, req Request) (<-chan Result, Summar
 		args = append(args, "-tags", strings.Join(req.Tags, ","))
 	}
 	for _, t := range req.Targets {
-		args = append(args, "-u", t)
+		if err := resolveTargetPorts(t, req, &args); err != nil {
+			// S-P1-3 (V12): port discovery failed (no ss / no /proc/net/tcp,
+			// e.g. minimal container images). Log the failure loudly so an
+			// empty scan can never masquerade as "0 vulnerabilities" -- the
+			// operator sees port_discovery_failed instead.
+			log.Printf(
+				"[%s] port_discovery_failed for %s: %v (no -u flags added; target skipped)",
+				req.TaskID, t, err,
+			)
+		}
 	}
 	for k, v := range req.ExtraArgs {
 		args = append(args, "-"+k, v)
@@ -116,7 +130,12 @@ func (r *CLIRunner) Run(ctx context.Context, req Request) (<-chan Result, Summar
 		timeout = r.DefaultTimeoutSec
 	}
 	cctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-	defer cancel()
+	// P1-VULN-NUCR2: do NOT `defer cancel()` here. Run() returns
+	// immediately after spawning the goroutines, so the defer would
+	// fire before the stream goroutine has read nuclei stdout -- the
+	// next scanner.Scan() finds cctx already cancelled and the for
+	// loop never enters (yields 0 findings). cancel() is called from
+	// the wait goroutine below, after cmd.Wait() has returned.
 
 	cmd := exec.CommandContext(cctx, r.BinaryPath, args...)
 	// nuclei writes JSON lines to stdout and human-friendly progress to stderr.
@@ -125,6 +144,8 @@ func (r *CLIRunner) Run(ctx context.Context, req Request) (<-chan Result, Summar
 	if err != nil {
 		return nil, summary, fmt.Errorf("open nuclei stdout: %w", err)
 	}
+	// nuclei writes JSON lines to stdout and human-friendly progress to stderr.
+	// We only consume stdout; stderr is forwarded to the agent log.
 	cmd.Stderr = &stderrWriter{prefix: "[nuclei]"}
 
 	if err := cmd.Start(); err != nil {
@@ -155,6 +176,12 @@ func (r *CLIRunner) Run(ctx context.Context, req Request) (<-chan Result, Summar
 		for f := range findings {
 			summary.Findings = append(summary.Findings, f)
 		}
+		// P1-VULN-NUCR2: cancel cctx now -- after the stream goroutine
+		// has finished reading stdout. This lets cmd.Wait return cleanly
+		// and releases the context resources. Doing it earlier (i.e.,
+		// via defer in Run) would race with the stream goroutine and
+		// cause 0-finding results even when nuclei DID find things.
+		cancel()
 	}()
 
 	// Caller ranges over findings; close happens after subprocess exits.
@@ -187,7 +214,7 @@ func (r *CLIRunner) stream(ctx context.Context, src io.Reader, taskID string, ou
 			Severity:    nff.Info.Severity,
 			MatchedAt:   firstNonEmpty3(nff.MatchedAt, nff.Host, nff.IP),
 			Description: nff.Info.Description,
-			Reference:   nff.Info.Reference,
+			Reference:   decodeReference(nff.Info.Reference),
 			Tags:        nff.Info.Tags,
 			Evidence:    strings.Join(nff.ExtractedResults, "\n"),
 			MatchType:   nff.Type,
@@ -196,6 +223,43 @@ func (r *CLIRunner) stream(ctx context.Context, src io.Reader, taskID string, ou
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
 		log.Printf("[%s] nuclei stdout read error: %v", taskID, err)
 	}
+}
+
+// resolveTargetPorts appends one or more -u flags for a single target.
+// "://" hosts go straight through; bare hosts are probed against the
+// user-supplied NucleiPorts (intersection with ss -tlnpH) or every
+// port on the host when NucleiPorts is empty.
+//
+// S-P1-3 / Spec-P1-DISCOVER (V12):
+//   - User-specified req.Ports now WIN: they are scanned verbatim, without
+//     intersecting them away by a failed discovery probe (previously a
+//     distroless container without ss /proc/net/tcp silently dropped the
+//     operator's explicit port list to zero -u flags -> 0 findings).
+//   - Auto-discovery failure returns an error instead of silently scanning
+//     nothing; the caller logs a port_discovery_failed event so an empty
+//     result can never masquerade as "no vulnerabilities".
+func resolveTargetPorts(t string, req Request, args *[]string) error {
+	if strings.Contains(t, "://") {
+		*args = append(*args, "-u", t)
+		return nil
+	}
+	// Explicit port list: trust the operator, skip discovery entirely.
+	if len(req.Ports) > 0 {
+		for _, p := range req.Ports {
+			*args = append(*args, "-u", joinHostPort(t, strconv.Itoa(p)))
+		}
+		return nil
+	}
+	discovered, err := discoverListeningPorts()
+	if err != nil {
+		return err
+	}
+	discovered = filterTCPPorts(discovered)
+	log.Printf("[nuclei-runner] %s: scanning %d port(s): %v", req.TaskID, len(discovered), discovered)
+	for _, p := range discovered {
+		*args = append(*args, "-u", joinHostPort(t, p))
+	}
+	return nil
 }
 
 // stderrWriter forwards subprocess stderr to the agent logger. The default
@@ -233,4 +297,34 @@ func firstNonEmpty3(a, b, c string) string {
 		return b
 	}
 	return c
+}
+
+// decodeReference turns nuclei v3's polymorphic info.reference field into a
+// single string. Templates emit either a JSON string (single URL) or an
+// array of strings (one per advisory link); join with newlines so the
+// downstream Finding preserves every link without restructuring the
+// internal Finding shape.
+//
+// P1-VULN-NUCR (2026-07-31): the previous single-string field dropped
+// every CVE template with multiple references -- the JSON unmarshal
+// failed silently and the line was logged as a "bad finding line".
+func decodeReference(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	// Fast path: string. Trim quotes so the result is plain text.
+	if raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return s
+		}
+	}
+	// Slow path: array of strings.
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		return strings.Join(arr, "\n")
+	}
+	// Last resort: return whatever bytes were in the field, stripped of
+	// JSON punctuation so the operator still sees something useful.
+	return strings.Trim(string(raw), `"[]`)
 }

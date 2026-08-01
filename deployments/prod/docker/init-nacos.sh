@@ -13,7 +13,10 @@ NACOS_SERVER="${NACOS_SERVER:-http://127.0.0.1:8848}"
 NACOS_USERNAME="${NACOS_USERNAME:-nacos}"
 NACOS_PASSWORD="${NACOS_PASSWORD:-nacos}"
 NACOS_NAMESPACE="${NACOS_NAMESPACE:-prod}"
-NACOS_GROUP="${NACOS_GROUP:-SECURITY}"
+# V12 5.12 (2026-08-02): group 必须小写 `security` -- 应用读取用
+# nacos_group=security（settings 默认 + .env），此前默认 SECURITY（大写）
+# 会把配置推到错误 group，应用读不到（曾导致 nuclei 下载版本为空）。
+NACOS_GROUP="${NACOS_GROUP:-security}"
 NACOS_DATA_ID="${NACOS_DATA_ID:-security-agent.yaml}"
 
 CONFIG_FILE="${1:-/app/deployments/prod/docker/nacos-config.yaml}"

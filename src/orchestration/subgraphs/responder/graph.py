@@ -23,10 +23,14 @@ def build_responder_subgraph():
 
     graph.add_edge(START, "playbook_matcher")
     graph.add_edge("playbook_matcher", "hitl_approval")
-    graph.add_conditional_edges("hitl_approval", route_after_hitl, {
-        "execute_response": "execute_response",
-        "reject": "reject_response",
-    })
+    graph.add_conditional_edges(
+        "hitl_approval",
+        route_after_hitl,
+        {
+            "execute_response": "execute_response",
+            "reject": "reject_response",
+        },
+    )
     graph.add_edge("execute_response", END)
     graph.add_edge("reject_response", END)
 

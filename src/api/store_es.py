@@ -1,4 +1,4 @@
-﻿"""ESEventStore — Event persistence backed by Elasticsearch."""
+"""ESEventStore — Event persistence backed by Elasticsearch."""
 
 import uuid
 from datetime import UTC, datetime
@@ -28,9 +28,11 @@ class ESEventStore:
 
     async def create_event(self, event_id: str, text: str, iocs: dict, source: str) -> EventRecord:
         rec = EventRecord(
-            event_id=event_id, source=source,
+            event_id=event_id,
+            source=source,
             submitted_at=datetime.now(UTC).isoformat(),
-            sanitized_text=text, iocs=iocs,
+            sanitized_text=text,
+            iocs=iocs,
         )
         await self._es.index(index=self._events_index, id=event_id, document=rec.model_dump())
         return rec
@@ -44,8 +46,14 @@ class ESEventStore:
         data["trace"] = await self._fetch_trace(event_id)
         return EventRecord(**data)
 
-    async def list_events(self, status: str | None = None, verdict: str | None = None,
-                          priority: str | None = None, limit: int = 50, offset: int = 0) -> list[EventRecord]:
+    async def list_events(
+        self,
+        status: str | None = None,
+        verdict: str | None = None,
+        priority: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[EventRecord]:
         must = []
         if status:
             must.append({"term": {"status": status}})
@@ -75,9 +83,16 @@ class ESEventStore:
         await self._es.update(index=self._events_index, id=event_id, doc=doc)
         try:
             from src.api.events_bus import get_event_bus
-            await get_event_bus().publish(f"events:{event_id}", {"type": "event_update", "event_id": event_id})
-            await get_event_bus().publish("events:list", {"type": "event_update", "event_id": event_id})
-            await get_event_bus().publish("metrics", {"type": "metrics_update", "event_id": event_id})
+
+            await get_event_bus().publish(
+                f"events:{event_id}", {"type": "event_update", "event_id": event_id}
+            )
+            await get_event_bus().publish(
+                "events:list", {"type": "event_update", "event_id": event_id}
+            )
+            await get_event_bus().publish(
+                "metrics", {"type": "metrics_update", "event_id": event_id}
+            )
         except Exception:
             pass
 
@@ -95,23 +110,32 @@ class ESEventStore:
         await self._es.index(index=self._audit_index, document=doc)
         try:
             from src.api.events_bus import get_event_bus
-            await get_event_bus().publish(f"events:{event_id}", {"type": "trace_update", "event_id": event_id, "node": step.node})
+
+            await get_event_bus().publish(
+                f"events:{event_id}",
+                {"type": "trace_update", "event_id": event_id, "node": step.node},
+            )
         except Exception:
             pass
 
     async def add_approval(self, event_id: str, approval: ApprovalEntry) -> None:
         await self._es.update(
-            index=self._events_index, id=event_id,
-            script={"source": "ctx._source.approvals.add(params.approval)",
-                    "params": {"approval": approval.model_dump()},
-                    "lang": "painless"},
+            index=self._events_index,
+            id=event_id,
+            script={
+                "source": "ctx._source.approvals.add(params.approval)",
+                "params": {"approval": approval.model_dump()},
+                "lang": "painless",
+            },
         )
 
     async def metrics(self) -> dict:
         resp = await self._es.search(
             index=self._events_index,
             aggs={
-                "by_verdict": {"terms": {"field": "final_verdict", "size": 20, "missing": "unknown"}},
+                "by_verdict": {
+                    "terms": {"field": "final_verdict", "size": 20, "missing": "unknown"}
+                },
                 "by_priority": {"terms": {"field": "priority", "size": 10, "missing": "none"}},
                 "avg_duration": {"avg": {"field": "duration_ms"}},
             },
@@ -123,8 +147,12 @@ class ESEventStore:
         aggs = resp.get("aggregations", {})
         return {
             "total_events": resp["hits"]["total"]["value"],
-            "by_verdict": {b["key"]: b["doc_count"] for b in aggs.get("by_verdict", {}).get("buckets", [])},
-            "by_priority": {b["key"]: b["doc_count"] for b in aggs.get("by_priority", {}).get("buckets", [])},
+            "by_verdict": {
+                b["key"]: b["doc_count"] for b in aggs.get("by_verdict", {}).get("buckets", [])
+            },
+            "by_priority": {
+                b["key"]: b["doc_count"] for b in aggs.get("by_priority", {}).get("buckets", [])
+            },
             "pending_approvals": pa["count"],
             "avg_duration_ms": round(aggs.get("avg_duration", {}).get("value", 0) or 0),
         }
@@ -133,19 +161,30 @@ class ESEventStore:
         await self._es.close()
 
     async def _fetch_trace(self, event_id: str) -> list[TraceStep]:
+        # Query event_id.keyword, NOT event_id. The audit index has no explicit
+        # mapping, so ES dynamic-maps event_id as text+keyword. event_id is a
+        # UUID (e.g. 550e8400-e29b-41d4-a716-446655440000); a `term` query on
+        # the text field matches against analyzed tokens, and the standard
+        # analyzer splits the UUID on hyphens -> no single token equals the
+        # full id -> 0 matches -> the event detail page showed "暂无推理轨迹"
+        # even though add_trace_step wrote the steps. .keyword is the exact,
+        # unanalyzed value and matches correctly.
         resp = await self._es.search(
             index=self._audit_index,
-            query={"term": {"event_id": event_id}},
+            query={"term": {"event_id.keyword": event_id}},
             sort=[{"timestamp": "asc"}],
             size=100,
         )
-        return [TraceStep(
-            node=h["_source"].get("node", "?"),
-            action=h["_source"].get("action", ""),
-            summary=h["_source"].get("summary", ""),
-            timestamp=h["_source"].get("timestamp", ""),
-            details=h["_source"].get("details", {}),
-        ) for h in resp["hits"]["hits"]]
+        return [
+            TraceStep(
+                node=h["_source"].get("node", "?"),
+                action=h["_source"].get("action", ""),
+                summary=h["_source"].get("summary", ""),
+                timestamp=h["_source"].get("timestamp", ""),
+                details=h["_source"].get("details", {}),
+            )
+            for h in resp["hits"]["hits"]
+        ]
 
 
 _es_store: ESEventStore | None = None

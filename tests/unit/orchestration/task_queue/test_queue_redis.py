@@ -1,9 +1,10 @@
-﻿"""Integration-ish tests for the task queue against a fakeredis instance.
+"""Integration-ish tests for the task queue against a fakeredis instance.
 
 These skip automatically if ``fakeredis`` isn\'t installed -- they\'re an
 optional belt-and-braces check on top of the pure unit tests. Real Redis
 is not required.
 """
+
 from __future__ import annotations
 
 import socket
@@ -12,6 +13,7 @@ import pytest
 
 try:
     import fakeredis.aioredis as fakeredis_aioredis  # type: ignore[import-not-found]
+
     HAS_FAKEREDIS = True
 except ImportError:  # pragma: no cover -- optional dep
     HAS_FAKEREDIS = False
@@ -20,7 +22,8 @@ except ImportError:  # pragma: no cover -- optional dep
 import os as _os
 
 pytestmark = pytest.mark.skipif(
-    not HAS_FAKEREDIS, reason="fakeredis not installed",
+    not HAS_FAKEREDIS,
+    reason="fakeredis not installed",
 )
 
 # E2E tests are opt-in to keep the suite offline-safe.
@@ -72,14 +75,19 @@ async def test_enqueue_appears_as_stream_entry(redis):
         return {"status": "completed", "task_id": envelope.task_id}
 
     # Enqueue
-    await redis.xadd(STREAM_TASKS, {
-        "envelope": TaskEnvelope(task_id="t-x", source="manual").to_json(),
-        "task_id": "t-x",
-        "engine": "matcher",
-    })
+    await redis.xadd(
+        STREAM_TASKS,
+        {
+            "envelope": TaskEnvelope(task_id="t-x", source="manual").to_json(),
+            "task_id": "t-x",
+            "engine": "matcher",
+        },
+    )
 
     await ensure_group(redis)
-    msg = await read_message_blocking(redis, consumer=f"worker-{socket.gethostname()}", block_ms=100)
+    msg = await read_message_blocking(
+        redis, consumer=f"worker-{socket.gethostname()}", block_ms=100
+    )
     assert msg is not None
     entry_id, payload = msg
     assert payload["task_id"] == "t-x"
@@ -102,6 +110,7 @@ async def test_enqueue_appears_as_stream_entry(redis):
 @pytest.mark.asyncio
 async def test_pending_count_zero_on_empty(redis):
     from src.orchestration.task_queue.dequeue import ensure_group, pending_count
+
     await ensure_group(redis)
     assert await pending_count(redis) == 0
 
@@ -120,9 +129,14 @@ async def test_stream_depth_grows_with_xadd(redis):
     assert await stream_depth(redis) == 0
 
     for i in range(3):
-        await redis.xadd("vulnscan:queue:tasks",
-                         {"envelope": TaskEnvelope(task_id=f"t-{i}", source="manual").to_json(),
-                          "task_id": f"t-{i}", "engine": "matcher"})
+        await redis.xadd(
+            "vulnscan:queue:tasks",
+            {
+                "envelope": TaskEnvelope(task_id=f"t-{i}", source="manual").to_json(),
+                "task_id": f"t-{i}",
+                "engine": "matcher",
+            },
+        )
 
     assert await stream_depth(redis) == 3
 

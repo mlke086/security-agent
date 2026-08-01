@@ -25,18 +25,24 @@ class ApprovalStore:
 
     async def _pg(self):
         from src.common.db.pg import get_pg_pool
+
         return await get_pg_pool()
 
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
 
-    async def create(self, approval_id: str, event_id: str, level: str, n_required: int = 1) -> None:
+    async def create(
+        self, approval_id: str, event_id: str, level: str, n_required: int = 1
+    ) -> None:
         pool = await self._pg()
         await pool.execute(
             "INSERT INTO approvals (approval_id, event_id, status, required, operation_level) "
             "VALUES ($1, $2, 'pending', $3, $4)",
-            approval_id, event_id, n_required, level,
+            approval_id,
+            event_id,
+            n_required,
+            level,
         )
 
     async def get(self, approval_id: str) -> dict[str, Any] | None:
@@ -69,15 +75,17 @@ class ApprovalStore:
                 "SELECT voter FROM approval_votes WHERE approval_id = $1",
                 row["approval_id"],
             )
-            results.append({
-                "approval_id": str(row["approval_id"]),
-                "event_id": row["event_id"],
-                "status": row["status"],
-                "required": row["required"],
-                "operation_level": row["operation_level"],
-                "approvals": [{"actor": v["voter"]} for v in votes],
-                "created_at": row["created_at"].isoformat() if row["created_at"] else "",
-            })
+            results.append(
+                {
+                    "approval_id": str(row["approval_id"]),
+                    "event_id": row["event_id"],
+                    "status": row["status"],
+                    "required": row["required"],
+                    "operation_level": row["operation_level"],
+                    "approvals": [{"actor": v["voter"]} for v in votes],
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else "",
+                }
+            )
         return results
 
     # ------------------------------------------------------------------
@@ -103,7 +111,9 @@ class ApprovalStore:
         try:
             await pool.execute(
                 "INSERT INTO approval_votes (approval_id, voter, decision) VALUES ($1, $2, $3)",
-                aid, actor, decision,
+                aid,
+                actor,
+                decision,
             )
         except asyncpg.UniqueViolationError:
             pass  # already voted, no-op
@@ -138,7 +148,8 @@ class ApprovalStore:
         pool = await self._pg()
         await pool.execute(
             "UPDATE approvals SET status = $1, resolved_at = NOW() WHERE approval_id = $2",
-            status, approval_id,
+            status,
+            approval_id,
         )
         await self._redis.publish(f"approval:notify:{approval_id}", status)
         logger.info("approval_resolved", approval_id=approval_id, status=status)
@@ -158,7 +169,9 @@ class ApprovalStore:
 
         # Fast path: check PG
         pool = await self._pg()
-        row = await pool.fetchrow("SELECT status FROM approvals WHERE approval_id = $1", approval_id)
+        row = await pool.fetchrow(
+            "SELECT status FROM approvals WHERE approval_id = $1", approval_id
+        )
         current = row["status"] if row else "pending"
         if current != "pending":
             return current
@@ -167,7 +180,9 @@ class ApprovalStore:
         await pubsub.subscribe(channel)
         try:
             # Re-check after subscribe (lost-wakeup race)
-            row = await pool.fetchrow("SELECT status FROM approvals WHERE approval_id = $1", approval_id)
+            row = await pool.fetchrow(
+                "SELECT status FROM approvals WHERE approval_id = $1", approval_id
+            )
             current = row["status"] if row else "pending"
             if current != "pending":
                 return current
@@ -186,7 +201,9 @@ class ApprovalStore:
                     if status in ("approved", "rejected", "timeout"):
                         return status
                     # pending: keep waiting, re-check PG
-                    row = await pool.fetchrow("SELECT status FROM approvals WHERE approval_id = $1", approval_id)
+                    row = await pool.fetchrow(
+                        "SELECT status FROM approvals WHERE approval_id = $1", approval_id
+                    )
                     current = row["status"] if row else "pending"
                     if current != "pending":
                         return current

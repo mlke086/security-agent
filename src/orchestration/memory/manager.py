@@ -107,6 +107,9 @@ class MemoryManager:
         while True:
             cursor, keys = await self._redis.scan(cursor=cursor, match="event:ts:*", count=100)
             for key in keys:
+                # redis may hand back bytes when decode_responses is off; the
+                # split + delete_by_event calls below need str.
+                key = key.decode() if isinstance(key, bytes) else key
                 ts_str = await self._redis.get(key)
                 if not ts_str:
                     continue

@@ -1,6 +1,8 @@
 """SentinelOne threat alert."""
+
 from src.agents.models import AlertIOC, AlertSeverity, AlertSource
 from src.preprocessing.edr_adapter.base import EDRAdapter
+
 
 class SentinelOneAdapter(EDRAdapter):
     source = AlertSource.SENTINELONE
@@ -16,11 +18,16 @@ class SentinelOneAdapter(EDRAdapter):
     def _severity(self):
         a = self.raw.get("alertInfo", {})
         sev = str(a.get("severity", "")).upper()
-        if sev == "CRITICAL": return AlertSeverity.CRITICAL
-        if sev == "HIGH": return AlertSeverity.HIGH
-        if sev == "MEDIUM": return AlertSeverity.MEDIUM
-        if sev == "LOW": return AlertSeverity.LOW
-        if sev == "INFO": return AlertSeverity.INFO
+        if sev == "CRITICAL":
+            return AlertSeverity.CRITICAL
+        if sev == "HIGH":
+            return AlertSeverity.HIGH
+        if sev == "MEDIUM":
+            return AlertSeverity.MEDIUM
+        if sev == "LOW":
+            return AlertSeverity.LOW
+        if sev == "INFO":
+            return AlertSeverity.INFO
         return AlertSeverity.MEDIUM
 
     def _hostname(self):

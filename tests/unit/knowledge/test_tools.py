@@ -68,7 +68,9 @@ async def test_notify_dingtalk_unconfigured():
 async def test_notify_wechat_sends_when_configured(monkeypatch):
     from src.knowledge.tools import notifier
 
-    monkeypatch.setattr(notifier.get_settings(), "wechat_work_webhook", "https://example.com/webhook")
+    monkeypatch.setattr(
+        notifier.get_settings(), "wechat_work_webhook", "https://example.com/webhook"
+    )
     resp = MagicMock(status_code=200)
     monkeypatch.setattr(httpx.AsyncClient, "post", AsyncMock(return_value=resp))
 

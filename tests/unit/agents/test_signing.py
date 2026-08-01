@@ -1,4 +1,5 @@
 """Unit tests for Ed25519 instruction signing."""
+
 import base64
 import json
 
@@ -19,7 +20,12 @@ def keypair():
 class TestSigning:
     def test_sign_adds_signature_to_sensitive_types(self):
         for msg_type in SENSITIVE_TYPES:
-            msg = {"v": 1, "type": msg_type, "ts": "2026-01-01T00:00:00Z", "payload": {"key": "value"}}
+            msg = {
+                "v": 1,
+                "type": msg_type,
+                "ts": "2026-01-01T00:00:00Z",
+                "payload": {"key": "value"},
+            }
             signed = sign_message(msg)
             assert "sig" in signed, f"Missing sig for {msg_type}"
             sig = signed["sig"]
@@ -36,7 +42,12 @@ class TestSigning:
     def test_verify_valid_signature(self, keypair):
         private_key, pubkey_hex = keypair
         msg_type = "scan_command"
-        msg = {"v": 1, "type": msg_type, "ts": "2026-01-01T00:00:00Z", "payload": {"task_id": "t-1"}}
+        msg = {
+            "v": 1,
+            "type": msg_type,
+            "ts": "2026-01-01T00:00:00Z",
+            "payload": {"task_id": "t-1"},
+        }
         ts = msg["ts"]
         payload = json.dumps(msg["payload"], sort_keys=True)
         sign_payload = f"{msg_type}|{ts}|{payload}"
@@ -46,7 +57,12 @@ class TestSigning:
 
     def test_verify_rejects_tampered_payload(self, keypair):
         private_key, pubkey_hex = keypair
-        msg = {"v": 1, "type": "scan_command", "ts": "2026-01-01T00:00:00Z", "payload": {"task_id": "t-1"}}
+        msg = {
+            "v": 1,
+            "type": "scan_command",
+            "ts": "2026-01-01T00:00:00Z",
+            "payload": {"task_id": "t-1"},
+        }
         ts = msg["ts"]
         payload = json.dumps(msg["payload"], sort_keys=True)
         sign_payload = f"scan_command|{ts}|{payload}"
@@ -59,7 +75,12 @@ class TestSigning:
         wrong_priv = ed25519.Ed25519PrivateKey.generate()
         wrong_pub = wrong_priv.public_key().public_bytes_raw().hex()
         priv = ed25519.Ed25519PrivateKey.generate()
-        msg = {"v": 1, "type": "scan_command", "ts": "2026-01-01T00:00:00Z", "payload": {"task_id": "t-1"}}
+        msg = {
+            "v": 1,
+            "type": "scan_command",
+            "ts": "2026-01-01T00:00:00Z",
+            "payload": {"task_id": "t-1"},
+        }
         msg_type = "scan_command"
         ts = msg["ts"]
         payload = json.dumps(msg["payload"], sort_keys=True)

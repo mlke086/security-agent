@@ -13,7 +13,8 @@ import {
   updateConversation, listModels,
   chatAssistant, createScanTask, listGroups, listHosts, type Host, type HostGroup,
   type ConversationSummary, type ChatMessage, type LlmModel,
-  type ChatRoute, type ChatSource,
+  type ChatRoute, type ChatSource, type ScanIntentData,
+  patchMessage,
 } from "../api/client"
 import Markdown from "./Markdown"
 import "./Markdown.css"
@@ -38,24 +39,11 @@ interface ChatMessageEx extends ChatMessage {
   /** 引用的来源（project docs / web URLs） */
   sources?: ChatSource[]
   /** 解析出的扫描意图（仅 scan 路由） */
-  intent?: ScanIntentData | null
+  intent?: ScanIntentData
   /** 是否正在等待流式响应 */
   pending?: boolean
   /** 失败时的错误提示 */
   error?: string
-}
-
-interface ScanIntentData {
-  targets: string[]
-  modules: string[]
-  engine?: string
-  resource_limit?: Record<string, unknown>
-  schedule?: string | null
-  // nuclei-specific knobs (only used when engine === 'nuclei')
-  nuclei_severity?: string[]
-  nuclei_tags?: string[]
-  nuclei_templates?: string[]
-  nuclei_timeout_sec?: number
 }
 
 interface NucleiOptions {
@@ -134,7 +122,7 @@ export default function ChatScan() {
   }, [clearPendingTitleRefresh, refreshList])
 
   const handleConfirmScan = useCallback(
-    async (intent: ScanIntentData, nuclei: NucleiOptions, sync: boolean) => {
+    async (intent: ScanIntentData, nuclei: NucleiOptions, messageTs?: string) => {
       if (!intent) return
       setExecuting(true)
       try {
@@ -167,17 +155,41 @@ export default function ChatScan() {
         // (V9 F2) we used to call chatConversation here too -- a redundant
         // LLM round-trip and persisted a *different* reply than the one the
         // operator saw.
-        // sync=true -> backend runs the subgraph inline (writes ES before
-        // returning, so /scan-monitor and /scan task list see the record
-        // immediately). sync=false -> enqueues to Redis Stream; needs a
-        // running TaskWorker to materialize. We default to sync=true so
-        // chat-created tasks don't disappear from the list when the
-        // worker is offline (operator-visible bug we hit before).
-        const task = await createScanTask(body, sync)
+        // Async path: backend enqueues to Redis Stream and returns the
+        // task_id immediately. The TaskWorker (if running) picks it up
+        // and runs the subgraph; the monitor page then shows the live
+        // status. We deliberately avoid the legacy ?sync=1 path here --
+        // it runs the subgraph inline in the HTTP request, which can take
+        // many minutes for a real scan and would exceed the frontend 30s
+        // axios timeout, leaving the operator stuck on "创建中…".
+        // Always enqueue (sync=false). The legacy sync=true path runs
+        // the full subgraph inline in the HTTP request, which can
+        // take minutes for a real scan and easily exceeds the 30s
+        // axios timeout -- the operator would see "创建中..." stuck
+        // until the timeout fires, then silently revert.
+        const task = await createScanTask(body)
         message.success("扫描任务已创建，正在跳转监控页…")
         // Tell the /scan task list to refresh next time it mounts; the
         // listener lives in ScanTaskPage.
         try { sessionStorage.setItem("secagent:task-created", String(Date.now())) } catch {}
+        // Write the created task_id back onto the assistant message so a
+        // future reload of this conversation shows "已创建任务 #xxx → 查看监控"
+        // instead of an executable "执行扫描" button. Best-effort: a
+        // failure here just means the link won't persist across reloads,
+        // the current turn still navigates to the monitor.
+        if (activeId && messageTs) {
+          setMessages((prev) =>
+            prev.map((m) => (m.ts === messageTs ? { ...m, task_id: task.task_id } : m)),
+          )
+          try {
+            await patchMessage(activeId, messageTs, { task_id: task.task_id })
+          } catch (e: any) {
+            // Non-fatal: the in-memory state update above still shows
+            // the link for the rest of this session.
+            // eslint-disable-next-line no-console
+            console.warn("patchMessage(task_id) failed", e?.message || e)
+          }
+        }
         navigate(`/scan-monitor/${task.task_id}`)
       } catch (e: any) {
         message.error(e?.response?.data?.detail || e?.message || "创建扫描任务失败")
@@ -186,6 +198,30 @@ export default function ChatScan() {
       }
     },
     [activeId, messages, modelId, navigate],
+  )
+
+  // Hide the intent card without creating a task. We do not delete the
+  // underlying message -- the LLM reply is still in history -- but we
+  // mark it as dismissed so MessageRow stops rendering the card. The
+  // operator can re-send their request to bring the card back.
+  const handleCancel = useCallback(
+    (messageTs?: string) => {
+      if (!messageTs) return
+      setMessages((prev) =>
+        prev.map((m) => (m.ts === messageTs ? { ...m, intent: undefined } : m)),
+      )
+    },
+    [],
+  )
+
+  // Used by historical intent cards to jump straight to the scan
+  // monitor for an already-created task (rather than asking the
+  // operator to re-create it).
+  const handleViewTask = useCallback(
+    (taskId: string) => {
+      navigate(`/scan-monitor/${taskId}`)
+    },
+    [navigate],
   )
 
   const handleSend = useCallback(async (presetText?: string) => {
@@ -214,10 +250,14 @@ export default function ChatScan() {
         const finalMsg: ChatMessageEx = {
           role: "assistant",
           content: res.reply,
-          ts: new Date().toISOString(),
+          // V9 follow-up: adopt the server's authoritative `ts` so a
+          // later patchMessage(task_id) is guaranteed to hit the
+          // same PG row. Microsecond / timezone drift between client
+          // and server would otherwise make patchMessage silently miss.
+          ts: res.assistant_ts || new Date().toISOString(),
           route: res.intent,
           sources: res.sources,
-          intent: res.intent === "scan" ? parseIntentFromSources(res.sources) : null,
+          intent: res.intent === "scan" ? parseIntentFromSources(res.sources) : undefined,
         }
         if (idx >= 0) next[idx] = finalMsg
         else next.push(finalMsg)
@@ -436,7 +476,9 @@ export default function ChatScan() {
                   key={i}
                   msg={m}
                   onConfirmScan={handleConfirmScan}
+                  onCancel={handleCancel}
                   executing={executing}
+                  onViewTask={handleViewTask}
                 />
               ))}
             </div>
@@ -508,11 +550,13 @@ function EmptyState({ onPick }: { onPick: (t: string) => void }) {
 
 // ── 单条消息 ────────────────────────────────────────────
 function MessageRow({
-  msg, onConfirmScan, executing,
+  msg, onConfirmScan, onCancel, executing, onViewTask,
 }: {
   msg: ChatMessageEx
-  onConfirmScan: (intent: ScanIntentData, nuclei: NucleiOptions, sync: boolean) => void
+  onConfirmScan: (intent: ScanIntentData, nuclei: NucleiOptions, messageTs?: string) => void
+  onCancel: (messageTs?: string) => void
   executing: boolean
+  onViewTask: (taskId: string) => void
 }) {
   const isUser = msg.role === "user"
   if (msg.pending) {
@@ -542,7 +586,15 @@ function MessageRow({
           </div>
         {/* 扫描意图卡片 */}
         {msg.intent && msg.route === "scan" && (
-          <IntentCard intent={msg.intent} onConfirm={onConfirmScan} disabled={executing} />
+          <IntentCard
+            intent={msg.intent}
+            onConfirm={onConfirmScan}
+            onCancel={onCancel}
+            disabled={executing}
+            taskId={msg.task_id}
+            messageTs={msg.ts}
+            onViewTask={onViewTask}
+          />
         )}
         {/* 来源列表 */}
         {msg.sources && msg.sources.length > 0 && msg.route !== "scan" && (
@@ -570,17 +622,38 @@ const NUCLEI_TAGS_OPTIONS = [
 ]
 
 function IntentCard({
-  intent, onConfirm, disabled,
+  intent, onConfirm, onCancel, disabled, taskId, messageTs, onViewTask,
 }: {
   intent: ScanIntentData
-  onConfirm: (i: ScanIntentData, nuclei: NucleiOptions, sync: boolean) => void
+  onConfirm: (intent: ScanIntentData, nuclei: NucleiOptions, messageTs?: string) => void
+  /** Hide this card without creating a task. The user can re-send their
+   * request from the chat input to bring the card back. */
+  onCancel: (messageTs?: string) => void
   disabled: boolean
+  /** Set once the operator clicks “执行扫描” and the backend created a task.
+   * When present, the card switches from an executable button to a static
+   * “已创建任务 #xxx → 查看监控” link so historical cards on
+   * reload don’t re-prompt the operator to create the task again. */
+  taskId?: string
+  /** ts of the assistant message this card belongs to; used to write back
+   * task_id via patchMessage so the link survives a reload. */
+  messageTs?: string
+  /** Navigates to the scan monitor for an already-created task. */
+  onViewTask?: (taskId: string) => void
 }) {
   // 2026-07-29 UX upgrade: business-group fast-path. If the LLM didn't
   // pick concrete targets (very common when the operator asks to scan
   // "all order-service hosts"), the operator can pick a business group
   // here and we expand it into the host list before confirming.
   const initialTargets = intent.targets?.length ? intent.targets : []
+  // Defense in depth: the backend also strips LLM-emitted type prefixes
+  // (group:/host:/ip:) before persisting the intent, but older
+  // conversations in PG may still carry the prefixed form. Normalize
+  // here so the auto-fill works regardless of which path produced the
+  // intent, and so the displayed targets never leak the type tag.
+  const TARGET_PREFIX_RE = /^(group|host|ip|hostname|grp):/i
+  const normalizeTarget = (t: string) => t.replace(TARGET_PREFIX_RE, "").trim()
+  const normalizedInitial = initialTargets.map(normalizeTarget).filter(Boolean)
   // V9 4.5: single Set tracks every host added by either the group
   // shortcut or the per-host multi-select. The operator can remove
   // any host (the Set supports add / delete / clear). Previously
@@ -590,19 +663,37 @@ function IntentCard({
   const [groups, setGroups] = useState<HostGroup[]>([])
   const [hostByGroup, setHostByGroup] = useState<Record<string, string[]>>({})
   const [pickedGroup, setPickedGroup] = useState<string | undefined>(undefined)
-  const [allHosts, setAllHosts] = useState<Host[]>([])
+  // `bareInitial` = initial targets that are NOT consumed by an
+  // auto-picked business group, so the operator does not see "test"
+  // and "Rocky001" duplicated in the 目标 row when the LLM said
+  // "扫描 test 组". Resolved at render time once `groups` is loaded.
+  const bareInitial = (() => {
+    if (groups.length === 0) return normalizedInitial
+    const groupNames = new Set(groups.map((g) => g.name))
+    return normalizedInitial.filter((t) => !groupNames.has(t))
+  })()
   useEffect(() => {
     listGroups().then((r) => setGroups((r.items as HostGroup[]) || [])).catch(() => {})
   }, [])
+  // Auto-fill: when the LLM extracted a target that matches an existing
+  // business group (“扫描 test 组” → targets:["test"] / ["group:test"]), pre-select that
+  // group and fold its hosts into pickedHosts so the operator does not
+  // have to redo the dropdown selection the LLM just implied.
   useEffect(() => {
-    // Lazy: only fetch when the user opens the multi-select. A
-    // hard 500-host cap keeps the payload small for large fleets.
-    let alive = true
-    listHosts({}).then((r) => {
-      if (alive) setAllHosts((r.items as Host[]) || [])
-    }).catch(() => {})
-    return () => { alive = false }
-  }, [])
+    if (groups.length === 0) return
+    if (pickedGroup) return // operator has already chosen something; don’t override
+    if (!normalizedInitial.length) return
+    const groupNames = new Set(groups.map((g) => g.name))
+    const matched = normalizedInitial.find((t) => groupNames.has(t))
+    if (matched) {
+      onPickGroup(matched)
+    }
+    // We intentionally only depend on `groups` here. `normalizedInitial` /
+    // `pickedGroup` are read inside but a change to them is a *result* of
+    // this effect (or a user action), not a new intent -- re-running would
+    // cause an infinite loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups])
   const onPickGroup = async (g: string | undefined) => {
     setPickedGroup(g)
     if (!g || hostByGroup[g]) return
@@ -619,8 +710,12 @@ function IntentCard({
       })
     } catch { /* ignore */ }
   }
-  const mergedTargets = Array.from(new Set([...initialTargets, ...pickedHosts]))
-  const targets = mergedTargets.length ? mergedTargets : ["（未指定，请在对话中补充）"]
+  // `mergedTargets` is what we actually send to /vulnscan/tasks. It is the
+  // union of (initial targets that are NOT a known group name) +
+  // (manually-picked hosts). Group names that have been auto-resolved
+  // into hosts are NOT included so the API does not see "test" as a
+  // phantom target alongside its member hostnames.
+  const mergedTargets = Array.from(new Set([...bareInitial, ...pickedHosts]))
   const modules = intent.modules?.length ? intent.modules : ["sys_vuln", "baseline"]
   const engine = intent.engine || "matcher"
   const showNuclei = engine === "nuclei"
@@ -630,61 +725,68 @@ function IntentCard({
     nuclei_templates: (intent.nuclei_templates || []).join(", "),
     nuclei_timeout_sec: intent.nuclei_timeout_sec || 0,
   })
-  const [sync, setSync] = useState(false)
+  // Note: we always create the task asynchronously (enqueue + return
+  // task_id immediately). The legacy ?sync=1 path runs the full
+  // subgraph inline in the HTTP request, which can take many minutes
+  // for a real matcher/nuclei scan and easily blows past the frontend
+  // 30s axios timeout -- the request then aborts and the operator
+  // sees a stuck “创建中…” button that silently reverts. The async path
+  // returns a task_id in milliseconds, navigates to the monitor, and
+  // the worker drives the scan from there.
   const [advanced, setAdvanced] = useState(false)
   const canConfirm = mergedTargets.length > 0
+
+  // Compact human-readable description strings for the minimal summary
+  // view. We collapse long host lists to "X, ..., 还有 N 台" so the card
+  // never explodes vertically for big groups.
+  const MAX_HOSTS = 5
+  const hostList = mergedTargets
+  const hostPreview = hostList.slice(0, MAX_HOSTS).join(", ")
+  const hostMore = hostList.length - MAX_HOSTS
+  const hostDescription = hostList.length === 0
+    ? "暂未识别到主机"
+    : (hostList.length <= MAX_HOSTS
+        ? hostPreview
+        : hostPreview + "，还有 " + hostMore + " 台")
+
+  // `targetDescription` -- the user-facing target label.
+  // If the LLM extracted a single business-group name, say "test 组".
+  // Otherwise show the joined target list (e.g. for bare hostnames/IPs).
+  const matchedGroupName = pickedGroup || (
+    groups.length > 0
+      ? normalizedInitial.find((t) => groups.some((g) => g.name === t))
+      : undefined
+  )
+  const targetDescription = matchedGroupName
+    ? matchedGroupName + " 组"
+    : (bareInitial.length ? bareInitial.join(", ") : hostDescription)
+
+  // `moduleDescription` -- join the localized module names.
+  const moduleDescription = modules.map((m) => MODULE_NAME[m] || m).join(" + ")
+
   return (
-    <div className="intent-card">
+    <div className="intent-card intent-card-compact">
       <h4><ThunderboltOutlined /> 已识别扫描意图</h4>
-      <div className="intent-row">
-        <span className="label">目标：</span>
-        {targets.map((t, i) => <span key={i} className="value">{t}</span>)}
-      </div>
-        <div className="intent-row" style={{ flexWrap: "wrap" }}>
-          <span className="label">业务分组：</span>
-          <Select
-            size="small"
-            allowClear
-            placeholder={pickedGroup ? "已选：" + pickedGroup : "从业务分组添加目标"}
-            style={{ minWidth: 200 }}
-            value={pickedGroup}
-            onChange={onPickGroup}
-            options={groups.map((g) => ({ label: g.name + " (" + (g.member_count ?? 0) + ")", value: g.name }))}
-          />
-          {pickedGroup && (
-            <span style={{ marginLeft: 8, color: "#888", fontSize: 12 }}>
-              已添加 {hostByGroup[pickedGroup]?.length || 0} 个主机
-            </span>
-          )}
+      <div className="intent-summary">
+        <div className="intent-summary-line">
+          <span className="intent-summary-icon">🎯</span>
+          <span className="intent-summary-label">将扫描</span>
+          <span className="intent-summary-target">{targetDescription}</span>
         </div>
-        <div className="intent-row" style={{ flexWrap: "wrap" }}>
-          <span className="label">主机多选：</span>
-          <Select
-            mode="multiple"
-            size="small"
-            allowClear
-            placeholder={pickedHosts.size ? "已选 " + pickedHosts.size + " 台" : "从所有主机里勾选目标"}
-            style={{ minWidth: 240, maxWidth: 360 }}
-            value={pickedHosts}
-            onChange={setPickedHosts}
-            optionFilterProp="label"
-            maxTagCount={3}
-            options={allHosts.map((h) => ({
-              label: h.hostname + (h.group ? " [" + h.group + "]" : ""),
-              value: h.hostname,
-            }))}
-          />
+        <div className="intent-summary-line intent-summary-sub">
+          <span className="intent-summary-sub-text">主机：{hostDescription}</span>
         </div>
-      <div className="intent-row">
-        <span className="label">模块：</span>
-        {modules.map((m, i) => <span key={i} className="value">{MODULE_NAME[m] || m}</span>)}
-      </div>
-      <div className="intent-row">
-        <span className="label">引擎：</span>
-        <span className="value">{engine}</span>
+        <div className="intent-summary-line">
+          <span className="intent-summary-icon">🔍</span>
+          <span className="intent-summary-label">扫描项目</span>
+          <span className="intent-summary-modules">{moduleDescription}</span>
+        </div>
+        <div className="intent-summary-line intent-summary-sub">
+          <span className="intent-summary-sub-text">引擎：{engine}（异步任务）</span>
+        </div>
       </div>
       {showNuclei && (
-        <div style={{ marginTop: 10 }}>
+        <div className="intent-advanced">
           <button
             type="button"
             className="intent-advanced-toggle"
@@ -741,34 +843,56 @@ function IntentCard({
           )}
         </div>
       )}
-      <div className="intent-sync-toggle">
-        <label>
-          <input
-            type="checkbox"
-            checked={sync}
-            onChange={(e) => setSync(e.target.checked)}
-          />
-          立即同步执行（默认开启，避免任务卡在队列）
-        </label>
-      </div>
-      <div className="actions">
-        <button className="btn-discard" disabled={disabled}>调整一下</button>
-        <button
-          className="btn-confirm"
-          disabled={disabled || !canConfirm}
-          onClick={() => onConfirm({ ...intent, targets: mergedTargets }, nuclei, sync)}
-        >
-          {disabled ? "创建中…" : (sync ? "立即执行" : "入队执行")}
-        </button>
-      </div>
       {!canConfirm && (
-        <div style={{ marginTop: 8, fontSize: 12, color: "#d48806" }}>
-          ⚠ 还没识别到目标主机/组，请在对话里告诉我“扫描 XX 组”或“扫描 IP 1.2.3.4”
+        <div className="intent-warning">
+          ⚠ 还没识别到目标主机/组，请在对话里补充“扫描 XX 组”或“扫描 IP 1.2.3.4”
         </div>
       )}
+      <div className="actions">
+        {taskId ? (
+          // Historical / already-executed card. Show a static link to
+          // the monitor page instead of an executable button.
+          <>
+            <div className="intent-task-info">
+              <span className="intent-task-badge">
+                ✓ 已创建任务，任务ID：
+              </span>
+              <code className="intent-task-id">{taskId}</code>
+            </div>
+            <a
+              className="btn-confirm"
+              href={`/scan-monitor/${taskId}`}
+              onClick={(e) => {
+                e.preventDefault()
+                onViewTask?.(taskId)
+              }}
+            >
+              查看任务 →
+            </a>
+          </>
+        ) : (
+          <>
+            <button
+              className="btn-cancel"
+              disabled={disabled}
+              onClick={() => onCancel(messageTs)}
+            >
+              取消创建任务
+            </button>
+            <button
+              className="btn-confirm"
+              disabled={disabled || !canConfirm}
+              onClick={() => onConfirm({ ...intent, targets: mergedTargets }, nuclei, messageTs)}
+            >
+              {disabled ? "创建中…" : "立即创建扫描任务"}
+            </button>
+          </>
+        )}
+      </div>
     </div>
   )
 }
+
 // ── 来源列表 ────────────────────────────────────────────
 function SourcesBlock({ sources }: { sources: ChatSource[] }) {
   if (!sources?.length) return null
@@ -802,10 +926,10 @@ function Spin() {
   return <span className="typing-dot"><span/><span/><span/></span>
 }
 
-function parseIntentFromSources(sources: ChatSource[] | undefined): ScanIntentData | null {
-  if (!sources || sources.length === 0) return null
+function parseIntentFromSources(sources: ChatSource[] | undefined): ScanIntentData | undefined {
+  if (!sources || sources.length === 0) return undefined
   const intentSrc = sources.find((s) => s.title === "intent" && s.snippet)
-  if (!intentSrc?.snippet) return null
+  if (!intentSrc?.snippet) return undefined
   try {
     const parsed = JSON.parse(intentSrc.snippet)
     return {
@@ -816,6 +940,6 @@ function parseIntentFromSources(sources: ChatSource[] | undefined): ScanIntentDa
       schedule: parsed.schedule,
     }
   } catch {
-    return null
+    return undefined
   }
 }

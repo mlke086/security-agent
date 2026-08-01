@@ -12,6 +12,7 @@ know not to relax them.
 """
 
 import os
+
 import pytest
 
 from src.common.config.nacos_loader import (
@@ -22,7 +23,6 @@ from src.common.config.nacos_loader import (
     _normalize_env_key,
     apply_nacos_overrides,
 )
-
 
 # --------------------------------------------------------------------- env helpers
 
@@ -257,7 +257,7 @@ def test_startup_order_loads_nacos_before_es_and_pg(monkeypatch):
     monkeypatch.setattr("src.common.db.pg.init_schema", _fake_init_pg)
 
     import asyncio
-    from src.api.main import lifespan
+
     from src.api.main import app
 
     async def _run():

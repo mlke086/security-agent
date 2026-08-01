@@ -1,6 +1,8 @@
 """CrowdStrike Falcon detection event."""
+
 from src.agents.models import AlertIOC, AlertSeverity, AlertSource
 from src.preprocessing.edr_adapter.base import EDRAdapter
+
 
 class CrowdStrikeAdapter(EDRAdapter):
     source = AlertSource.CROWDSTRIKE
@@ -13,11 +15,16 @@ class CrowdStrikeAdapter(EDRAdapter):
 
     def _severity(self):
         sev = str(self.raw.get("severity", "")).lower()
-        if sev == "critical": return AlertSeverity.CRITICAL
-        if sev == "high": return AlertSeverity.HIGH
-        if sev == "medium": return AlertSeverity.MEDIUM
-        if sev == "low": return AlertSeverity.LOW
-        if sev == "informational": return AlertSeverity.INFO
+        if sev == "critical":
+            return AlertSeverity.CRITICAL
+        if sev == "high":
+            return AlertSeverity.HIGH
+        if sev == "medium":
+            return AlertSeverity.MEDIUM
+        if sev == "low":
+            return AlertSeverity.LOW
+        if sev == "informational":
+            return AlertSeverity.INFO
         return AlertSeverity.MEDIUM
 
     def _rule_id(self):
@@ -37,6 +44,7 @@ class CrowdStrikeAdapter(EDRAdapter):
     def _iocs(self):
         ips = []
         ext = self.raw.get("device", {}).get("external_ip")
-        if ext: ips = [ext]
+        if ext:
+            ips = [ext]
         hashes = list(self.raw.get("quarantine_files_sha256", []) or [])
         return AlertIOC(ips=ips, hashes=hashes)

@@ -1,4 +1,5 @@
 """Orchestrator node — rule-based + LLM triage classification with fallback."""
+
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -75,11 +76,16 @@ async def orchestrator_node(state: MainGraphState) -> dict[str, Any]:
 
     try:
         from src.common.audit.audit_logger import get_audit_logger
+
         await get_audit_logger().log(
             event_id=state.get("event_id", "unknown"),
             node="orchestrator",
             action="triage",
-            details={"priority": result.priority, "tags": result.event_tags, "reasoning": result.reasoning},
+            details={
+                "priority": result.priority,
+                "tags": result.event_tags,
+                "reasoning": result.reasoning,
+            },
         )
     except Exception:
         pass

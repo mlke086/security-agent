@@ -68,15 +68,15 @@ class AgentConfigRequest(BaseModel):
 
 class GroupCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, description="Group name")
-    description: str | None = Field(default=None, max_length=512, description="Optional human-readable description")
+    description: str | None = Field(
+        default=None, max_length=512, description="Optional human-readable description"
+    )
 
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 
 class HostGroupUpdateRequest(BaseModel):
-    group: str | None = Field(default=None, description="Target group name; pass null to clear")
-
     group: str | None = Field(default=None, description="Target group name; pass null to clear")
 
 
@@ -334,10 +334,12 @@ async def api_download_binary(
         try:
             from src.agents.enroll import validate_agent_token
 
-            valid = await validate_agent_token(agent_id, effective)
+            token_ok = await validate_agent_token(agent_id, effective)
         except Exception:
-            valid = False
-    if not valid:
+            token_ok = False
+    else:
+        token_ok = bool(valid)
+    if not token_ok:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="enroll token is invalid, expired, or already used",
@@ -389,7 +391,7 @@ async def api_download_ca(
     if not ca_path or not Path(ca_path).is_file():
         raise HTTPException(
             status_code=404,
-            detail="enroll token is invalid, expired, or already used",
+            detail="CA 证书未配置或文件不存在",
         )
 
     return FileResponse(
@@ -470,7 +472,9 @@ async def api_create_group(
     import asyncpg
 
     try:
-        await create_group(req.name, req.description)
+        # description is optional on the request but create_group defaults to
+        # "" -- normalize None to match (keeps the DB write a plain string).
+        await create_group(req.name, req.description or "")
     except asyncpg.UniqueViolationError:
         raise HTTPException(
             status_code=409,
@@ -593,7 +597,7 @@ async def api_get_host(
     if not host:
         raise HTTPException(
             status_code=404,
-            detail="enroll token is invalid, expired, or already used",
+            detail="Host not found",
         )
     return host
 
@@ -611,19 +615,24 @@ async def api_delete_host(
     if not host:
         raise HTTPException(
             status_code=404,
-            detail="enroll token is invalid, expired, or already used",
+            detail="Host not found",
         )
     if purge:
-        # 闁绘せ鏅濋幃濠囧礆閻樼粯鐝熼柨娑欑煯缁骸顔忛煫顓犵憮缂佹儳銇樼€靛矂寮甸崫鍕笒閻犱線娼荤槐婵嬫焼閸喖甯抽悹鍥跺灠閸ㄥ綊宕烽妸褍娈犲☉鎾剁帛濠р偓
         ok = await delete_host_permanently(agent_id)
         if not ok:
+            # Audit the failed purge separately -- HTTPException does not
+            # accept node/action/actor/details (those belong on the audit
+            # logger); passing them here raised a TypeError at runtime.
+            await get_audit_logger().log(
+                event_id=agent_id,
+                node="agents.router",
+                action="delete_permanent_failed",
+                actor=current_user.username,
+                details={"agent_id": agent_id},
+            )
             raise HTTPException(
                 status_code=422,
                 detail="enroll token is invalid, expired, or already used",
-                node="agents.router",
-                action="delete_permanent",
-                actor=current_user.username,
-                details={"agent_id": agent_id},
             )
         return {"status": "ok", "purged": True}
     # P1 (F4) -- revoke the persisted token and tell every worker to
@@ -661,7 +670,7 @@ async def api_upgrade_agent(
     if host is None:
         raise HTTPException(
             status_code=404,
-            detail="enroll token is invalid, expired, or already used",
+            detail="Host not found",
         )
     try:
         prepared = prepare_upgrade(host, body.version)

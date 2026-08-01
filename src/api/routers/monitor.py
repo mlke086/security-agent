@@ -10,6 +10,7 @@ Endpoints:
 RBAC: admin/analyst/viewer all read. This is read-only telemetry, not
 a defensive action.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -25,8 +26,9 @@ router = APIRouter(prefix="/api/v1/agents", tags=["monitor"])
 @router.get("/{agent_id}/monitor")
 async def list_monitor_events(
     agent_id: str = Path(..., min_length=1, max_length=128),
-    limit: int = Query(default=20, ge=1, le=200,
-                       description="Max snapshots to return (most recent first)"),
+    limit: int = Query(
+        default=20, ge=1, le=200, description="Max snapshots to return (most recent first)"
+    ),
     current_user=Depends(require_role("admin", "analyst", "viewer")),
 ) -> dict[str, Any]:
     """Return the most recent N monitor snapshots for ``agent_id``."""

@@ -1,4 +1,4 @@
-﻿"""Sigma detection rule router (Phase 6 of monitoring plan).
+"""Sigma detection rule router (Phase 6 of monitoring plan).
 
 Endpoints:
   GET /api/v1/sigma-rules/summary
@@ -21,8 +21,10 @@ Endpoints:
 RBAC: admin/analyst/viewer can read; only admin can run the import
 (dry-run is harmless but the audit trail is cleaner with admin only).
 """
+
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -41,11 +43,16 @@ router = APIRouter(prefix="/api/v1/sigma-rules", tags=["sigma-rules"])
 # Default location of the import manifest written by the CLI script.
 # Kept in sync with scripts/import_sigma_rules.py; the operator can
 # override by setting the env var SIGMA_RULES_MANIFEST.
-import os
 MANIFEST_PATH = Path(
     os.environ.get(
         "SIGMA_RULES_MANIFEST",
-        str(Path(__file__).resolve().parent.parent.parent / "detection" / "rules" / "imported" / "manifest.json"),
+        str(
+            Path(__file__).resolve().parent.parent.parent
+            / "detection"
+            / "rules"
+            / "imported"
+            / "manifest.json"
+        ),
     )
 )
 
@@ -83,7 +90,9 @@ async def sigma_summary(
 @router.get("")
 async def list_sigma_rules(
     category: str | None = Query(default=None, description="process_creation / file_event / ..."),
-    level: str | None = Query(default=None, description="critical / high / medium / low / informational"),
+    level: str | None = Query(
+        default=None, description="critical / high / medium / low / informational"
+    ),
     os: str | None = Query(default=None, description="linux / macos / windows"),
     detector_supported: bool | None = Query(default=None),
     q: str | None = Query(default=None, description="substring match on rule_id or title"),
@@ -113,7 +122,8 @@ async def list_sigma_rules(
     if q:
         ql = q.lower()
         items = [
-            r for r in items
+            r
+            for r in items
             if ql in (r.get("rule_id") or "").lower() or ql in (r.get("title") or "").lower()
         ]
     return {

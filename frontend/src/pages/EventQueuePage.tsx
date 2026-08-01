@@ -1,9 +1,11 @@
-﻿import { useEffect, useState, useRef } from "react"
+﻿import { useEffect, useState, useRef, useMemo } from "react"
 import { Table, Tag, Button, Drawer, Form, Input, Select, message, Space, Typography, Badge, Progress } from "antd"
 import { PlusOutlined, EyeOutlined } from "@ant-design/icons"
 import { useNavigate } from "react-router-dom"
-import api, { getEvents, submitEvent, getSseToken } from "../api/client"
+import { getEvents, submitEvent, getSseToken } from "../api/client"
 import { useAuth } from "../context/AuthContext"
+import { formatBeijingFull } from "../utils/time"
+import { sseBaseUrl } from "../utils/sseBaseUrl"
 import type { EventRecord } from "../types"
 
 const STATUS_COLORS: Record<string, string> = { processing: "processing", completed: "success", pending_approval: "warning", ignored: "default", error: "error", rejected: "error" }
@@ -48,7 +50,7 @@ export default function EventQueuePage() {
       try {
         const shortToken = await getSseToken("events_list")
         if (cancelled) return
-        const base = (api.defaults.baseURL || "").replace(/\/+$/, "")
+        const base = sseBaseUrl()
         // base 已含 /api/v1，只拼 /events/stream（不能重复 /api/v1，否则 404 致
         // EventSource 无限重连占满连接数致所有请求阻塞）。
         es = new EventSource(`${base}/events/stream?token=${shortToken}`)
@@ -77,16 +79,17 @@ export default function EventQueuePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters])
 
-  const columns = [
-    { title: "时间", dataIndex: "submitted_at", key: "submitted_at", width: 160, render: (v: string) => new Date(v).toLocaleTimeString() },
+  // V12 阶段 3.2: memoize columns
+  const columns = useMemo(() => [
+    { title: "时间", dataIndex: "submitted_at", key: "submitted_at", width: 180, render: (v: string) => formatBeijingFull(v) },
     { title: "来源", dataIndex: "source", key: "source", width: 80 },
     { title: "定级", dataIndex: "priority", key: "priority", width: 70, render: (v: string) => v ? <Tag color={PRIORITY_COLORS[v] || "default"}>{v}</Tag> : "-" },
     { title: "结论", dataIndex: "final_verdict", key: "final_verdict", width: 110, render: (v: string) => v ? <Tag color={VERDICT_COLORS[v] || "default"}>{v}</Tag> : "-" },
     { title: "置信度", dataIndex: "confidence", key: "confidence", width: 120, render: (v: number | null) => v != null ? <Progress percent={Math.round(v * 100)} size="small" /> : "-" },
-    { title: "状态", dataIndex: "status", key: "status", width: 120, render: (v: string) => <Badge status={STATUS_COLORS[v] as any} text={v} /> },
+    { title: "状态", dataIndex: "status", key: "status", width: 120, render: (v: string) => <Badge status={(STATUS_COLORS[v] || "default") as import("antd").BadgeProps["status"]} text={v} /> },
     { title: "耗时", dataIndex: "duration_ms", key: "duration_ms", width: 70, render: (v: number | null) => v ? `${v}ms` : "-" },
     { title: "操作", key: "actions", width: 100, render: (_: any, r: EventRecord) => <Button size="small" icon={<EyeOutlined />} onClick={() => navigate(`/events/${r.event_id}`)}>轨迹</Button> },
-  ]
+  ], [])
 
   return (
     <div>
@@ -100,7 +103,7 @@ export default function EventQueuePage() {
         </Space>
       </Space>
 
-      <Table dataSource={events} columns={columns} rowKey="event_id" loading={loading} pagination={{ pageSize: 20, total, showTotal: (t) => `共 ${t} 个事件` }} size="small" />
+      <Table dataSource={events} columns={columns} rowKey="event_id" loading={loading} pagination={{ defaultPageSize: 20, total, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"], showTotal: (t) => `共 ${t} 个事件` }} size="small" />
 
       <Drawer title="提交新事件" open={drawerOpen} onClose={() => setDrawerOpen(false)} width={500}>
         <Form form={form} layout="vertical" onFinish={async (values) => {

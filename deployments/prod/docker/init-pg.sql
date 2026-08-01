@@ -10,7 +10,8 @@
 --   CREATE DATABASE SecAgent OWNER secagent;
 -- ============================================================
 
--- 1) 默认 schema 走 src.common.db.pg._SCHEMA_SQL,这里只确保业务必需的拓展
+-- 1) 默认 schema 走 src.common.db.pg._SCHEMA_SQL(包含 users 表的最新 DDL:
+--    created_at, updated_at, last_login_at, deleted_at),这里只确保业务必需的拓展
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- 2) 一次性塞默认模型:DeepSeek(已默认)+ 空模型槽位

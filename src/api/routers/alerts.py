@@ -10,14 +10,14 @@ Endpoints:
   GET  /api/v1/alerts/{id}     - single alert.
   PATCH /api/v1/alerts/{id}/status - acknowledge / resolve / false-positive.
 """
-from datetime import datetime, UTC
-from typing import Any
+
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.api.auth.routes import require_role
 from src.agents.alert_store import get_alert_store
 from src.agents.models import AlertIngestRequest, AlertIngestResponse
+from src.api.auth.routes import require_role
 from src.common.logging.logger import get_logger
 from src.preprocessing.edr_adapter import normalize
 
@@ -67,7 +67,9 @@ async def ingest_alert(
 @router.get("")
 async def list_alerts(
     severity: str | None = Query(default=None, description="critical/high/medium/low/info"),
-    status: str | None = Query(default=None, description="new/acknowledged/in_progress/resolved/false_positive"),
+    status: str | None = Query(
+        default=None, description="new/acknowledged/in_progress/resolved/false_positive"
+    ),
     source: str | None = Query(default=None),
     hostname: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
@@ -134,6 +136,7 @@ def _serialise(row: dict) -> dict:
     parse them back into dicts/list so the UI gets structured data.
     """
     import json
+
     out = {}
     for k, v in row.items():
         if isinstance(v, datetime):

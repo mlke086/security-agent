@@ -120,12 +120,36 @@ class Settings(BaseSettings):
     # upgrade payload reads deployments/agent/dist/VERSION first; this value
     # is the fallback when that file is missing.
     agent_binary_version: str = "0.1.0"
+    # Nuclei CLI 版本控制：内网下载站 base URL + 版本号。包名按约定拼接为
+    # {base}/nuclei_{version}_{os}_{arch}.zip。Nacos 可热更新；安装脚本生成时
+    # 嵌入，心跳路径据此对比 agent 上报版本，不一致则下发 nuclei_upgrade。
+    # V12 阶段 5.2: 默认空串。内网下载站 URL/版本由 Nacos 热更新注入；
+    # 硬编码内网 IP 在出厂部署中必然失效且是信息泄漏。runtime 已处理空
+    # base URL（trigger_nuclei_upgrade 返回 early，_nuclei_templates_url 返回 ""）。
+    nuclei_download_base_url: str = ""
+    nuclei_version: str = ""
+    # nuclei-templates 模板库版本。包名约定 {base}/nuclei-templates-{version}.zip。
+    # 由规则页「同步 Nuclei 模板」按钮触发，服务端推 nuclei_templates_update 命令
+    # 给在线 agent，agent 从内网下载站拉取并解压到 /opt/secagent/templates。
+    # 模板库浏览/编辑存 ES（nuclei-templates 索引），不走 Nacos。
+    nuclei_templates_version: str = ""
     rules_sync_source: str = "nvd"
     rules_sync_cron: str = "0 3 * * *"
+    # 2026-07-31 UX upgrade ("漏洞清单整理 + 自动更新修复时间"): when enabled the
+    # aggregate node reconciles new findings against stored vulns (one record
+    # per host+vuln with scan_history) and auto-marks disappeared vulns as
+    # fixed. Flip to false to roll back to the legacy plain-save behaviour.
+    vuln_merge_enabled: bool = True
     # 需求2.2：规则数据源。nvd=NVD API(国外,带key); github=GitHub advisory-database
     # (国内可访问 GitHub)。离线导入另支持 NVD json / advisory zip / rulepack。
     nvd_api_key: str = ""  # NVD API key，提升限速(50req/30s)，留空走匿名(5req/30s)
     nvd_proxy: str = ""  # NVD 代理(国内访问超时时配，如 http://192.168.254.121:7897)
+    # NVD HTTP 请求超时(秒)。NVD 响应慢或网络差时可调大，默认 30。
+    nvd_timeout_sec: int = Field(default=30, ge=5, le=300)
+    # V12 5.9 (2026-08-02): LLM 请求超时(秒)。langchain 底层 httpx 默认 30s，
+    # "详细介绍某主机漏洞情况"这类长上下文回答容易触顶报
+    # "timeout of 30000ms exceeded"。默认 120s。
+    llm_request_timeout_sec: int = Field(default=120, ge=10, le=600)
     # NVD 拉取最近 N 小时更新的 CVE；0 = 兜底走 DEFAULT_LOOKBACK_HOURS(模块常量)。
     nvd_lookback_hours: int = Field(default=24, ge=0, le=8760)
     # NVD 每页条数；服务端硬上限 2000，超出会 400。
@@ -138,10 +162,6 @@ class Settings(BaseSettings):
     # seeder refuses to start otherwise. ``dev_mode=true`` relaxes the
     # check and issues a random per-process password logged at startup.
     dev_mode: bool = False
-    # Version stamped onto freshly built Agent binaries. The actual upgrade
-    # payload reads deployments/agent/dist/VERSION first; this value is the
-    # fallback when that file is missing.
-    agent_binary_version: str = "0.1.0"
     default_admin_password: str = ""
     default_analyst_password: str = ""
     default_viewer_password: str = ""

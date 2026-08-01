@@ -1,4 +1,4 @@
-﻿"""End-to-end verification for the Phase 6 Sigma rule importer API.
+"""End-to-end verification for the Phase 6 Sigma rule importer API.
 
 Exercises:
   - GET /api/v1/sigma-rules/summary (reads manifest from disk)
@@ -11,9 +11,9 @@ The test seeds the manifest by running the CLI subprocess so the
 filesystem is in the same state as a real operator run. No PG/ES
 needed; the manifest is just a JSON file on disk.
 """
+
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -37,10 +37,13 @@ FIXTURE = REPO / "tests" / "fixtures" / "sigma_zoo"
 
 # ---------- fixtures --------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def client():
     from fastapi.testclient import TestClient
+
     from src.api.main import app
+
     with TestClient(app) as c:
         yield c
 
@@ -89,9 +92,12 @@ def manifest_seed(monkeypatch_module):
     # Re-import the config module so the env change is picked up by the
     # already-imported sigma_rules module.
     import importlib
+
     from src.api.routers import sigma_rules as _sr
+
     importlib.reload(_sr)
     from src.api import main as _main
+
     importlib.reload(_main)
     yield out_dir
     # Cleanup is implicit: shutil.rmtree at next run + GC of module
@@ -101,10 +107,13 @@ def manifest_seed(monkeypatch_module):
 def monkeypatch_module():
     """session-scoped env patcher (pytest only ships function-scoped)."""
     import os as _os
+
     saved = {}
+
     def setenv(k, v):
         saved.setdefault(k, _os.environ.get(k))
         _os.environ[k] = v
+
     yield type("M", (), {"setenv": staticmethod(setenv)})()
     for k, v in saved.items():
         if v is None:
@@ -114,6 +123,7 @@ def monkeypatch_module():
 
 
 # ---------- tests ------------------------------------------------------------
+
 
 def test_01_summary_after_import(client, admin_headers, manifest_seed):
     r = client.get("/api/v1/sigma-rules/summary", headers=admin_headers)
@@ -211,7 +221,9 @@ def test_10_admin_dry_run_import(client, admin_headers, manifest_seed):
     assert body["skipped"] == 1
     # No new files copied -- the manifest_seed fixture is the
     # only thing that wrote anything.
-    assert "rules" not in body  # the dry-run endpoint returns to_manifest(), not the full rules list
+    assert (
+        "rules" not in body
+    )  # the dry-run endpoint returns to_manifest(), not the full rules list
 
 
 def test_11_dry_run_missing_path(client, admin_headers, manifest_seed):

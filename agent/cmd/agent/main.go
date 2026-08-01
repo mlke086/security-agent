@@ -15,11 +15,12 @@ import (
 	"github.com/security-agent/agent/internal/config"
 	"github.com/security-agent/agent/internal/crypto"
 	"github.com/security-agent/agent/internal/enroll"
-	"github.com/security-agent/agent/internal/protection"
 	"github.com/security-agent/agent/internal/monitor"
+	"github.com/security-agent/agent/internal/protection"
 	"github.com/security-agent/agent/internal/queue"
 	"github.com/security-agent/agent/internal/response"
 	"github.com/security-agent/agent/internal/scan"
+	"github.com/security-agent/agent/internal/scan/nuclei"
 	"github.com/security-agent/agent/internal/updater"
 	"github.com/security-agent/agent/internal/version"
 )
@@ -152,20 +153,35 @@ func main() {
 	} else if persistedVer != "" {
 		client.SetRuleVersion(persistedVer)
 		// 同步回 config.json，使下次启动直接读到最新版本（而非 enroll 时的旧值）。
+		// G-P1-3 (V12): save to cfgPath (the CONFIG_PATH override) instead of
+		// DefaultConfigPath -- a dev/test override was being written to the
+		// default path, so a restart without CONFIG_PATH re-pushed the pack.
 		cfg.RuleVersion = persistedVer
-		if serr := cfg.Save(config.DefaultConfigPath()); serr != nil {
+		if serr := cfg.Save(cfgPath); serr != nil {
 			log.Printf("[agent] WARN: save config (rule_version) failed: %v", serr)
 		}
 		log.Printf("[agent] active rule version: %s", persistedVer)
 	}
 
+	// Detect the installed nuclei CLI version once at startup so the first
+	// heartbeat reports it. The server compares this against the
+	// Nacos-configured NUCLEI_VERSION and pushes a nuclei_upgrade when they
+	// diverge. Empty string (nuclei absent) is reported as-is -- the server
+	// treats that as "needs install" and pushes the upgrade.
+	if nv := nuclei.DetectDefaultVersion(); nv != "" {
+		client.SetNucleiVersion(nv)
+		log.Printf("[agent] active nuclei version: %s", nv)
+	} else {
+		log.Printf("[agent] nuclei not installed; server may push a nuclei_upgrade")
+	}
+
 	// Wire scan engine callbacks to client send methods
 	engine.OnStep = client.SendStep
-	engine.OnResult = func(taskID, hostname string, findings []scan.Finding, batch int, isFinal bool) {
+	engine.OnResult = func(taskID, hostname string, findings []scan.Finding, batch int, isFinal bool, scannedCategories []string) {
 		if isFinal {
 			client.SetStatusReason("")
 		}
-		client.SendResult(taskID, hostname, findings, batch, isFinal)
+		client.SendResult(taskID, hostname, findings, batch, isFinal, scannedCategories)
 	}
 	engine.OnAck = func(taskID string, accepted bool, reason string) {
 		// Update the heartbeat status-reason slot so the console can
@@ -215,12 +231,13 @@ func main() {
 		// next heartbeat reports it and the server stops re-pushing the
 		// same pack. Without this the in-memory ruleVersion stays "" and
 		// trigger_update_if_outdated keeps firing on every heartbeat.
+		// V10 P2 (V12): SetRuleVersion was called twice (merge residue).
 		client.SetRuleVersion(req.RuleVersion)
 		// 成功加载：更新心跳上报的 rule_version，并持久化到 config.json，
 		// 使重启后心跳仍上报最新版本、服务端不再重复下发同一包。
-		client.SetRuleVersion(req.RuleVersion)
 		cfg.RuleVersion = req.RuleVersion
-		if serr := cfg.Save(config.DefaultConfigPath()); serr != nil {
+		// G-P1-3 (V12): save to cfgPath, not DefaultConfigPath.
+		if serr := cfg.Save(cfgPath); serr != nil {
 			log.Printf("[agent] WARN: save config (rule_version) after update failed: %v", serr)
 		}
 	}
@@ -248,10 +265,57 @@ func main() {
 		client.SendUpdateAck("agent", req.Version, true, "")
 		go func(req updater.UpgradeRequest) {
 			if err := updater.ApplyStagedAndRestart(req, cfg); err != nil {
-				log.Printf("[agent] restart failed: %v", err)
-				client.SendUpdateAck("agent", req.Version, false, "restart failed: "+err.Error())
+				// G-P1-2 (V12): do NOT send a second (failure) ack after the
+				// success ack above -- the server would overwrite the
+				// "restarting" state with "failed" and never self-heal.
+				// The old binary is untouched (HandleUpgrade staged it), the
+				// next heartbeat still reports the old version, and the
+				// server's version-mismatch logic re-pushes the upgrade.
+				log.Printf("[agent] restart failed: %v (no second ack; heartbeat mismatch will re-push)", err)
 			}
 		}(req)
+	}
+
+	// nuclei_upgrade -> swap the nuclei CLI binary in place. Unlike
+	// agent_upgrade this needs no restart: nuclei is spawned as a fresh
+	// subprocess per scan, so the next scan picks up the new binary. After a
+	// successful swap we re-detect the version and stamp it onto the
+	// heartbeat slot so the server sees the new version and stops re-pushing.
+	client.OnNucleiUpgrade = func(payload json.RawMessage) {
+		var req updater.NucleiUpgradeRequest
+		if err := json.Unmarshal(payload, &req); err != nil {
+			log.Printf("[agent] failed to parse nuclei_upgrade: %v", err)
+			client.SendUpdateAck("nuclei", "", false, err.Error())
+			return
+		}
+		req.CAPath = cfg.CAPath
+		if err := updater.HandleNucleiUpgrade(req, client.SendUpdateAck); err != nil {
+			log.Printf("[agent] nuclei upgrade failed: %v", err)
+			return
+		}
+		// Re-detect and report so the server's next version compare matches.
+		newVer := nuclei.DetectDefaultVersion()
+		client.SetNucleiVersion(newVer)
+		log.Printf("[agent] nuclei upgrade complete, reported version: %q", newVer)
+	}
+
+	// nuclei_templates_update -> swap the nuclei-templates bundle in
+	// /opt/secagent/templates. Triggered manually from the rules page「同步
+	// Nuclei 模板」button. No restart: the next nuclei scan reads -t <dir>
+	// fresh, so it picks up the new templates immediately.
+	client.OnNucleiTemplatesUpdate = func(payload json.RawMessage) {
+		var req updater.NucleiTemplatesUpdateRequest
+		if err := json.Unmarshal(payload, &req); err != nil {
+			log.Printf("[agent] failed to parse nuclei_templates_update: %v", err)
+			client.SendUpdateAck("nuclei_templates", "", false, err.Error())
+			return
+		}
+		req.CAPath = cfg.CAPath
+		if err := updater.HandleNucleiTemplatesUpdate(req, client.SendUpdateAck); err != nil {
+			log.Printf("[agent] nuclei templates update failed: %v", err)
+			return
+		}
+		log.Printf("[agent] nuclei templates v%s installed", req.Version)
 	}
 
 	// Gap-4: config_update -> heartbeat interval + resource limit
@@ -293,6 +357,15 @@ func main() {
 		respDispatcher.Handle(payload)
 	}
 
+	// agent_shutdown: server sends this when the operator decommissions
+	// the host. Cancel the root context so Connect() returns, all defers
+	// run (monitor.Stop, queue.Close, engine cleanup), and the process
+	// exits cleanly. The systemd unit Restart=no ensures it stays down.
+	client.OnShutdown = func() {
+		log.Println("[agent] server requested shutdown, cancelling root context")
+		cancel()
+	}
+
 	// Phase 5: lightweight host monitor. Polls the process table every
 	// MonitorIntervalSec and ships a snapshot up the WS as ``monitor_event``.
 	// The default is 30s (rather than 3-5s) because the snapshot payload
@@ -306,8 +379,6 @@ func main() {
 	defer hostMonitor.Stop()
 
 	log.Println("[agent] engine wired, connecting to server...")
-
-	// Monitor.Start 暂缓（nil 指针问题需排查 protection 包）
 
 	if err := client.Connect(ctx); err != nil {
 		log.Printf("[agent] connection error: %v", err)

@@ -38,6 +38,11 @@ func dbgLog(format string, args ...any) {
 type Client struct {
 	cfg         *config.Config
 	ruleVersion atomic.Value // string; updated by HandleRuleUpdate, read by heartbeat
+	// nucleiVersion holds the installed nuclei CLI version (e.g. "3.11.0"),
+	// or "" when nuclei is absent. Seeded by main.go at startup and refreshed
+	// after a successful nuclei_upgrade so the next heartbeat reports it and
+	// the server stops re-pushing the same upgrade.
+	nucleiVersion atomic.Value // string
 	Queue       *queue.Queue
 	conn        *websocket.Conn
 	mu          sync.Mutex
@@ -69,8 +74,20 @@ type Client struct {
 	OnConfigUpdate func(payload json.RawMessage)
 	// P1-GO-06 (2026-07-19): scan_cancel dispatcher. Wired to engine.CancelScan.
 	OnScanCancel   func(payload json.RawMessage)
+	// nuclei_upgrade dispatcher: the server pushes this when the agent's
+	// reported nuclei_version does not match the Nacos-configured version.
+	// Wired to updater.HandleNucleiUpgrade in main.go.
+	OnNucleiUpgrade func(payload json.RawMessage)
+	// nuclei_templates_update dispatcher: the rules page「同步 Nuclei 模板」
+	// button pushes this; the agent downloads the nuclei-templates zip from
+	// the internal mirror and extracts it into /opt/secagent/templates.
+	OnNucleiTemplatesUpdate func(payload json.RawMessage)
 	// Phase 4: response_action dispatcher. Wired to response.Dispatcher.
 	OnResponseAction func(payload json.RawMessage)
+	// agent_shutdown: server sends this before dropping the WS on
+	// decommission. The handler should cancel the root context so the
+	// agent performs a clean shutdown (flush queue, stop scans, exit).
+	OnShutdown func()
 }
 
 // NewClient creates a new WebSocket client.
@@ -97,6 +114,24 @@ func (c *Client) SetRuleVersion(v string) {
 // RuleVersion returns the current rule-pack version (thread-safe).
 func (c *Client) RuleVersion() string {
 	if v := c.ruleVersion.Load(); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// SetNucleiVersion records the installed nuclei CLI version, or "" when
+// nuclei is absent. Safe to call from any goroutine; the next heartbeat tick
+// reports it so the server can compare against the Nacos-configured version.
+// Called by main.go at startup and after a successful nuclei_upgrade.
+func (c *Client) SetNucleiVersion(v string) {
+	c.nucleiVersion.Store(v)
+}
+
+// NucleiVersion returns the current nuclei CLI version (thread-safe).
+func (c *Client) NucleiVersion() string {
+	if v := c.nucleiVersion.Load(); v != nil {
 		if s, ok := v.(string); ok {
 			return s
 		}
@@ -178,8 +213,6 @@ func (c *Client) Connect(ctx context.Context) error {
 				dialer.TLSClientConfig = &tls.Config{RootCAs: caCertPool}
 			}
 		}
-
-		dialer.HandshakeTimeout = 10 * time.Second
 
 		conn, _, err := dialer.DialContext(ctx, wsURL, headers)
 		if err != nil {
@@ -304,8 +337,10 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 			"payload": map[string]interface{}{
 				"agent_version": c.cfg.AgentVersion,
 				"rule_version":  c.RuleVersion(),
+				"nuclei_version": c.NucleiVersion(),
 				"hostname":      getHostname(),
 				"os":            runtime.GOOS,
+				"arch":          runtime.GOARCH,
 				"cpu":           0,
 				"mem":           0,
 				"status_reason": reason,
@@ -374,6 +409,36 @@ func (c *Client) handleMessage(raw []byte) {
 		if c.OnConfigUpdate != nil {
 			c.OnConfigUpdate(msg.Payload)
 		}
+	case "nuclei_upgrade":
+		// Server pushes this when the heartbeat's nuclei_version does not
+		// match the Nacos-configured version. Verified like other sensitive
+		// commands so a MitM cannot redirect the agent to an attacker URL.
+		dbgLog("[comm] dbg_msg type=%q ts=%q payload=%s sig=%q",
+			msg.Type, msg.TS, string(msg.Payload), msg.Sig)
+		if err := crypto.Verify(msg.Type, msg.TS, msg.Payload, msg.Sig); err != nil {
+			log.Printf("[comm] signature verification failed for %s: %v", msg.Type, err)
+			return
+		}
+		if c.OnNucleiUpgrade != nil {
+			c.OnNucleiUpgrade(msg.Payload)
+		} else {
+			log.Println("[comm] nuclei_upgrade ignored (no handler wired)")
+		}
+	case "nuclei_templates_update":
+		// Rules page「同步 Nuclei 模板」button: download + extract the
+		// nuclei-templates bundle into /opt/secagent/templates. Verified
+		// like other sensitive commands so a MitM cannot swap the URL.
+		dbgLog("[comm] dbg_msg type=%q ts=%q payload=%s sig=%q",
+			msg.Type, msg.TS, string(msg.Payload), msg.Sig)
+		if err := crypto.Verify(msg.Type, msg.TS, msg.Payload, msg.Sig); err != nil {
+			log.Printf("[comm] signature verification failed for %s: %v", msg.Type, err)
+			return
+		}
+		if c.OnNucleiTemplatesUpdate != nil {
+			c.OnNucleiTemplatesUpdate(msg.Payload)
+		} else {
+			log.Println("[comm] nuclei_templates_update ignored (no handler wired)")
+		}
 	case "scan_cancel":
 		dbgLog("[comm] dbg_msg type=%q ts=%q payload=%s sig=%q",
 			msg.Type, msg.TS, string(msg.Payload), msg.Sig)
@@ -401,6 +466,21 @@ func (c *Client) handleMessage(raw []byte) {
 		} else {
 			log.Println("[comm] response_action ignored (no handler wired)")
 		}
+	case "agent_shutdown":
+		// Server sends this before dropping the WS on decommission.
+		// Must be Ed25519-signed so a MitM cannot trigger an agent exit.
+		dbgLog("[comm] dbg_msg type=%q ts=%q payload=%s sig=%q",
+			msg.Type, msg.TS, string(msg.Payload), msg.Sig)
+		if err := crypto.Verify(msg.Type, msg.TS, msg.Payload, msg.Sig); err != nil {
+			log.Printf("[comm] signature verification failed for %s: %v", msg.Type, err)
+			return
+		}
+		log.Println("[agent] received agent_shutdown -- stopping")
+		if c.OnShutdown != nil {
+			c.OnShutdown()
+		} else {
+			log.Println("[agent] agent_shutdown ignored (no handler wired)")
+		}
 	case "keepalive":
 		// 后端每 30s 发的应用层保活，重置 read deadline，无需处理。
 	default:
@@ -413,9 +493,12 @@ func (c *Client) send(msg map[string]interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	connNil := c.conn == nil
-	msgType, _ := msg["type"].(string)
-	log.Printf("[comm] c.send type=%q connNil=%v", msgType, connNil)
 	if connNil {
+		// S-P2-5 (V12): only log the offline fallback (rare); the normal
+		// send path below stays quiet -- heartbeats + scan_result would
+		// otherwise flood INFO logs twice per message.
+		msgType, _ := msg["type"].(string)
+		log.Printf("[comm] send connNil type=%q -> offline queue", msgType)
 		// Push to offline queue
 		if c.Queue != nil {
 			c.Queue.Push("outgoing", msg)
@@ -431,11 +514,10 @@ func (c *Client) send(msg map[string]interface{}) {
 	if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		log.Printf("[comm] set_write_deadline_failed: %v", err)
 	}
-	err := c.conn.WriteJSON(msg)
-	if err != nil {
+	// S-P2-5 (V12): success is silent -- heartbeats + scan_result would
+	// otherwise flood INFO logs twice per message. Errors still log.
+	if err := c.conn.WriteJSON(msg); err != nil {
 		log.Printf("[comm] send error: %v", err)
-	} else {
-		log.Printf("[comm] send OK type=%q", msgType)
 	}
 	// Clear the deadline so subsequent reads / heartbeats are not bound
 	// by this 10s budget.
@@ -458,20 +540,27 @@ func (c *Client) SendStep(taskID, step, status, message string) {
 }
 
 // SendResult sends scan findings to the server.
-func (c *Client) SendResult(taskID, hostname string, findings interface{}, batch int, isFinal bool) {
+func (c *Client) SendResult(taskID, hostname string, findings interface{}, batch int, isFinal bool, scannedCategories []string) {
 	log.Printf("[comm] SendResult task=%s batch=%d is_final=%v findings=%d",
 		taskID, batch, isFinal, len(findingsAsSlice(findings)))
+	payload := map[string]interface{}{
+		"task_id":  taskID,
+		"hostname": hostname,
+		"findings": findings,
+		"batch":    batch,
+		"is_final": isFinal,
+	}
+	// 2026-07-31 UX upgrade: modules this agent actually completed, only on
+	// the final batch. The server's auto-fix refuses to act without it
+	// (legacy agents keep working with plain inserts).
+	if len(scannedCategories) > 0 {
+		payload["scanned_categories"] = scannedCategories
+	}
 	c.send(map[string]interface{}{
-		"v":    1,
-		"type": "scan_result",
-		"ts":   time.Now().UTC().Format(time.RFC3339),
-		"payload": map[string]interface{}{
-			"task_id":  taskID,
-			"hostname": hostname,
-			"findings": findings,
-			"batch":    batch,
-			"is_final": isFinal,
-		},
+		"v":       1,
+		"type":    "scan_result",
+		"ts":      time.Now().UTC().Format(time.RFC3339),
+		"payload": payload,
 	})
 }
 
@@ -573,14 +662,4 @@ func (c *Client) processQueue() {
 func getHostname() string {
 	hostname, _ := os.Hostname()
 	return hostname
-}
-
-func getCPUUsage() int {
-	return runtime.NumGoroutine()
-}
-
-func getMemUsage() int {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return int(m.Alloc / 1024 / 1024)
 }

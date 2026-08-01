@@ -115,6 +115,33 @@ except Exception as _e:
 
 
 @_pytest.fixture(autouse=True)
+def _reset_shared_redis_es_clients():
+    """S-P1-1 / S-P1-8 (V12): reset the lazy shared redis/ES clients before
+    every test. The modules cache a single client after first use; without
+    this reset, a mock injected via ``patch(..., from_url)`` in one test
+    would leak into the next, and real clients created mid-suite would
+    survive into tests that expect ``from_url`` to be called."""
+    import src.agents.manager as _mgr
+    import src.agents.nuclei_templates as _nt
+    import src.agents.rules_sync as _rs
+    import src.agents.upgrade as _up
+    import src.agents.ws_gateway as _wg
+    import src.api.routers.vulnscan as _vr
+    import src.orchestration.subgraphs.vulnscan.nodes as _vn
+
+    for mod in (_vn, _vr, _nt, _up, _mgr, _rs, _wg):
+        for attr in ("_redis_client", "_es_client"):
+            if hasattr(mod, attr):
+                setattr(mod, attr, None)
+    yield
+    # Tear down: keep the globals clean for the next test as well.
+    for mod in (_vn, _vr, _nt, _up, _mgr, _rs, _wg):
+        for attr in ("_redis_client", "_es_client"):
+            if hasattr(mod, attr):
+                setattr(mod, attr, None)
+
+
+@_pytest.fixture(autouse=True)
 def _reset_test_passwords_each_test():
     """Reset admin/analyst/viewer/responder passwords to the canonical
     admin123 / ... at the start of every pytest session. Module-level

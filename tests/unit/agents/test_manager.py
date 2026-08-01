@@ -1,4 +1,5 @@
-﻿"""Unit tests for agent manager: heartbeat, register, offline, CRUD."""
+"""Unit tests for agent manager: heartbeat, register, offline, CRUD."""
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,6 +14,7 @@ from src.agents.manager import (
 )
 
 # -- register_online ----------------------------------------------------------
+
 
 class TestRegisterOnline:
     @pytest.mark.asyncio
@@ -43,6 +45,7 @@ class TestRegisterOnline:
 
 # -- heartbeat ----------------------------------------------------------------
 
+
 class TestHeartbeat:
     @pytest.mark.asyncio
     async def test_heartbeat_refreshes_ttl(self):
@@ -59,7 +62,9 @@ class TestHeartbeat:
             mock_settings.return_value.agent_heartbeat_interval = 60
             await heartbeat("agent-1", {"ts": "2026-01-01T00:00:00Z"})
             mock_redis.setex.assert_called_once()
-            mock_store.update_host.assert_called_with("agent-1", last_heartbeat="2026-01-01T00:00:00Z")
+            mock_store.update_host.assert_called_with(
+                "agent-1", last_heartbeat="2026-01-01T00:00:00Z"
+            )
 
     @pytest.mark.asyncio
     async def test_heartbeat_updates_version_fields(self):
@@ -74,11 +79,14 @@ class TestHeartbeat:
             patch("src.agents.manager.get_settings") as mock_settings,
         ):
             mock_settings.return_value.agent_heartbeat_interval = 60
-            await heartbeat("agent-1", {
-                "ts": "2026-01-01T00:00:00Z",
-                "agent_version": "0.2.0",
-                "rule_version": "v3",
-            })
+            await heartbeat(
+                "agent-1",
+                {
+                    "ts": "2026-01-01T00:00:00Z",
+                    "agent_version": "0.2.0",
+                    "rule_version": "v3",
+                },
+            )
             mock_store.update_host.assert_called_with(
                 "agent-1",
                 last_heartbeat="2026-01-01T00:00:00Z",
@@ -88,6 +96,7 @@ class TestHeartbeat:
 
 
 # -- mark_offline_expired ----------------------------------------------------
+
 
 class TestMarkOfflineExpired:
     @pytest.mark.asyncio
@@ -119,6 +128,7 @@ class TestMarkOfflineExpired:
 
 # -- list_hosts / get_host ---------------------------------------------------
 
+
 class TestHostQueries:
     @pytest.mark.asyncio
     async def test_list_hosts_with_filters(self):
@@ -135,7 +145,10 @@ class TestHostQueries:
     @pytest.mark.asyncio
     async def test_get_host_found(self):
         from src.agents.models import Host
-        host = Host(agent_id="a1", hostname="h1", ip="10.0.0.1", os="linux", arch="amd64", kernel="5.15")
+
+        host = Host(
+            agent_id="a1", hostname="h1", ip="10.0.0.1", os="linux", arch="amd64", kernel="5.15"
+        )
         mock_store = AsyncMock()
         mock_store.get_host.return_value = host
 
@@ -154,6 +167,7 @@ class TestHostQueries:
 
 
 # -- decommission ------------------------------------------------------------
+
 
 class TestDecommission:
     @pytest.mark.asyncio

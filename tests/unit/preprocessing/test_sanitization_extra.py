@@ -1,4 +1,5 @@
 """Additional sanitization tests — Span resolution and engine edge cases."""
+
 import re
 
 from src.preprocessing.sanitization.engine import SanitizationEngine

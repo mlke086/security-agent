@@ -94,18 +94,27 @@ class ModelAdapter:
     @staticmethod
     def _build_llm(cfg) -> BaseChatModel:
         """Construct a LangChain chat client from a ModelConfig."""
+        from src.common.config.settings import get_settings
+
+        # V12 5.9 (2026-08-02): langchain's underlying httpx defaults to a
+        # 30s read timeout -- "详细介绍某主机漏洞情况" style long-context
+        # answers regularly exceed it ("timeout of 30000ms exceeded").
+        # Honor the configurable request timeout (default 120s).
+        timeout_sec = get_settings().llm_request_timeout_sec
         if cfg.provider == "claude":
             return ChatAnthropic(
                 model=cfg.model_name,
                 api_key=cfg.api_key,
                 temperature=cfg.temperature,
                 max_tokens=cfg.max_tokens,
+                timeout=timeout_sec,
             )
         # openai / vllm -> OpenAI-compatible protocol via ChatOpenAI.
         kwargs = {
             "model": cfg.model_name,
             "api_key": cfg.api_key or "EMPTY",
             "temperature": cfg.temperature,
+            "timeout": timeout_sec,
         }
         if cfg.base_url:
             kwargs["base_url"] = cfg.base_url
@@ -116,18 +125,22 @@ class ModelAdapter:
         """Env fallback (pre-DB / PG-unavailable). Returns (llm, provider)."""
         settings = get_settings()
         provider = settings.llm_provider
+        # V12 5.9: same request-timeout override as _build_llm.
+        timeout_sec = settings.llm_request_timeout_sec
         if provider == "claude":
             llm = ChatAnthropic(
                 model="claude-sonnet-4-5",
                 api_key=settings.anthropic_api_key,
                 temperature=0.1,
                 max_tokens=4096,
+                timeout=timeout_sec,
             )
         elif provider == "openai":
             kwargs = {
                 "model": settings.openai_model,
                 "api_key": settings.openai_api_key,
                 "temperature": 0.1,
+                "timeout": timeout_sec,
             }
             if settings.openai_base_url:
                 kwargs["base_url"] = settings.openai_base_url
@@ -138,6 +151,7 @@ class ModelAdapter:
                 base_url=settings.vllm_base_url,
                 api_key=settings.openai_api_key or "EMPTY",
                 temperature=0.1,
+                timeout=timeout_sec,
             )
         return llm, provider
 
@@ -149,6 +163,52 @@ class ModelAdapter:
         else:
             self._cache.pop(str(model_id), None)
             self._cache.pop("default", None)  # default may have referenced it
+
+    @staticmethod
+    def _parse_structured_content(content, schema: type[T]) -> T:
+        """Parse a JSON object even when a reasoning model prefixes prose."""
+
+        if isinstance(content, list):
+            content = "".join(
+                str(part.get("text", "")) if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        text = str(content or "").strip()
+        try:
+            return schema.model_validate_json(text)
+        except Exception as exact_error:
+            decoder = json.JSONDecoder()
+            candidates: list[tuple[int, dict]] = []
+            for idx, char in enumerate(text):
+                if char != "{":
+                    continue
+                try:
+                    value, end = decoder.raw_decode(text[idx:])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict):
+                    candidates.append((end, value))
+            for _span, value in sorted(candidates, reverse=True, key=lambda item: item[0]):
+                try:
+                    return schema.model_validate(value)
+                except Exception:
+                    continue
+            raise ValueError(
+                f"structured response did not contain a valid {schema.__name__} JSON object"
+            ) from exact_error
+
+    async def _json_mode_fallback(self, bound, lc_messages, schema: type[T]) -> T:
+        schema_doc = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+        json_instruction = SystemMessage(
+            content=(
+                "Respond ONLY with a single valid JSON object matching this schema "
+                "(no markdown, no prose):\n"
+                f"{schema_doc}"
+            )
+        )
+        raw_llm = bound.bind(response_format={"type": "json_object"})
+        response = await raw_llm.ainvoke([json_instruction, *lc_messages])
+        return self._parse_structured_content(response.content, schema)
 
     @overload
     async def chat_completion(
@@ -221,24 +281,8 @@ class ModelAdapter:
                 structured_llm = bound.with_structured_output(schema)
                 return await structured_llm.ainvoke(lc_messages)
             except Exception as exc:
-                msg = str(exc)
-                if "tool_choice" in msg or "thinking mode" in msg.lower():
-                    logger.warning("structured_output_fallback_json_mode", error=msg[:200])
-                    # json_mode does NOT inject the schema into the prompt
-                    # (langchain leaves that to the caller), and deepseek
-                    # requires the prompt to contain the word "json". Prepend
-                    # a system message carrying both so any caller prompt works.
-                    schema_doc = json.dumps(schema.model_json_schema(), ensure_ascii=False)
-                    json_instruction = SystemMessage(
-                        content=(
-                            "Respond ONLY with a single valid JSON object "
-                            "matching this schema (no markdown, no prose):\n"
-                            f"{schema_doc}"
-                        )
-                    )
-                    structured_llm = bound.with_structured_output(schema, method="json_mode")
-                    return await structured_llm.ainvoke([json_instruction, *lc_messages])
-                raise
+                logger.warning("structured_output_fallback_json_mode", error=str(exc)[:200])
+                return await self._json_mode_fallback(bound, lc_messages, schema)
         response = await bound.ainvoke(lc_messages)
         return str(response.content)
 

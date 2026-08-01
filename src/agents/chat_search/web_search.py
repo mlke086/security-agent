@@ -20,7 +20,6 @@ from __future__ import annotations
 import html
 import json
 import re
-import re as _re_chat_search
 from dataclasses import dataclass
 
 import httpx
@@ -137,12 +136,14 @@ def _ddg_likely_dead() -> bool:
 
 def _mark_ddg_dead() -> None:
     import time as _time_ddg
+
     global _ddg_unreachable_since
     _ddg_unreachable_since = _time_ddg.monotonic()
 
 
 def _maybe_clear_ddg_dead() -> None:
     import time as _time_ddg
+
     global _ddg_unreachable_since
     if _ddg_unreachable_since is None:
         return
@@ -173,7 +174,9 @@ def looks_like_cve_query(query: str) -> str | None:
     return m.group(0).upper() if m else None
 
 
-async def search_nvd(query: str, limit: int = 5, timeout_sec: float | None = None) -> list[WebSearchHit]:
+async def search_nvd(
+    query: str, limit: int = 5, timeout_sec: float | None = None
+) -> list[WebSearchHit]:
     """Look up a specific CVE id (or run a keyword search) via the NVD API.
 
     If the query contains a CVE id we hit /cves/2.0 with cveId=... (exact

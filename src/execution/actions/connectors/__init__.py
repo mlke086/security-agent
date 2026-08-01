@@ -1,4 +1,4 @@
-﻿"""connectors"""
+"""connectors"""
 
 from .dns_block import DnsBlockConnector
 from .notify import NotifyAnalystConnector

@@ -83,13 +83,16 @@ class ScanTask(BaseModel):
     rule_version: str = ""
 
     # P0 (2026-07-18): engine selector for nuclei integration.
-    engine: Literal["matcher", "nuclei"] = "matcher"
+    engine: Literal["matcher", "nuclei", "global"] = "matcher"
 
     # Nuclei-only knobs. Ignored when engine == "matcher".
     nuclei_severity: list[str] = []  # ["critical","high",...]
     nuclei_tags: list[str] = []  # ["rce","auth-bypass",...]
     nuclei_templates: list[str] = []  # ["cves/2024/CVE-...","exposures/..."]
     nuclei_timeout_sec: int = 0  # 0 = runner default (600s)
+    # Nuclei ???????? = agent ??????????????
+    # ?????????????? nuclei ???agent ? ss -tlnpH ????
+    nuclei_ports: list[int] = []
 
     status: Literal[
         "queued",
@@ -122,6 +125,21 @@ class VulnFinding(BaseModel):
     fix_advice: str | None = None
     status: Literal["open", "fixed", "accepted"] = "open"
     detected_at: str = ""
+    # ---- Scan consolidation (2026-07-31 UX upgrade) ----
+    # scan_history records the detection timestamps from earlier scans of the
+    # same (agent, cve, name) on the same host. It deliberately excludes the
+    # current detected_at (which is the latest scan); the frontend shows
+    # detected_at + scan_history as the full "scanned at" timeline. Old docs
+    # that lack the field load with scan_history=[] so the merge logic treats
+    # them as first-time finds.
+    scan_history: list[str] = []
+    # V12 阶段 5.7 (2026-08-02): the reconcile merge used to OVERWRITE
+    # task_id with the latest scanning task, so the task that first found
+    # the vuln could no longer see it (monitor page showed 0 findings while
+    # the report -- a completion snapshot -- still had them). task_id now
+    # keeps its ORIGINAL owner; last_seen_task_id records the most recent
+    # scan that confirmed the vuln. Query layer matches either.
+    last_seen_task_id: str | None = None
     # ---- AI evidence (2026-07-29 UX upgrade) ----
     # ai_processed distinguishes "AI handled this row" from "the row was
     # never seen by AI" (e.g. LLM unavailable -> fallback in the subgraph).
@@ -154,6 +172,9 @@ class VulnFilter:
     task_id: str | None = None
     hostname: str | None = None
     hostnames: list[str] | None = None
+    # Server-side batch fetch of all existing vulns for a set of agents
+    # (used by the aggregate reconcile step; avoids per-finding N+1).
+    agent_ids: list[str] | None = None
     severity: str | None = None
     status: str | None = None
     cve: str | None = None
@@ -165,6 +186,11 @@ class VulnFilter:
     date_to: str | None = None
     limit: int = 200
     offset: int = 0
+    # Cursor paging (Spec-P1-RECON): when set, the store scrolls with
+    # search_after instead of from_/size, so callers can page through
+    # the full result set without the 10k default window. The cursor
+    # value comes verbatim from the previous page's last hit sort keys.
+    search_after: list | None = None
 
 
 class ScanResult(BaseModel):
@@ -175,6 +201,11 @@ class ScanResult(BaseModel):
     batch: int
     is_final: bool
     ts: str = ""
+    # Categories this agent actually completed scanning (sys_vuln / baseline /
+    # nuclei). Reported by the agent on its is_final result. Empty for legacy
+    # agents -> the server conservatively skips auto-fix for that agent so a
+    # module that failed collection is not misjudged as "fixed".
+    scanned_categories: list[str] = []
 
 
 class ScanReport(BaseModel):
@@ -201,6 +232,7 @@ class ScanReport(BaseModel):
 class ScanIntent(BaseModel):
     targets: list[str] = []
     modules: list[ScanModule] = [ScanModule.SYS_VULN, ScanModule.BASELINE]
+    engine: Literal["matcher", "nuclei"] = "matcher"
     resource_limit: dict = {"cpu_percent": 30, "mem_percent": 30}
     schedule: str | None = None
 

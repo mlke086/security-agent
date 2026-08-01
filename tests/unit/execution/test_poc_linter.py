@@ -1,4 +1,5 @@
 """Tests for PoCLinter — syntax, import whitelist, dangerous call checks."""
+
 from src.execution.linter.poc_linter import PoCLinter
 
 linter = PoCLinter()

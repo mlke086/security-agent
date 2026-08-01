@@ -1,11 +1,13 @@
 """Unit tests for the Alert Pydantic model (Phase 0 of monitoring plan)."""
+
 import pytest
 from pydantic import ValidationError
+
 from src.agents.models import (
     Alert,
-    AlertIOC,
     AlertIngestRequest,
     AlertIngestResponse,
+    AlertIOC,
     AlertSeverity,
     AlertSource,
     AlertStatus,

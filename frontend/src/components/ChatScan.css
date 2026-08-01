@@ -1,54 +1,232 @@
-/* ChatScan - 豆包风格对话页面
-   整体风格：宽屏居中、浅色背景、圆角消息气泡、悬浮输入框 */
+/* ChatScan - DeepSeek 网页端风格对话界面 + 全主题适配
+   设计语言：极简 + 毛玻璃质感、大圆角、柔和多层阴影、
+   用户深色/AI 浅色气泡明暗对比、淡入动画、自定义滚动条。
+   主题通道：<html data-theme="light|dark|tech-blue|eye-green">
+   （由 ThemeContext 设置），下方 [data-theme] 块注入 --chat-* 变量。
+   antd 组件已随 ConfigProvider 自适应；本文件只负责自定义表面。 */
 
+/* ── 主题变量 ─────────────────────────────────────────── */
+:root,
+[data-theme="light"] {
+  --chat-bg: #f7f8fa;
+  --chat-bg-soft: #f3f4f6;
+  --chat-card: #ffffff;
+  --chat-card-hover: #f3f4f6;
+  --chat-card-active: #e6f4ff;
+  --chat-border: #e5e7eb;
+  --chat-text: #1f2937;
+  --chat-text-2: #6b7280;
+  --chat-text-3: #9ca3af;
+  --chat-accent: #1677ff;
+  --chat-accent-hover: #4096ff;
+  --chat-user-bubble-from: #1677ff;
+  --chat-user-bubble-to: #4096ff;
+  --chat-avatar-ai-from: #722ed1;
+  --chat-avatar-ai-to: #9254de;
+  --chat-shadow: 0 20px 60px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.05);
+  --chat-input-glow: rgba(22, 119, 255, 0.12);
+  --chat-route-scan-bg: #fff7e6;      --chat-route-scan-fg: #d48806;      --chat-route-scan-border: #ffd591;
+  --chat-route-project-bg: #e6f7ff;   --chat-route-project-fg: #1677ff;   --chat-route-project-border: #91d5ff;
+  --chat-route-web-bg: #f6ffed;       --chat-route-web-fg: #389e0d;       --chat-route-web-border: #b7eb8f;
+  --chat-route-chat-bg: #f5f5f5;      --chat-route-chat-fg: #6b7280;      --chat-route-chat-border: #d9d9d9;
+  --chat-intent-bg: linear-gradient(135deg, #fff7e6 0%, #ffffff 100%);
+  --chat-intent-border: #ffd591;
+  --chat-intent-title: #d48806;
+  --chat-intent-value-bg: rgba(255, 255, 255, 0.7);
+  --chat-intent-value-border: #ffe7ba;
+  --chat-intent-value-fg: #1f2937;
+  --chat-src-bg: #f9fafb;
+  --chat-src-hover: #f3f4f6;
+  --chat-src-border: #f3f4f6;
+}
+
+[data-theme="dark"] {
+  --chat-bg: #0f172a;
+  --chat-bg-soft: #1e293b;
+  --chat-card: #1f2937;
+  --chat-card-hover: #2a3441;
+  --chat-card-active: #1e3a8a;
+  --chat-border: #374151;
+  --chat-text: #e5e7eb;
+  --chat-text-2: #d1d5db;
+  --chat-text-3: #6b7280;
+  --chat-accent: #1668dc;
+  --chat-accent-hover: #3c82e8;
+  --chat-user-bubble-from: #1668dc;
+  --chat-user-bubble-to: #3c82e8;
+  --chat-avatar-ai-from: #9c6bff;
+  --chat-avatar-ai-to: #b18cff;
+  --chat-shadow: 0 20px 60px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.2);
+  --chat-input-glow: rgba(22, 104, 220, 0.25);
+  --chat-route-scan-bg: rgba(217, 119, 6, 0.16);   --chat-route-scan-fg: #fbbf24;   --chat-route-scan-border: rgba(217, 119, 6, 0.4);
+  --chat-route-project-bg: rgba(59, 130, 246, 0.16); --chat-route-project-fg: #60a5fa; --chat-route-project-border: rgba(59, 130, 246, 0.4);
+  --chat-route-web-bg: rgba(34, 197, 94, 0.16);    --chat-route-web-fg: #4ade80;    --chat-route-web-border: rgba(34, 197, 94, 0.4);
+  --chat-route-chat-bg: rgba(148, 163, 184, 0.16); --chat-route-chat-fg: #94a3b8;   --chat-route-chat-border: rgba(148, 163, 184, 0.4);
+  --chat-intent-bg: linear-gradient(135deg, #422006 0%, #1f2937 100%);
+  --chat-intent-border: #92400e;
+  --chat-intent-title: #fbbf24;
+  --chat-intent-value-bg: rgba(0, 0, 0, 0.3);
+  --chat-intent-value-border: #78350f;
+  --chat-intent-value-fg: #fde68a;
+  --chat-src-bg: #111827;
+  --chat-src-hover: #1f2937;
+  --chat-src-border: #1f2937;
+}
+
+[data-theme="tech-blue"] {
+  --chat-bg: #0a1929;
+  --chat-bg-soft: #102a43;
+  --chat-card: #112a44;
+  --chat-card-hover: #1a3a5c;
+  --chat-card-active: #0b3b4f;
+  --chat-border: #1f4068;
+  --chat-text: #e0f2fe;
+  --chat-text-2: #bae6fd;
+  --chat-text-3: #7dd3fc;
+  --chat-accent: #00d4ff;
+  --chat-accent-hover: #38e0ff;
+  --chat-user-bubble-from: #0284c7;
+  --chat-user-bubble-to: #0ea5e9;
+  --chat-avatar-ai-from: #8b5cf6;
+  --chat-avatar-ai-to: #a78bfa;
+  --chat-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.3);
+  --chat-input-glow: rgba(0, 212, 255, 0.18);
+  --chat-route-scan-bg: rgba(251, 146, 60, 0.15); --chat-route-scan-fg: #fdba74; --chat-route-scan-border: rgba(251, 146, 60, 0.4);
+  --chat-route-project-bg: rgba(56, 189, 248, 0.15); --chat-route-project-fg: #7dd3fc; --chat-route-project-border: rgba(56, 189, 248, 0.4);
+  --chat-route-web-bg: rgba(52, 211, 153, 0.15); --chat-route-web-fg: #6ee7b7; --chat-route-web-border: rgba(52, 211, 153, 0.4);
+  --chat-route-chat-bg: rgba(148, 163, 184, 0.15); --chat-route-chat-fg: #94a3b8; --chat-route-chat-border: rgba(148, 163, 184, 0.4);
+  --chat-intent-bg: linear-gradient(135deg, #3b1d00 0%, #112a44 100%);
+  --chat-intent-border: #9a5b13;
+  --chat-intent-title: #fdba74;
+  --chat-intent-value-bg: rgba(0, 0, 0, 0.35);
+  --chat-intent-value-border: #7c4a12;
+  --chat-intent-value-fg: #fde68a;
+  --chat-src-bg: #0b2a45;
+  --chat-src-hover: #123454;
+  --chat-src-border: #1f4068;
+}
+
+[data-theme="eye-green"] {
+  --chat-bg: #f0f7ed;
+  --chat-bg-soft: #e8f2e2;
+  --chat-card: #ffffff;
+  --chat-card-hover: #e9f4e3;
+  --chat-card-active: #d9f0cc;
+  --chat-border: #dcead5;
+  --chat-text: #1f2937;
+  --chat-text-2: #4b5563;
+  --chat-text-3: #8aa77d;
+  --chat-accent: #52c41a;
+  --chat-accent-hover: #73d13d;
+  --chat-user-bubble-from: #52c41a;
+  --chat-user-bubble-to: #73d13d;
+  --chat-avatar-ai-from: #722ed1;
+  --chat-avatar-ai-to: #9254de;
+  --chat-shadow: 0 20px 60px rgba(20, 60, 30, 0.1), 0 8px 24px rgba(20, 60, 30, 0.04);
+  --chat-input-glow: rgba(82, 196, 26, 0.15);
+  --chat-route-scan-bg: #fff7e6;      --chat-route-scan-fg: #d48806;      --chat-route-scan-border: #ffd591;
+  --chat-route-project-bg: #e6f7ff;   --chat-route-project-fg: #1677ff;   --chat-route-project-border: #91d5ff;
+  --chat-route-web-bg: #f6ffed;       --chat-route-web-fg: #389e0d;       --chat-route-web-border: #b7eb8f;
+  --chat-route-chat-bg: #f5f5f5;      --chat-route-chat-fg: #6b7280;      --chat-route-chat-border: #d9d9d9;
+  --chat-intent-bg: linear-gradient(135deg, #fff7e6 0%, #ffffff 100%);
+  --chat-intent-border: #ffd591;
+  --chat-intent-title: #d48806;
+  --chat-intent-value-bg: rgba(255, 255, 255, 0.7);
+  --chat-intent-value-border: #ffe7ba;
+  --chat-intent-value-fg: #1f2937;
+  --chat-src-bg: #f9fafb;
+  --chat-src-hover: #f3f4f6;
+  --chat-src-border: #f3f4f6;
+}
+
+/* ── 整体容器 ─────────────────────────────────────────── */
 .chat-shell {
   display: flex;
   height: calc(100vh - 112px);
   min-height: 540px;
   background: var(--chat-bg, #f7f8fa);
-  border-radius: 12px;
+  border-radius: 24px;
   overflow: hidden;
   border: 1px solid var(--chat-border, #e5e7eb);
+  box-shadow: var(--chat-shadow, 0 20px 60px rgba(0, 0, 0, 0.12));
 }
 
 /* ── 左侧会话侧栏 ─────────────────────────────────────── */
 .chat-sidebar {
   width: 260px;
   flex-shrink: 0;
-  background: var(--chat-side-bg, #ffffff);
+  background: var(--chat-card, #ffffff);
   border-right: 1px solid var(--chat-border, #e5e7eb);
   display: flex;
   flex-direction: column;
 }
+.chat-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 18px 10px;
+}
+.chat-sidebar-brand .brand-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--chat-accent, #1677ff), var(--chat-avatar-ai-to, #9254de));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+.chat-sidebar-brand .brand-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--chat-text, #1f2937);
+  letter-spacing: -0.3px;
+}
 .chat-sidebar-head {
-  padding: 14px 14px 8px;
-  border-bottom: 1px solid var(--chat-border, #e5e7eb);
+  padding: 6px 14px 10px;
 }
 .chat-sidebar-head .new-btn {
   width: 100%;
-  height: 36px;
-  border-radius: 8px;
-  background: var(--chat-accent, #1677ff);
+  height: 40px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--chat-accent, #1677ff), var(--chat-accent-hover, #4096ff));
   color: #fff;
   border: 0;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 13px;
   font-weight: 500;
+  transition: filter 120ms, transform 120ms;
 }
 .chat-sidebar-head .new-btn:hover {
-  background: var(--chat-accent-hover, #4096ff);
+  filter: brightness(1.08);
+  transform: translateY(-1px);
 }
 .chat-sidebar-list {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 6px;
+  padding: 8px 8px 12px;
+}
+.chat-sidebar-list::-webkit-scrollbar,
+.chat-stream::-webkit-scrollbar {
+  width: 5px;
+}
+.chat-sidebar-list::-webkit-scrollbar-track,
+.chat-stream::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-sidebar-list::-webkit-scrollbar-thumb,
+.chat-stream::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--chat-text-3, #9ca3af) 45%, transparent);
+  border-radius: 20px;
 }
 .chat-sidebar-empty {
-  color: #9ca3af;
+  color: var(--chat-text-3, #9ca3af);
   font-size: 12px;
   text-align: center;
   padding: 32px 12px;
@@ -57,21 +235,21 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px;
+  padding: 9px 12px;
   margin: 2px 0;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   font-size: 13px;
-  color: #374151;
-  transition: background 120ms;
+  color: var(--chat-text, #1f2937);
+  transition: background 120ms, color 120ms;
   gap: 4px;
 }
 .chat-conv-item:hover {
-  background: #f3f4f6;
+  background: var(--chat-card-hover, #f3f4f6);
 }
 .chat-conv-item.active {
-  background: #e6f4ff;
-  color: #1677ff;
+  background: var(--chat-card-active, #e6f4ff);
+  color: var(--chat-accent, #1677ff);
   font-weight: 500;
 }
 .chat-conv-item .title {
@@ -82,23 +260,23 @@
 }
 .chat-conv-item .meta {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--chat-text-3, #9ca3af);
   margin-top: 2px;
 }
 .chat-conv-item .del-btn {
   opacity: 0;
   border: 0;
   background: transparent;
-  color: #9ca3af;
+  color: var(--chat-text-3, #9ca3af);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 .chat-conv-item:hover .del-btn {
   opacity: 1;
 }
 .chat-conv-item .del-btn:hover {
-  background: #fee2e2;
+  background: rgba(220, 38, 38, 0.12);
   color: #dc2626;
 }
 
@@ -111,14 +289,17 @@
   position: relative;
 }
 .chat-topbar {
-  height: 52px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 0 22px;
   border-bottom: 1px solid var(--chat-border, #e5e7eb);
-  background: rgba(255, 255, 255, 0.85);
+  /* color-mix fallback first (older browsers), then frosted blend */
+  background: var(--chat-card, #ffffff);
+  background: color-mix(in srgb, var(--chat-card, #ffffff) 85%, transparent);
   backdrop-filter: blur(8px);
+  flex-shrink: 0;
 }
 .chat-topbar .title {
   display: flex;
@@ -126,7 +307,7 @@
   gap: 8px;
   font-size: 14px;
   font-weight: 500;
-  color: #374151;
+  color: var(--chat-text, #1f2937);
 }
 .chat-topbar .title-icon {
   color: var(--chat-accent, #1677ff);
@@ -139,18 +320,18 @@
 }
 .chat-topbar .badge {
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 2px 10px;
   border-radius: 999px;
-  background: #f0f9ff;
-  color: #1677ff;
-  border: 1px solid #bae0ff;
+  background: var(--chat-card-active, #f0f9ff);
+  color: var(--chat-accent, #1677ff);
+  border: 1px solid color-mix(in srgb, var(--chat-accent, #1677ff) 40%, transparent);
 }
 
 /* ── 消息流 ───────────────────────────────────────────── */
 .chat-stream {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 0;
+  padding: 24px 0 12px;
 }
 .chat-stream-inner {
   max-width: 820px;
@@ -158,65 +339,76 @@
   padding: 0 24px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 20px;
 }
 .chat-row {
   display: flex;
   gap: 12px;
   align-items: flex-start;
+  animation: chat-fade-in 0.2s ease;
 }
 .chat-row.user {
   flex-direction: row-reverse;
 }
+@keyframes chat-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 .chat-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 15px;
 }
 .chat-row.user .chat-avatar {
-  background: linear-gradient(135deg, #1677ff, #4096ff);
+  background: linear-gradient(135deg, var(--chat-user-bubble-from, #1677ff), var(--chat-user-bubble-to, #4096ff));
   color: #fff;
 }
 .chat-row.assistant .chat-avatar {
-  background: linear-gradient(135deg, #722ed1, #9254de);
+  background: linear-gradient(135deg, var(--chat-avatar-ai-from, #722ed1), var(--chat-avatar-ai-to, #9254de));
   color: #fff;
 }
 .chat-bubble {
   max-width: 78%;
-  padding: 12px 16px;
-  border-radius: 14px;
+  padding: 13px 17px;
+  border-radius: 22px;
   font-size: 14px;
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 .chat-row.user .chat-bubble {
-  background: var(--chat-accent, #1677ff);
+  background: linear-gradient(135deg, var(--chat-user-bubble-from, #1677ff), var(--chat-user-bubble-to, #4096ff));
   color: #fff;
-  border-top-right-radius: 4px;
+  border-top-right-radius: 6px;
+  border-top-left-radius: 22px;
 }
 .chat-row.assistant .chat-bubble {
-  background: #ffffff;
-  color: #1f2937;
-  border: 1px solid #e5e7eb;
-  border-top-left-radius: 4px;
+  background: var(--chat-card, #ffffff);
+  color: var(--chat-text, #1f2937);
+  border: 1px solid var(--chat-border, #e5e7eb);
+  border-top-left-radius: 6px;
+  border-top-right-radius: 22px;
 }
 .chat-row.assistant .chat-bubble.routing {
   font-style: italic;
-  color: #6b7280;
-  background: #f3f4f6;
+  color: var(--chat-text-2, #6b7280);
+  background: var(--chat-bg-soft, #f3f4f6);
   border-color: transparent;
 }
 .chat-bubble-meta {
   font-size: 11px;
-  color: #9ca3af;
-  margin-top: 4px;
+  color: var(--chat-text-3, #9ca3af);
+  margin-top: 6px;
+  text-align: right;
+}
+.chat-row.user .chat-bubble-meta {
+  color: color-mix(in srgb, #fff 70%, transparent);
 }
 
 /* ── 路由标签 ─────────────────────────────────────────── */
@@ -228,24 +420,24 @@
   margin-bottom: 8px;
   font-weight: 500;
 }
-.chat-route-tag.scan    { background: #fff7e6; color: #d48806; border: 1px solid #ffd591; }
-.chat-route-tag.project { background: #e6f7ff; color: #1677ff; border: 1px solid #91d5ff; }
-.chat-route-tag.web     { background: #f6ffed; color: #389e0d; border: 1px solid #b7eb8f; }
-.chat-route-tag.chat    { background: #f5f5f5; color: #6b7280; border: 1px solid #d9d9d9; }
+.chat-route-tag.scan    { background: var(--chat-route-scan-bg, #fff7e6); color: var(--chat-route-scan-fg, #d48806); border: 1px solid var(--chat-route-scan-border, #ffd591); }
+.chat-route-tag.project { background: var(--chat-route-project-bg, #e6f7ff); color: var(--chat-route-project-fg, #1677ff); border: 1px solid var(--chat-route-project-border, #91d5ff); }
+.chat-route-tag.web     { background: var(--chat-route-web-bg, #f6ffed); color: var(--chat-route-web-fg, #389e0d); border: 1px solid var(--chat-route-web-border, #b7eb8f); }
+.chat-route-tag.chat    { background: var(--chat-route-chat-bg, #f5f5f5); color: var(--chat-route-chat-fg, #6b7280); border: 1px solid var(--chat-route-chat-border, #d9d9d9); }
 
 /* ── 扫描意图确认卡片 ─────────────────────────────────── */
 .intent-card {
   margin-top: 12px;
-  background: linear-gradient(135deg, #fff7e6 0%, #fff 100%);
-  border: 1px solid #ffd591;
-  border-radius: 12px;
+  background: var(--chat-intent-bg, linear-gradient(135deg, #fff7e6 0%, #ffffff 100%));
+  border: 1px solid var(--chat-intent-border, #ffd591);
+  border-radius: 14px;
   padding: 14px 16px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 .intent-card h4 {
   margin: 0 0 10px;
   font-size: 13px;
-  color: #d48806;
+  color: var(--chat-intent-title, #d48806);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -258,16 +450,26 @@
 }
 .intent-row .label {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--chat-text-2, #6b7280);
   min-width: 56px;
 }
 .intent-row .value {
   font-size: 13px;
-  color: #1f2937;
-  background: rgba(255,255,255,0.7);
+  color: var(--chat-intent-value-fg, #1f2937);
+  background: var(--chat-intent-value-bg, rgba(255, 255, 255, 0.7));
   padding: 2px 10px;
   border-radius: 6px;
-  border: 1px solid #ffe7ba;
+  border: 1px solid var(--chat-intent-value-border, #ffe7ba);
+}
+.intent-group-count {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--chat-text-2, #6b7280);
+}
+.intent-warning {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--chat-intent-title, #d48806);
 }
 .intent-card .actions {
   margin-top: 12px;
@@ -276,71 +478,218 @@
   justify-content: flex-end;
 }
 .intent-card .actions button {
-  height: 30px;
-  padding: 0 14px;
-  border-radius: 6px;
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 8px;
   border: 0;
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
+  transition: background 120ms, filter 120ms;
 }
 .intent-card .btn-confirm {
-  background: #fa8c16;
+  background: var(--chat-intent-title, #fa8c16);
   color: #fff;
 }
-.intent-card .btn-confirm:hover { background: #d46b08; }
+.intent-card .btn-confirm:hover { filter: brightness(1.1); }
 .intent-card .btn-confirm:disabled {
-  background: #d9d9d9;
-  color: #8c8c8c;
+  background: color-mix(in srgb, var(--chat-text-3, #9ca3af) 40%, transparent);
+  color: var(--chat-text-3, #9ca3af);
   cursor: not-allowed;
 }
 .intent-card .btn-discard {
   background: transparent;
-  color: #6b7280;
-  border: 1px solid #d9d9d9;
+  color: var(--chat-text-2, #6b7280);
+  border: 1px solid var(--chat-border, #d9d9d9);
 }
-.intent-card .btn-discard:hover { background: #fafafa; }
+.intent-card .btn-discard:hover { background: var(--chat-card-hover, #fafafa); }
+
+  /* Already-executed intent card: green badge + secondary link button.
+     Distinct from .btn-confirm (orange) so the operator can tell at a
+     glance that this card no longer creates a task. */
+  .intent-card .intent-task-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #15803d;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+  }
+  .intent-card .actions a.btn-confirm {
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 16px;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    background: rgba(34, 197, 94, 0.85);
+    color: #fff;
+    border: 1px solid rgba(34, 197, 94, 0.85);
+    transition: filter 120ms ease;
+  }
+  .intent-card .actions a.btn-confirm:hover { filter: brightness(1.08); }
+
+  /* ── compact summary view (V9 follow-up to issue 1) ──────────
+     The new minimal card collapses the form into a one-line
+     description of what will be scanned, with two big buttons:
+     取消创建任务 / 立即创建扫描任务. The intent data is still
+     resolved internally (group auto-fill, prefix stripping) but
+     is never surfaced as an editable form -- the operator should
+     only need to confirm or cancel. */
+  .intent-card.intent-card-compact {
+    padding: 12px 14px;
+  }
+  .intent-card.intent-card-compact h4 {
+    margin: 0 0 8px;
+  }
+  .intent-card .intent-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 8px 0 4px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.55);
+    border-radius: 6px;
+    border: 1px solid var(--chat-intent-value-border, #ffe7ba);
+  }
+  .intent-card .intent-summary-line {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .intent-card .intent-summary-line.intent-summary-sub {
+    padding-left: 22px;
+    font-size: 12px;
+    color: var(--chat-text-2, #6b7280);
+  }
+  .intent-card .intent-summary-icon {
+    flex: 0 0 auto;
+  }
+  .intent-card .intent-summary-label {
+    color: var(--chat-text-2, #6b7280);
+  }
+  .intent-card .intent-summary-target {
+    font-weight: 600;
+    color: var(--chat-intent-value-fg, #1f2937);
+  }
+  .intent-card .intent-summary-modules {
+    font-weight: 500;
+  }
+  .intent-card .intent-advanced {
+    margin-top: 10px;
+  }
+  .intent-card .intent-advanced-toggle {
+    background: transparent;
+    border: 0;
+    color: var(--chat-text-2, #6b7280);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 0;
+  }
+  .intent-card .intent-advanced-toggle:hover {
+    color: var(--chat-intent-title, #d48806);
+  }
+  .intent-card .btn-cancel {
+    background: transparent;
+    color: var(--chat-text-2, #6b7280);
+    border: 1px solid var(--chat-card-border, #e5e7eb);
+    height: 32px;
+    padding: 0 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+  .intent-card .btn-cancel:hover:not(:disabled) {
+    background: var(--chat-card-hover, #fafafa);
+    color: var(--chat-text-1, #1f2937);
+  }
+  .intent-card .btn-cancel:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* V9 follow-up: historical (already-executed) card layout. We
+     show the full task_id verbatim (no slice(0,8) -- the operator
+     asked for the full id so they can grep / paste it). It is
+     allowed to wrap onto its own line so the card never grows
+     past the chat width on narrow viewports. */
+  .intent-card .intent-task-info {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .intent-card .intent-task-id {
+    display: block;
+    max-width: 100%;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--chat-text-1, #1f2937);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    word-break: break-all;
+  }
+
+
 
 /* ── 来源列表 ─────────────────────────────────────────── */
 .sources-block {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px dashed #e5e7eb;
+  border-top: 1px dashed var(--chat-border, #e5e7eb);
   font-size: 12px;
 }
 .sources-block .sources-title {
-  color: #6b7280;
+  color: var(--chat-text-2, #6b7280);
   margin-bottom: 6px;
   font-weight: 500;
 }
 .sources-block .source-item {
   display: block;
-  padding: 6px 8px;
-  background: #f9fafb;
-  border-radius: 6px;
+  padding: 7px 9px;
+  background: var(--chat-src-bg, #f9fafb);
+  border-radius: 8px;
   margin-bottom: 4px;
-  color: #374151;
+  color: var(--chat-text, #374151);
   text-decoration: none;
   word-break: break-all;
   font-size: 12px;
-  border: 1px solid #f3f4f6;
+  border: 1px solid var(--chat-src-border, #f3f4f6);
+  transition: background 120ms, border-color 120ms;
 }
 .sources-block .source-item:hover {
-  background: #f3f4f6;
-  border-color: #e5e7eb;
+  background: var(--chat-src-hover, #f3f4f6);
+  border-color: var(--chat-border, #e5e7eb);
 }
 .sources-block .source-item .src-title {
   font-weight: 500;
-  color: #1f2937;
+  color: var(--chat-text, #1f2937);
 }
 .sources-block .source-item .src-url {
-  color: #6b7280;
+  color: var(--chat-text-2, #6b7280);
   font-size: 11px;
   display: block;
   margin-top: 2px;
 }
+.source-snippet {
+  color: var(--chat-text-3, #9ca3af);
+  font-size: 11px;
+  margin-top: 4px;
+}
 
-/* ── 空状态 ───────────────────────────────────────────── */
+/* ── 空状态 / 欢迎屏 ──────────────────────────────────── */
 .chat-empty {
   flex: 1;
   display: flex;
@@ -351,26 +700,29 @@
   text-align: center;
 }
 .chat-empty .empty-icon {
-  width: 64px;
-  height: 64px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #1677ff20, #722ed120);
+  width: 68px;
+  height: 68px;
+  border-radius: 20px;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--chat-accent, #1677ff) 22%, transparent),
+    color-mix(in srgb, var(--chat-avatar-ai-to, #9254de) 22%, transparent));
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 32px;
-  color: #1677ff;
-  margin-bottom: 16px;
+  font-size: 34px;
+  color: var(--chat-accent, #1677ff);
+  margin-bottom: 18px;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--chat-accent, #1677ff) 18%, transparent);
 }
 .chat-empty .empty-title {
   font-size: 18px;
-  font-weight: 500;
-  color: #1f2937;
+  font-weight: 600;
+  color: var(--chat-text, #1f2937);
   margin-bottom: 6px;
 }
 .chat-empty .empty-sub {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--chat-text-2, #6b7280);
   margin-bottom: 28px;
 }
 .chat-empty .suggestions {
@@ -381,48 +733,52 @@
   width: 100%;
 }
 .chat-empty .suggestion {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
+  background: var(--chat-card, #ffffff);
+  border: 1px solid var(--chat-border, #e5e7eb);
+  border-radius: 12px;
   padding: 12px 14px;
   cursor: pointer;
   text-align: left;
   font-size: 13px;
-  color: #374151;
+  color: var(--chat-text, #374151);
   transition: all 160ms;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .chat-empty .suggestion:hover {
-  border-color: #1677ff;
-  background: #f0f7ff;
-  transform: translateY(-1px);
+  border-color: var(--chat-accent, #1677ff);
+  background: var(--chat-card-active, #f0f7ff);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--chat-accent, #1677ff) 12%, transparent);
 }
 .chat-empty .suggestion .ico {
   font-size: 16px;
-  color: #1677ff;
+  color: var(--chat-accent, #1677ff);
 }
 
 /* ── 输入区 ───────────────────────────────────────────── */
 .chat-input-wrap {
   border-top: 1px solid var(--chat-border, #e5e7eb);
-  padding: 16px 24px 20px;
-  background: rgba(255,255,255,0.95);
+  padding: 14px 24px 18px;
+  /* color-mix fallback first, then frosted blend */
+  background: var(--chat-bg-soft, #f3f4f6);
+  background: color-mix(in srgb, var(--chat-bg-soft, #f3f4f6) 70%, transparent);
 }
 .chat-input-inner {
   max-width: 820px;
   margin: 0 auto;
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 10px 12px 10px 14px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  background: var(--chat-card, #ffffff);
+  border: 1px solid var(--chat-border, #e5e7eb);
+  /* multi-row composer: rounded rectangle (a full pill breaks at 6 rows) */
+  border-radius: 18px;
+  padding: 8px 12px 8px 18px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
   transition: border-color 120ms, box-shadow 120ms;
 }
 .chat-input-inner:focus-within {
   border-color: var(--chat-accent, #1677ff);
-  box-shadow: 0 2px 12px rgba(22,119,255,0.12);
+  box-shadow: 0 4px 16px var(--chat-input-glow, rgba(22, 119, 255, 0.12));
 }
 .chat-input-inner textarea {
   width: 100%;
@@ -432,23 +788,24 @@
   font-size: 14px;
   line-height: 1.6;
   background: transparent;
-  color: #1f2937;
+  color: var(--chat-text, #1f2937);
   font-family: inherit;
-  padding: 0;
+  padding: 6px 0;
 }
 .chat-input-inner textarea::placeholder {
-  color: #9ca3af;
+  color: var(--chat-text-3, #9ca3af);
 }
 .chat-input-inner textarea:disabled {
   background: transparent;
-  color: #9ca3af;
+  color: var(--chat-text-3, #9ca3af);
 }
 .chat-input-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 8px;
+  margin-top: 6px;
   gap: 8px;
+  padding: 0 6px;
 }
 .chat-input-toolbar .left {
   display: flex;
@@ -459,40 +816,43 @@
   font-size: 12px;
   padding: 4px 10px;
   border-radius: 999px;
-  background: #f3f4f6;
-  color: #4b5563;
+  background: var(--chat-bg-soft, #f3f4f6);
+  color: var(--chat-text-2, #4b5563);
   cursor: pointer;
   border: 1px solid transparent;
 }
 .chat-input-toolbar .model-pill:hover {
-  border-color: #d1d5db;
-  background: #ffffff;
+  border-color: var(--chat-border, #d1d5db);
+  background: var(--chat-card, #ffffff);
 }
 .chat-input-toolbar .send-btn {
-  width: 36px;
-  height: 32px;
-  border-radius: 8px;
-  background: var(--chat-accent, #1677ff);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--chat-accent, #1677ff), var(--chat-accent-hover, #4096ff));
   color: #fff;
   border: 0;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
-  transition: background 120ms;
+  font-size: 15px;
+  transition: filter 120ms, transform 120ms;
+  flex-shrink: 0;
 }
 .chat-input-toolbar .send-btn:hover {
-  background: var(--chat-accent-hover, #4096ff);
+  filter: brightness(1.08);
+  transform: scale(1.04);
 }
 .chat-input-toolbar .send-btn:disabled {
-  background: #d9d9d9;
-  color: #8c8c8c;
+  background: color-mix(in srgb, var(--chat-text-3, #9ca3af) 40%, transparent);
+  color: var(--chat-text-3, #9ca3af);
   cursor: not-allowed;
+  transform: none;
 }
 .chat-input-toolbar .hint {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--chat-text-3, #9ca3af);
   margin-left: 4px;
 }
 
@@ -505,7 +865,7 @@
 .typing-dot span {
   width: 6px;
   height: 6px;
-  background: #94a3b8;
+  background: var(--chat-text-3, #94a3b8);
   border-radius: 50%;
   animation: typing-bounce 1.2s infinite;
 }
@@ -516,106 +876,19 @@
   30% { transform: translateY(-4px); opacity: 1; }
 }
 
-/* ── Dark mode 自动适配 ───────────────────────────────── */
-[data-theme="dark"] .chat-shell,
-[data-theme="tech-blue"] .chat-shell {
-  --chat-bg: #0f172a;
-  --chat-border: #1f2937;
-  --chat-side-bg: #111827;
-}
-[data-theme="dark"] .chat-sidebar,
-[data-theme="tech-blue"] .chat-sidebar {
-  color: #e5e7eb;
-}
-[data-theme="dark"] .chat-conv-item,
-[data-theme="tech-blue"] .chat-conv-item {
-  color: #d1d5db;
-}
-[data-theme="dark"] .chat-conv-item:hover,
-[data-theme="tech-blue"] .chat-conv-item:hover {
-  background: #1f2937;
-}
-[data-theme="dark"] .chat-conv-item.active,
-[data-theme="tech-blue"] .chat-conv-item.active {
-  background: #1e3a8a;
-  color: #93c5fd;
-}
-[data-theme="dark"] .chat-topbar,
-[data-theme="tech-blue"] .chat-topbar {
-  background: rgba(15, 23, 42, 0.85);
-  border-color: #1f2937;
-}
-[data-theme="dark"] .chat-topbar .title,
-[data-theme="tech-blue"] .chat-topbar .title {
-  color: #e5e7eb;
-}
-[data-theme="dark"] .chat-row.assistant .chat-bubble,
-[data-theme="tech-blue"] .chat-row.assistant .chat-bubble {
-  background: #1f2937;
-  color: #e5e7eb;
-  border-color: #374151;
-}
-[data-theme="dark"] .chat-input-wrap,
-[data-theme="tech-blue"] .chat-input-wrap {
-  background: rgba(15, 23, 42, 0.95);
-  border-color: #1f2937;
-}
-[data-theme="dark"] .chat-input-inner,
-[data-theme="tech-blue"] .chat-input-inner {
-  background: #1f2937;
-  border-color: #374151;
-}
-[data-theme="dark"] .chat-input-inner textarea,
-[data-theme="tech-blue"] .chat-input-inner textarea {
-  color: #e5e7eb;
-}
-[data-theme="dark"] .chat-input-toolbar .model-pill,
-[data-theme="tech-blue"] .chat-input-toolbar .model-pill {
-  background: #374151;
-  color: #d1d5db;
-}
-[data-theme="dark"] .chat-empty .suggestion,
-[data-theme="tech-blue"] .chat-empty .suggestion {
-  background: #1f2937;
-  border-color: #374151;
-  color: #d1d5db;
-}
-[data-theme="dark"] .chat-empty .suggestion:hover,
-[data-theme="tech-blue"] .chat-empty .suggestion:hover {
-  background: #1e3a8a;
-  border-color: #3b82f6;
-}
-[data-theme="dark"] .sources-block .source-item,
-[data-theme="tech-blue"] .sources-block .source-item {
-  background: #111827;
-  border-color: #1f2937;
-  color: #d1d5db;
-}
-[data-theme="dark"] .intent-card,
-[data-theme="tech-blue"] .intent-card {
-  background: linear-gradient(135deg, #422006 0%, #1f2937 100%);
-  border-color: #92400e;
-}
-[data-theme="dark"] .intent-row .value,
-[data-theme="tech-blue"] .intent-row .value {
-  background: rgba(0,0,0,0.3);
-  border-color: #78350f;
-  color: #fde68a;
-}
-
 /* ── nuclei 高级选项 ───────────────────────────────────── */
 .intent-advanced-toggle {
   background: transparent;
-  border: 1px dashed #d9d9d9;
-  color: #1677ff;
+  border: 1px dashed var(--chat-border, #d9d9d9);
+  color: var(--chat-accent, #1677ff);
   font-size: 12px;
   padding: 4px 10px;
   border-radius: 6px;
   cursor: pointer;
 }
 .intent-advanced-toggle:hover {
-  border-color: #1677ff;
-  background: #f0f7ff;
+  border-color: var(--chat-accent, #1677ff);
+  background: var(--chat-card-active, #f0f7ff);
 }
 .intent-nuclei-grid {
   display: grid;
@@ -623,16 +896,16 @@
   gap: 8px 12px;
   margin-top: 8px;
   padding: 10px;
-  background: rgba(255, 255, 255, 0.5);
+  background: color-mix(in srgb, var(--chat-card, #ffffff) 60%, transparent);
   border-radius: 8px;
-  border: 1px solid #ffe7ba;
+  border: 1px solid var(--chat-intent-value-border, #ffe7ba);
 }
 .intent-nuclei-grid label {
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--chat-text-2, #6b7280);
 }
 .intent-nuclei-grid label > span {
   font-weight: 500;
@@ -640,7 +913,7 @@
 .intent-sync-toggle {
   margin-top: 12px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--chat-text-2, #6b7280);
 }
 .intent-sync-toggle label {
   cursor: pointer;

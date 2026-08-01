@@ -4,9 +4,9 @@
 in PostgreSQL (so the next reconnect fails) and publishes a Redis event
 that every worker subscribes to so any in-flight WebSocket is closed.
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -39,8 +39,7 @@ async def revoke_agent(agent_id: str) -> dict[str, Any]:
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE agent_tokens SET revoked_at = NOW() "
-            "WHERE agent_id = $1 AND revoked_at IS NULL",
+            "UPDATE agent_tokens SET revoked_at = NOW() WHERE agent_id = $1 AND revoked_at IS NULL",
             agent_id,
         )
 
@@ -74,9 +73,7 @@ async def listen_for_revocations(callback) -> None:
                 try:
                     await callback(agent_id)
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "revoke_callback_failed", agent_id=agent_id, error=str(exc)
-                    )
+                    logger.warning("revoke_callback_failed", agent_id=agent_id, error=str(exc))
     finally:
         try:
             await pubsub.aclose()

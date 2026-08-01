@@ -10,6 +10,7 @@ API contract:
   - POST returns status="processing"; the terminal status is read back via GET
     after submitting with ?sync=true so the pipeline runs synchronously.
 """
+
 import os
 import sys
 
@@ -61,8 +62,11 @@ def main() -> None:
     # Scenario 1
     print("\n--- Scenario 1: Honeypot -> Investigate -> Verdict ---")
     resp = submit_event(
-        {"sanitized_text": "Honeypot captured whoami from 45.33.32.156",
-         "iocs": {"ip": ["45.33.32.156"], "command": ["whoami"]}, "source": "honeypot"},
+        {
+            "sanitized_text": "Honeypot captured whoami from 45.33.32.156",
+            "iocs": {"ip": ["45.33.32.156"], "command": ["whoami"]},
+            "source": "honeypot",
+        },
         admin_token,
     )
     check("1", "Submit honeypot event", resp.status_code == 200)
@@ -78,8 +82,11 @@ def main() -> None:
     # Scenario 2
     print("\n--- Scenario 2: CVE -> vuln_check / investigate -> Result ---")
     resp = submit_event(
-        {"sanitized_text": "CVE-2024-1234 exploit attempt on prod-api-01",
-         "iocs": {"ip": ["10.0.0.5"], "cve": ["CVE-2024-1234"]}, "source": "waf"},
+        {
+            "sanitized_text": "CVE-2024-1234 exploit attempt on prod-api-01",
+            "iocs": {"ip": ["10.0.0.5"], "cve": ["CVE-2024-1234"]},
+            "source": "waf",
+        },
         admin_token,
     )
     check("2", "Submit CVE event", resp.status_code == 200)
@@ -93,19 +100,26 @@ def main() -> None:
     # Scenario 3
     print("\n--- Scenario 3: Noise -> Ignore / Archive ---")
     resp = submit_event(
-        {"sanitized_text": "Port scan from 203.0.113.5 on internal network",
-         "iocs": {"ip": ["203.0.113.5"]}, "source": "ids"},
+        {
+            "sanitized_text": "Port scan from 203.0.113.5 on internal network",
+            "iocs": {"ip": ["203.0.113.5"]},
+            "source": "ids",
+        },
         admin_token,
     )
     check("3", "Submit noise event", resp.status_code == 200)
     data = resp.json()
     eid3 = data["event_id"]
     resp = client.get(f"/api/v1/events/{eid3}", headers=headers(admin_token))
-    check("3", "Noise event reached terminal status", resp.json().get("status") in TERMINAL_STATUSES)
+    check(
+        "3", "Noise event reached terminal status", resp.json().get("status") in TERMINAL_STATUSES
+    )
 
     # Scenario 4
     print("\n--- Scenario 4: Approval Workflow ---")
-    resp = client.post(f"/api/v1/events/{eid1}/approve?action=approved&note=test", headers=headers(admin_token))
+    resp = client.post(
+        f"/api/v1/events/{eid1}/approve?action=approved&note=test", headers=headers(admin_token)
+    )
     check("4", "Approve event", resp.status_code == 200)
     resp = client.get(f"/api/v1/events/{eid1}/trace", headers=headers(admin_token))
     check("4", "Get event trace", resp.status_code == 200)
@@ -133,11 +147,14 @@ def main() -> None:
     check("5", "/me returns correct username", resp.json().get("username") == "admin")
     resp = client.get("/api/v1/auth/me")
     check("5", "/me without token returns 401", resp.status_code == 401)
-    resp = client.post("/api/v1/events?sync=true",
-                       json={"sanitized_text": "x", "iocs": {}}, headers=None)
+    resp = client.post(
+        "/api/v1/events?sync=true", json={"sanitized_text": "x", "iocs": {}}, headers=None
+    )
     check("5", "Submit without token returns 401/403", resp.status_code in (401, 403))
     viewer_token = get_token("viewer", "viewer123")
-    resp = client.post(f"/api/v1/events/{eid1}/approve?action=approved", headers=headers(viewer_token))
+    resp = client.post(
+        f"/api/v1/events/{eid1}/approve?action=approved", headers=headers(viewer_token)
+    )
     check("5", "Viewer cannot approve (403)", resp.status_code == 403)
     resp = client.get("/api/v1/metrics", headers=headers(admin_token))
     check("5", "Admin can access metrics", resp.status_code == 200)

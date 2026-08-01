@@ -1,4 +1,4 @@
-﻿"""End-to-end verification for the Phase 5 monitor pipeline.
+"""End-to-end verification for the Phase 5 monitor pipeline.
 
 Exercises:
   - GET /api/v1/agents/{id}/monitor        (returns most-recent snapshots)
@@ -10,6 +10,7 @@ The WS path (agent -> gateway -> ES) is exercised separately in a future
 PR; for the MVP we monkey-patch the MonitorStore so the endpoint test
 stays offline-safe on dev boxes without an ES sidecar.
 """
+
 from __future__ import annotations
 
 import os
@@ -26,8 +27,8 @@ os.environ.setdefault("LOG_LEVEL", "WARNING")
 
 import pytest
 
-
 # ---------- stub MonitorStore (offline-safe) -------------------------------
+
 
 class _StubMonitorStore:
     """Replaces MonitorStore so the endpoint test does not need ES."""
@@ -47,11 +48,12 @@ def stub_store():
 @pytest.fixture(scope="module")
 def client(stub_store, monkeypatch_session):
     from fastapi.testclient import TestClient
-    from src.api.main import app
 
     # Patch the monitor_store singleton BEFORE TestClient sends any
     # request so /monitor reads from the stub.
     from src.agents import monitor_store as _ms_mod
+    from src.api.main import app
+
     _ms_mod._store = stub_store
     try:
         with TestClient(app) as c:
@@ -90,6 +92,7 @@ def viewer_headers(client):
 
 
 # ---------- tests -----------------------------------------------------------
+
 
 def test_01_endpoint_registered(client, admin_headers):
     r = client.get("/api/v1/agents/agent-x/monitor", headers=admin_headers)
@@ -134,9 +137,16 @@ def test_02_returns_seeded_events(client, admin_headers, stub_store):
 
 def test_03_limit_caps_response(client, admin_headers, stub_store):
     stub_store.events["agent-z"] = [
-        {"agent_id": "agent-z", "total_count": i, "process_count": i,
-         "collected_at": f"2026-07-28T10:00:{i:02d}Z", "received_at": f"2026-07-28T10:00:{i:02d}Z",
-         "interval_sec": 30, "truncated": False, "hostname": "h"}
+        {
+            "agent_id": "agent-z",
+            "total_count": i,
+            "process_count": i,
+            "collected_at": f"2026-07-28T10:00:{i:02d}Z",
+            "received_at": f"2026-07-28T10:00:{i:02d}Z",
+            "interval_sec": 30,
+            "truncated": False,
+            "hostname": "h",
+        }
         for i in range(50)
     ]
     r = client.get("/api/v1/agents/agent-z/monitor?limit=5", headers=admin_headers)
@@ -156,9 +166,16 @@ def test_04_limit_bounds(client, admin_headers):
 
 def test_05_analyst_can_read(client, analyst_headers, stub_store):
     stub_store.events["agent-ax"] = [
-        {"agent_id": "agent-ax", "total_count": 1, "process_count": 1,
-         "collected_at": "2026-07-28T10:00:00Z", "received_at": "2026-07-28T10:00:01Z",
-         "interval_sec": 30, "truncated": False, "hostname": "h"}
+        {
+            "agent_id": "agent-ax",
+            "total_count": 1,
+            "process_count": 1,
+            "collected_at": "2026-07-28T10:00:00Z",
+            "received_at": "2026-07-28T10:00:01Z",
+            "interval_sec": 30,
+            "truncated": False,
+            "hostname": "h",
+        }
     ]
     r = client.get("/api/v1/agents/agent-ax/monitor", headers=analyst_headers)
     assert r.status_code == 200
@@ -166,9 +183,16 @@ def test_05_analyst_can_read(client, analyst_headers, stub_store):
 
 def test_06_viewer_can_read(client, viewer_headers, stub_store):
     stub_store.events["agent-vx"] = [
-        {"agent_id": "agent-vx", "total_count": 1, "process_count": 1,
-         "collected_at": "2026-07-28T10:00:00Z", "received_at": "2026-07-28T10:00:01Z",
-         "interval_sec": 30, "truncated": False, "hostname": "h"}
+        {
+            "agent_id": "agent-vx",
+            "total_count": 1,
+            "process_count": 1,
+            "collected_at": "2026-07-28T10:00:00Z",
+            "received_at": "2026-07-28T10:00:01Z",
+            "interval_sec": 30,
+            "truncated": False,
+            "hostname": "h",
+        }
     ]
     r = client.get("/api/v1/agents/agent-vx/monitor", headers=viewer_headers)
     assert r.status_code == 200

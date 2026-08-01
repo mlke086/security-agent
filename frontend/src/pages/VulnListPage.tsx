@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react"
+﻿import { useEffect, useState, useMemo } from "react"
 import { Card, Table, Tag, Select, Button, Space, message, Modal, Input, DatePicker, Tooltip } from "antd"
 import { ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined, EyeOutlined, SearchOutlined } from "@ant-design/icons"
 import api, { listVulns, getHostStats, type HostStatsRow, type VulnFinding } from "../api/client"
 import { formatBeijing } from "../utils/time"
+import { showError } from "../utils/showError"
 import { useDebouncedValue } from "../utils/useDebouncedValue"
 import AiEvidenceBadge from "../components/AiEvidenceBadge"
 import VulnDetailDrawer from "../components/VulnDetailDrawer"
@@ -64,7 +65,7 @@ export default function VulnListPage() {
         date_to: dateRange?.[1],
       })
       setFindings(r.items)
-    } catch { message.error("加载失败") }
+    } catch (err) { showError(err, "加载失败") }
     finally { setLoading(false) }
   }
 
@@ -73,7 +74,7 @@ export default function VulnListPage() {
       await api.patch("/vulnscan/vulns/" + id, { status: newStatus })
       message.success("状态已更新")
       fetchData()
-    } catch { message.error("更新失败") }
+    } catch (err) { showError(err, "更新失败") }
   }
 
   const batchUpdateStatus = async (newStatus: string) => {
@@ -87,7 +88,8 @@ export default function VulnListPage() {
     fetchData()
   }
 
-  const columns = [
+  // V12 阶段 3.2: memoize columns
+  const columns = useMemo(() => [
     { title: "主机", dataIndex: "hostname", key: "hostname", width: 110 },
     { title: "CVE", dataIndex: "cve", key: "cve", width: 140, render: (v: string | null) => v || "-" },
     { title: "名称", dataIndex: "name", key: "name", ellipsis: true },
@@ -122,12 +124,12 @@ export default function VulnListPage() {
     { title: "修复时间", dataIndex: "last_fixed_at", key: "last_fixed_at", width: 110,
       render: (v: string | null | undefined, record: VulnFinding) => v ? <Tooltip title={`首次: ${formatBeijing(record.first_fixed_at)}`}>{formatBeijing(v)}</Tooltip> : "-" },
     {
-      title: "操作", key: "action", width: 70, fixed: "right" as const,
+      title: "操作", key: "action", width: 100, fixed: "right" as const,
       render: (_: VulnFinding, record: VulnFinding) => (
-        <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => setDetailId(record.finding_id)}>详情</Button>
+        <Button size="small" type="link" icon={<EyeOutlined />} style={{ padding: 0 }} onClick={() => setDetailId(record.finding_id)}>详情</Button>
       ),
     },
-  ]
+  ], [])
 
   return (
     <Card
@@ -194,7 +196,7 @@ export default function VulnListPage() {
           selectedRowKeys: selectedKeys,
           onChange: (keys) => setSelectedKeys(keys as string[]),
         }}
-        pagination={{ pageSize: 20 }}
+        pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"], showTotal: (t) => `共 ${t} 条` }}
         locale={{ emptyText: "暂无漏洞记录，请先执行扫描" }}
       />
 

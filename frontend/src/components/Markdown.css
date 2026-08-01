@@ -1,5 +1,8 @@
 /* Markdown typography used by <Markdown> renderer.
-   Scoped via .md-content so it never leaks onto the page shell. */
+   Scoped via .md-content so it never leaks onto the page shell.
+   Colors come from the chat theme variables (defined in ChatScan.css,
+   keyed off <html data-theme=...>) so code blocks / tables / quotes adapt
+   to all four UI themes automatically. */
 
 .md-content {
   font-size: 14px;
@@ -40,9 +43,9 @@
 .md-content blockquote {
   margin: 8px 0;
   padding: 4px 12px;
-  border-left: 3px solid #d1d5db;
-  color: #6b7280;
-  background: rgba(0, 0, 0, 0.02);
+  border-left: 3px solid var(--chat-border, #d1d5db);
+  color: var(--chat-text-2, #6b7280);
+  background: color-mix(in srgb, var(--chat-card, #ffffff) 55%, transparent);
   border-radius: 0 4px 4px 0;
 }
 
@@ -51,12 +54,12 @@
   font-size: 0.92em;
   padding: 1px 5px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.06);
+  background: color-mix(in srgb, var(--chat-text-3, #9ca3af) 14%, transparent);
 }
 .md-content pre {
   margin: 8px 0;
   padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.05);
+  background: color-mix(in srgb, var(--chat-text-3, #9ca3af) 12%, transparent);
   border-radius: 6px;
   overflow-x: auto;
 }
@@ -67,7 +70,7 @@
 }
 
 .md-content a {
-  color: #1677ff;
+  color: var(--chat-accent, #1677ff);
   text-decoration: none;
 }
 .md-content a:hover {
@@ -82,50 +85,20 @@
 }
 .md-content th,
 .md-content td {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--chat-border, #e5e7eb);
   padding: 6px 10px;
   text-align: left;
 }
 .md-content th {
-  background: rgba(0, 0, 0, 0.03);
+  background: color-mix(in srgb, var(--chat-text-3, #9ca3af) 10%, transparent);
   font-weight: 600;
 }
 
 .md-content hr {
   border: 0;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--chat-border, #e5e7eb);
   margin: 12px 0;
 }
 
 .md-content strong { font-weight: 600; }
 .md-content em { font-style: italic; }
-
-/* Dark theme tweaks */
-[data-theme="dark"] .md-content code,
-[data-theme="tech-blue"] .md-content code {
-  background: rgba(255, 255, 255, 0.08);
-}
-[data-theme="dark"] .md-content pre,
-[data-theme="tech-blue"] .md-content pre {
-  background: rgba(255, 255, 255, 0.06);
-}
-[data-theme="dark"] .md-content blockquote,
-[data-theme="tech-blue"] .md-content blockquote {
-  border-left-color: #4b5563;
-  color: #9ca3af;
-  background: rgba(255, 255, 255, 0.04);
-}
-[data-theme="dark"] .md-content th,
-[data-theme="tech-blue"] .md-content th {
-  background: rgba(255, 255, 255, 0.06);
-}
-[data-theme="dark"] .md-content th,
-[data-theme="dark"] .md-content td,
-[data-theme="tech-blue"] .md-content th,
-[data-theme="tech-blue"] .md-content td {
-  border-color: #374151;
-}
-[data-theme="dark"] .md-content hr,
-[data-theme="tech-blue"] .md-content hr {
-  border-top-color: #374151;
-}

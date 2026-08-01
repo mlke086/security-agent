@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react"
-import { Card, List, Tag, Statistic, Row, Col, Button, Input, Space, message, Empty, Spin, Progress } from "antd"
+import { showError } from "../utils/showError"
+import { Card, List, Tag, Statistic, Row, Col, Button, Input, Space, Empty, Spin, Progress } from "antd"
 import { SearchOutlined, ArrowLeftOutlined } from "@ant-design/icons"
 import { useSearchParams, useNavigate } from "react-router-dom"
 import Markdown from "../components/Markdown"
 import "../components/Markdown.css"
+import AiEvidenceBadge from "../components/AiEvidenceBadge"
 import api from "../api/client"
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -32,7 +34,7 @@ export default function ScanReportPage() {
     try {
       const res = await api.get("/vulnscan/reports/" + tid)
       setReport(res.data)
-    } catch { message.error("报告未找到，任务可能尚未完成") }
+    } catch (err) { showError(err, "报告未找到，任务可能尚未完成") }
     finally { setLoading(false) }
   }
 
@@ -59,7 +61,10 @@ export default function ScanReportPage() {
     )
   }
 
-  // Build chart data
+  // Build chart data (S-P2-16: precompute label->key so color lookup is O(1))
+  const sevColorByLabel: Record<string, string> = Object.fromEntries(
+    Object.entries(SEVERITY_LABEL).map(([k, label]) => [label, k]),
+  )
   const sevData: { type: string; value: number }[] = Object.entries(report.stats?.by_severity || {}).map(([k, v]) => ({
     type: SEVERITY_LABEL[k] || k, value: Number(v) || 0,
   }))
@@ -96,6 +101,41 @@ export default function ScanReportPage() {
       {/* 图表 */}
       {/* 严重等级分布（antd Progress，避免 @ant-design/charts 动态加载报错） */}
       <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={24}>
+          <Card title="AI 建议" size="small">
+            <Space direction="vertical" style={{ width: "100%" }} size="middle">
+              <Space>
+                <AiEvidenceBadge
+                  aiProcessed={report.ai_processed}
+                  aiModel={report.ai_model}
+                  aiReason={!report.ai_processed ? "LLM 不可用，建议重新扫描以获取 AI 总体建议" : null}
+                />
+                {report.ai_processed_at && (
+                  <span style={{ color: "#999", fontSize: 12 }}>生成于 {report.ai_processed_at}</span>
+                )}
+              </Space>
+              {report.ai_overall_advice ? (
+                <div style={{ background: "#fffbe6", padding: 12, borderRadius: 6, borderLeft: "3px solid #faad14" }}>
+                  <div style={{ fontWeight: 500, marginBottom: 4 }}>AI 总体建议</div>
+                  <Markdown source={report.ai_overall_advice} />
+                </div>
+              ) : (
+                <div style={{ color: "#999" }}>
+                  {report.ai_processed ? "AI 已处理但本报告未生成总体建议" : "AI 未处理，未生成总体建议"}
+                </div>
+              )}
+              {report.ai_analysis && (
+                <div style={{ background: "#fafafa", padding: 12, borderRadius: 6 }}>
+                  <div style={{ fontWeight: 500, marginBottom: 4 }}>AI 分析摘要</div>
+                  <Markdown source={report.ai_analysis} />
+                </div>
+              )}
+            </Space>
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={12}>
           <Card title="严重等级分布" size="small">
             {sevData.length === 0 ? (
@@ -108,7 +148,7 @@ export default function ScanReportPage() {
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                       <span>{s.type}</span><span>{s.value}</span>
                     </div>
-                    <Progress percent={Math.round((s.value / max) * 100)} strokeColor={SEVERITY_COLORS[Object.keys(SEVERITY_LABEL).find((k) => SEVERITY_LABEL[k] === s.type) || ""] || "#1677ff"} showInfo={false} size="small" />
+                    <Progress percent={Math.round((s.value / max) * 100)} strokeColor={SEVERITY_COLORS[sevColorByLabel[s.type]] || "#1677ff"} showInfo={false} size="small" />
                   </div>
                 )
               })
@@ -136,23 +176,67 @@ export default function ScanReportPage() {
         </Col>
       </Row>
 
-      {/* Top 漏洞 */}
+      {/* Top 漏洞 (2026-07-31 UX upgrade):
+         - 严重等级徽章 + 名称 + 主机：单行排版，超过部分省略
+         - 分类/CVE + 修复建议 上下位置，不重叠
+         - 名称里的换行折叠成空格，避免奇怪换行 */}
       <Card title="Top 漏洞" style={{ marginBottom: 16 }}>
-        <List
-          dataSource={report.top_vulns || []}
-          renderItem={(item: any) => (
-            <List.Item
-              extra={<Tag color={SEVERITY_COLORS[item.severity] || "default"}>{SEVERITY_LABEL[item.ai_severity || item.severity] || item.ai_severity || item.severity}</Tag>}
-            >
-              <List.Item.Meta
-                title={<span>{item.name} <Tag style={{ marginLeft: 8 }}>{item.hostname}</Tag></span>}
-                description={item.cve ? `CVE: ${item.cve}` : "基线检查"}
-              />
-              {item.fix_advice && <div style={{ color: "#666", fontSize: 13, marginTop: 4 }}>修复建议: {item.fix_advice}</div>}
-            </List.Item>
-          )}
-          locale={{ emptyText: <Empty description="未发现漏洞" /> }}
-        />
+        {(report.top_vulns || []).length === 0 ? (
+          <Empty description="未发现漏洞" />
+        ) : (
+          <List
+            dataSource={report.top_vulns}
+            split
+            renderItem={(item: any) => {
+              const sev = item.ai_severity || item.severity || 'info'
+              const flatName = String(item.name || '').replace(/[\r\n]+/g, ' ').trim()
+              const cveLabel = item.cve
+                ? `CVE: ${item.cve}`
+                : (item.category === 'baseline' || !item.cve ? '基线检查' : '漏洞详情')
+              return (
+                <List.Item style={{ alignItems: 'flex-start', padding: '12px 0' }}>
+                  <div style={{ width: '100%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <Tag color={SEVERITY_COLORS[sev] || 'default'} style={{ flex: '0 0 auto' }}>
+                        {SEVERITY_LABEL[sev] || sev}
+                      </Tag>
+                      <span
+                        title={flatName}
+                        style={{
+                          flex: '1 1 auto',
+                          minWidth: 0,
+                          fontWeight: 500,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {flatName}
+                      </span>
+                      {item.hostname && (
+                        <Tag style={{ flex: '0 0 auto' }} color="geekblue">{item.hostname}</Tag>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline', color: '#666', fontSize: 13 }}>
+                      <span style={{ color: '#999' }}>{cveLabel}</span>
+                      {item.category && (
+                        <Tag style={{ fontSize: 11, margin: 0 }} color="default">
+                          {item.category === 'baseline' ? '基线' : item.category === 'sys_vuln' ? '漏洞' : item.category}
+                        </Tag>
+                      )}
+                    </div>
+                    {item.fix_advice && (
+                      <div style={{ marginTop: 6, color: '#444', fontSize: 13, lineHeight: 1.6 }}>
+                        <span style={{ color: '#999', marginRight: 4 }}>修复建议:</span>
+                        <span style={{ wordBreak: 'break-word' }}>{item.fix_advice}</span>
+                      </div>
+                    )}
+                  </div>
+                </List.Item>
+              )
+            }}
+          />
+        )}
       </Card>
 
       {/* 修复建议 */}

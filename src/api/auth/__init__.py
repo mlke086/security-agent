@@ -1,4 +1,5 @@
 """Auth module exports."""
+
 from src.api.auth.jwt import (
     UserInDB,
     authenticate_user,

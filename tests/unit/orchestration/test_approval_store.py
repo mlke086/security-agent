@@ -118,9 +118,9 @@ async def test_wait_result_waits_through_partial_vote():
 
     async def _vote_twice_later():
         await asyncio.sleep(0.3)
-        await s.add_vote(eid, "alice", "approved")   # pending (1<2)
+        await s.add_vote(eid, "alice", "approved")  # pending (1<2)
         await asyncio.sleep(0.3)
-        await s.add_vote(eid, "bob", "approved")     # approved (2>=2)
+        await s.add_vote(eid, "bob", "approved")  # approved (2>=2)
 
     asyncio.create_task(_vote_twice_later())
     result = await s.wait_result(aid, timeout=5)

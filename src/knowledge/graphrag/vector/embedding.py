@@ -1,4 +1,4 @@
-﻿from functools import lru_cache
+from functools import lru_cache
 
 EMBEDDING_DIM = 1024  # BGE-large-zh-v1.5 输出 1024 维（此前误写 768）
 
@@ -6,6 +6,7 @@ EMBEDDING_DIM = 1024  # BGE-large-zh-v1.5 输出 1024 维（此前误写 768）
 @lru_cache(maxsize=1)
 def _get_model():
     from sentence_transformers import SentenceTransformer
+
     return SentenceTransformer("BAAI/bge-large-zh-v1.5", local_files_only=True)
 
 

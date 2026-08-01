@@ -1,4 +1,4 @@
-﻿"""EventBus — Redis Pub/Sub event bus for cross-worker SSE push."""
+"""EventBus — Redis Pub/Sub event bus for cross-worker SSE push."""
 
 import json
 from typing import Any
@@ -20,7 +20,8 @@ class EventBus:
     async def _get_redis(self) -> aioredis.Redis:
         if self._redis is None:
             self._redis = aioredis.from_url(
-                get_settings().redis_url, decode_responses=True,
+                get_settings().redis_url,
+                decode_responses=True,
             )
         return self._redis
 

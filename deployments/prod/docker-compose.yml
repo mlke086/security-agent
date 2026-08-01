@@ -118,6 +118,12 @@ services:
       - "${FRONTEND_PORT:-8081}:80"
     depends_on:
       - api
+    # V12 5.11 (2026-08-02): api 服务是 network_mode: host（不在 docker
+    # bridge 网络内），nginx 的 upstream `secagent-api:8000` 无法通过
+    # docker DNS 解析。host-gateway 把该名字映射到宿主机网关，nginx
+    # 经宿主机的 host 网络端口到达 api。
+    extra_hosts:
+      - "secagent-api:host-gateway"
     logging: *logging
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1/healthz"]

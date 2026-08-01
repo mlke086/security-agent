@@ -11,7 +11,6 @@ import re
 
 import pytest
 
-
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEPLOYMENTS = REPO_ROOT / "deployments" / "prod"
 
@@ -29,7 +28,7 @@ def _dockerfile_section(dockerfile: str, start_marker: str, end_marker: str | No
     start = dockerfile.find(start_marker)
     if start == -1:
         return dockerfile
-    body = dockerfile[start + len(start_marker):]
+    body = dockerfile[start + len(start_marker) :]
     if end_marker:
         end = body.find(end_marker)
         if end == -1:
@@ -46,10 +45,7 @@ def _strip_shell_comments(text: str) -> str:
     http_proxy". Join continuation lines (BACKSLASH newline) so a single
     `ENV http_proxy=...` directive is matched as one logical line.
     """
-    no_comments = "\n".join(
-        line for line in text.splitlines()
-        if not line.lstrip().startswith("#")
-    )
+    no_comments = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     joined = re.sub(r"\\\n\s*", " ", no_comments)  # join continuation lines
     return joined
 
@@ -184,4 +180,5 @@ def test_dockerfile_frontend_runtime_does_not_leak_proxy_env():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(pytest.main([__file__, "-v"]))

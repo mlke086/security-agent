@@ -15,6 +15,9 @@ LLM_PROVIDER: openai                       # claude | openai | vllm
 OPENAI_API_KEY: ""                          # 从 env 覆盖(更安全)
 OPENAI_BASE_URL: https://api.deepseek.com/v1
 OPENAI_MODEL: deepseek-chat
+# V12 5.9 (2026-08-02): LLM 请求超时(秒)，覆盖代码默认 120s。
+# "详细介绍某主机漏洞情况" 这类长回答需要 >30s。
+LLM_REQUEST_TIMEOUT_SEC: 120
 
 # ---- Kafka ----
 KAFKA_BOOTSTRAP_SERVERS: 127.0.0.1:9092
@@ -75,12 +78,21 @@ AGENT_HMAC_KEY: ""                          # 任意字符串
 AGENT_DEBUG: false
 AGENT_HEARTBEAT_INTERVAL: 60
 AGENT_BINARY_DIR: deployments/agent/dist
+# ---- Nuclei CLI 版本控制（内网下载站，避免直连 GitHub 被墙）----
+# 包名按约定拼接: {NUCLEI_DOWNLOAD_BASE_URL}/nuclei_{NUCLEI_VERSION}_{os}_{arch}.zip
+# 安装脚本生成时嵌入此值；agent 心跳上报 nuclei_version，服务端据此对比，不一致则下发 nuclei_upgrade。
+NUCLEI_DOWNLOAD_BASE_URL: "http://192.168.80.101:8081"
+NUCLEI_VERSION: "3.11.0"
+# nuclei-templates 模板库版本。包名约定 {NUCLEI_DOWNLOAD_BASE_URL}/nuclei-templates-{NUCLEI_TEMPLATES_VERSION}.zip
+# 由规则页「同步 Nuclei 模板」按钮触发下发到在线 agent，agent 解压到 /opt/secagent/templates。
+NUCLEI_TEMPLATES_VERSION: "10.4.6"
 RULES_SYNC_SOURCE: nvd                      # nvd | github
 RULES_SYNC_CRON: "0 3 * * *"
 
 # ---- 规则数据源 ----
 NVD_API_KEY: ""                             # 强烈建议配,否则限速 5 req/30s
 NVD_PROXY: ""                               # http://192.168.254.121:7897
+NVD_TIMEOUT_SEC: 300                        # NVD HTTP 超时秒数（5分钟，网络慢）
 ADVISORY_LOOKBACK_DAYS: 30
 
 # ---- 种子用户密码(>=12 位,生产必须改)----

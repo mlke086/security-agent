@@ -13,9 +13,9 @@ class AuditEntry(TypedDict):
 class MainGraphState(TypedDict):
     event_id: str
     raw_event: dict[str, Any]
-    priority: str                          # high | medium | low
+    priority: str  # high | medium | low
     event_tags: list[str]
-    stage: str                             # triage | investigate | verify | respond | done
+    stage: str  # triage | investigate | verify | respond | done
     final_verdict: str | None
     confidence_score: float | None
     pending_action: dict[str, Any] | None

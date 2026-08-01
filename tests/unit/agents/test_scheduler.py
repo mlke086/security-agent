@@ -1,4 +1,5 @@
-﻿"""Unit tests for scheduler: start/stop, offline check, rules sync loop."""
+"""Unit tests for scheduler: start/stop, offline check, rules sync loop."""
+
 import asyncio
 from unittest.mock import AsyncMock, patch
 
@@ -41,6 +42,7 @@ class TestStartStop:
             pass
 
         import src.agents.scheduler as sched_mod
+
         sched_mod._tasks = [t1, t2]
         await stop_background_tasks()
         assert len(sched_mod._tasks) == 0
@@ -60,7 +62,10 @@ class TestOfflineCheckLoop:
 
     @pytest.mark.asyncio
     async def test_offline_check_handles_error(self):
-        with patch("src.agents.manager.mark_offline_expired", AsyncMock(side_effect=RuntimeError("ES down"))):
+        with patch(
+            "src.agents.manager.mark_offline_expired",
+            AsyncMock(side_effect=RuntimeError("ES down")),
+        ):
             task = asyncio.create_task(_offline_check_loop())
             await asyncio.sleep(0.1)
             task.cancel()

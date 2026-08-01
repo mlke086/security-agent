@@ -94,62 +94,77 @@ chmod 0750 "$INSTALL_DIR/agent"
 # new binary inherits it and systemd execve() fails with 203/EXEC.
 restorecon "$INSTALL_DIR/agent" 2>/dev/null || true
 
-# --- 4. Best-effort nuclei CLI download (P0 / 2026-07-18) ---------------------
+# --- 4. Best-effort nuclei CLI download (internal mirror) --------------------
 # The Go agent ships a runNuclei() path that shells out to /opt/secagent/bin/nuclei.
-# We download it from the official projectdiscovery/nuclei release. The download
-# is best-effort: matcher-only mode still works without nuclei, so we swallow
-# failures with `|| true` and never abort the install.
+# We download the nuclei CLI from an internal nginx mirror (configured in Nacos:
+# NUCLEI_DOWNLOAD_BASE_URL + NUCLEI_VERSION) rather than GitHub, which is
+# unreachable from many CN networks. The download is best-effort: matcher-only
+# mode still works without nuclei, so we swallow failures with `|| true` and
+# never abort the install. Package name follows the convention
+# nuclei_{version}_{os}_{arch}.zip.
 install_nuclei() {
     mkdir -p "$INSTALL_DIR/bin"
-    log "Downloading nuclei CLI (best-effort) from GitHub release..."
-    local NUCLEI_VERSION="v3.3.0"
-    local NUCLEI_TARBALL="nuclei_${NUCLEI_VERSION}_linux_${ARCH}.zip"
-    local TMPDIR_NUC=$(mktemp -d)
-    if curl -fsSL --fail -o "$TMPDIR_NUC/$NUCLEI_TARBALL" \
-        "https://github.com/projectdiscovery/nuclei/releases/download/${NUCLEI_VERSION}/${NUCLEI_TARBALL}" 2>/dev/null; then
-        (cd "$TMPDIR_NUC" && (command -v unzip >/dev/null && unzip -o "$NUCLEI_TARBALL" || python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('.')" "$NUCLEI_TARBALL")) >/dev/null 2>&1
-        if [ -x "$TMPDIR_NUC/nuclei" ]; then
-            install -m 0755 "$TMPDIR_NUC/nuclei" "$INSTALL_DIR/bin/nuclei"
-            log "nuclei installed at $INSTALL_DIR/bin/nuclei"
+    local NUCLEI_ZIP="nuclei___NUCLEI_VERSION___linux_${ARCH}.zip"
+    log "Downloading nuclei CLI v__NUCLEI_VERSION__ from internal mirror..."
+    local TMPD=$(mktemp -d)
+    if curl -fsSL --fail -o "$TMPD/$NUCLEI_ZIP" \
+        "__NUCLEI_DOWNLOAD_BASE_URL__/$NUCLEI_ZIP" 2>/dev/null; then
+        # nuclei ships a .zip; prefer unzip, fall back to python3 zipfile.
+        (cd "$TMPD" && (command -v unzip >/dev/null && unzip -o "$NUCLEI_ZIP" \
+            || python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('.')" "$NUCLEI_ZIP")) >/dev/null 2>&1
+        if [ -x "$TMPD/nuclei" ]; then
+            install -m 0755 "$TMPD/nuclei" "$INSTALL_DIR/bin/nuclei"
+            log "nuclei v__NUCLEI_VERSION__ installed at $INSTALL_DIR/bin/nuclei"
         else
-            log "nuclei tarball downloaded but binary not found -- matcher-only mode will be used"
+            log "nuclei zip extracted but binary not found -- matcher-only mode will be used"
         fi
     else
         log "nuclei download failed -- matcher-only mode will be used"
     fi
-    rm -rf "$TMPDIR_NUC"
+    rm -rf "$TMPD"
 }
 
-# --- 4b. Best-effort nuclei templates sync (P1-GO-4 / 2026-07-19) ------------
-# The Go agent's nuclei runner reads templates from $INSTALL_DIR/templates.
-# nuclei ships its own -update flag, but the bundled templates are huge
-# (multi-thousand templates) so we skip them here and instead drop a small
-# "critical" subset pulled from nuclei-templates (the official repo) so the
-# scanner has something to work with on a fresh host. Best-effort: failure
-# here just means matcher-only mode until the next console-driven
-# rule_update delivers a fresh manifest.
+# NOTE: nuclei-templates are pulled from the same internal mirror at install
+# time so a fresh host can run real nuclei scans without waiting for the
+# operator to click「同步 Nuclei 模板」. The console-side button still exists
+# for version bumps on already-installed agents. Best-effort: a download
+# failure here leaves the matcher-only path working; nuclei just finds no
+# templates until the next sync.
 install_nuclei_templates() {
-    mkdir -p "$INSTALL_DIR/templates"
-    log "Downloading nuclei templates subset (best-effort)..."
-    local TEMPLATES_VERSION="v9.6.0"
-    local TARBALL="nuclei-templates-${TEMPLATES_VERSION}.tar.gz"
-    local TMPDIR_TPL=$(mktemp -d)
-    if curl -fsSL --fail -o "$TMPDIR_TPL/$TARBALL" \
-        "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/${TEMPLATES_VERSION}.tar.gz" 2>/dev/null; then
-        (cd "$TMPDIR_TPL" && tar -xzf "$TARBALL" 2>/dev/null) || true
-        # Copy just the cves/ + exposures/ subsets -- enough for "real CVE scan"
-        # without bloating install from tens of thousands of templates.
-        if [ -d "$TMPDIR_TPL/nuclei-templates-${TEMPLATES_VERSION#v}/cves" ]; then
-            cp -r "$TMPDIR_TPL/nuclei-templates-${TEMPLATES_VERSION#v}/cves" "$INSTALL_DIR/templates/" 2>/dev/null || true
-        fi
-        if [ -d "$TMPDIR_TPL/nuclei-templates-${TEMPLATES_VERSION#v}/exposures" ]; then
-            cp -r "$TMPDIR_TPL/nuclei-templates-${TEMPLATES_VERSION#v}/exposures" "$INSTALL_DIR/templates/" 2>/dev/null || true
-        fi
-        log "nuclei templates installed at $INSTALL_DIR/templates/"
-    else
-        log "nuclei templates download failed -- matcher-only mode will be used until server pushes templates"
+    # Idempotent: skip if a category dir is already present (re-install on a
+    # host that already has templates). Version bumps go through the console
+    # button, which clears + re-extracts, so we don't re-download here.
+    if [ -d "$INSTALL_DIR/templates/cves" ] || [ -d "$INSTALL_DIR/templates/exposures" ]; then
+        log "nuclei templates already present, skipping download"
+        return 0
     fi
-    rm -rf "$TMPDIR_TPL"
+    local NUCLEI_TPL_VER="__NUCLEI_TEMPLATES_VERSION__"
+    local TPL_ZIP="nuclei-templates-${NUCLEI_TPL_VER}.zip"
+    log "Downloading nuclei-templates v${NUCLEI_TPL_VER} from internal mirror..."
+    mkdir -p "$INSTALL_DIR/templates"
+    local TMPD=$(mktemp -d)
+    if curl -fsSL --fail -o "$TMPD/$TPL_ZIP" \
+        "__NUCLEI_DOWNLOAD_BASE_URL__/$TPL_ZIP" 2>/dev/null; then
+        (cd "$TMPD" && (command -v unzip >/dev/null && unzip -o "$TPL_ZIP" \
+            || python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('.')" "$TPL_ZIP")) >/dev/null 2>&1
+        # The projectdiscovery zip wraps everything in a top-level
+        # nuclei-templates-<ver>/ dir; strip it so categories (cves/,
+        # exposures/, ...) land directly under templates/ where nuclei -t reads.
+        local WRAPPER="$TMPD/nuclei-templates-${NUCLEI_TPL_VER}"
+        if [ -d "$WRAPPER" ]; then
+            cp -r "$WRAPPER/." "$INSTALL_DIR/templates/" 2>/dev/null
+        else
+            cp -r "$TMPD/." "$INSTALL_DIR/templates/" 2>/dev/null
+        fi
+        if [ -d "$INSTALL_DIR/templates/cves" ] || [ -d "$INSTALL_DIR/templates/exposures" ]; then
+            log "nuclei-templates v${NUCLEI_TPL_VER} installed at $INSTALL_DIR/templates"
+        else
+            log "nuclei-templates extracted but no category dirs found -- matcher-only mode"
+        fi
+    else
+        log "nuclei-templates download failed -- matcher-only mode will be used"
+    fi
+    rm -rf "$TMPD"
 }
 
 install_nuclei || true
@@ -259,6 +274,40 @@ New-Item -ItemType Directory -Force -Path $INSTALL_DIR, $CONFIG_DIR | Out-Null
 $ARCH = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "amd64" }
 $BIN_URL = "$CONSOLE/api/v1/agents/binary/windows/$ARCH"
 Invoke-WebRequest -Uri "$BIN_URL?token=$TOKEN" -OutFile "$INSTALL_DIR\agent.exe"
+# Best-effort nuclei CLI download from internal mirror (avoid GitHub).
+$NucleiZip = "nuclei___NUCLEI_VERSION___windows_$ARCH.zip"
+$NucleiUrl = "__NUCLEI_DOWNLOAD_BASE_URL__/$NucleiZip"
+New-Item -ItemType Directory -Force -Path "$INSTALL_DIR\\bin" | Out-Null
+try {
+    Invoke-WebRequest -Uri $NucleiUrl -OutFile "$INSTALL_DIR\\bin\\$NucleiZip"
+    Expand-Archive -Path "$INSTALL_DIR\\bin\\$NucleiZip" -DestinationPath "$INSTALL_DIR\\bin" -Force
+    Remove-Item "$INSTALL_DIR\\bin\\$NucleiZip"
+    Write-Host "[secagent] nuclei v__NUCLEI_VERSION__ installed"
+} catch {
+    Write-Host "[secagent] nuclei download failed -- matcher-only mode will be used"
+}
+# Best-effort nuclei-templates download from the same internal mirror so a
+# fresh host can run real nuclei scans. The zip wraps content in a top-level
+# nuclei-templates-<ver>/ dir; Expand-Archive keeps it, so we move the
+# category subdirs up one level into templates/.
+$TplZip = "nuclei-templates-__NUCLEI_TEMPLATES_VERSION__.zip"
+$TplUrl = "__NUCLEI_DOWNLOAD_BASE_URL__/$TplZip"
+$TplDir = "$INSTALL_DIR\\templates"
+$TplExtract = "$INSTALL_DIR\\_tpl_tmp"
+New-Item -ItemType Directory -Force -Path $TplDir | Out-Null
+try {
+    Invoke-WebRequest -Uri $TplUrl -OutFile "$TplDir\\$TplZip"
+    if (Test-Path $TplExtract) { Remove-Item -Recurse -Force $TplExtract }
+    Expand-Archive -Path "$TplDir\\$TplZip" -DestinationPath $TplExtract -Force
+    Remove-Item "$TplDir\\$TplZip"
+    $Wrapper = Join-Path $TplExtract "nuclei-templates-__NUCLEI_TEMPLATES_VERSION__"
+    $Src = if (Test-Path $Wrapper) { $Wrapper } else { $TplExtract }
+    Copy-Item -Path "$Src\\*" -Destination $TplDir -Recurse -Force
+    Remove-Item -Recurse -Force $TplExtract
+    Write-Host "[secagent] nuclei-templates v__NUCLEI_TEMPLATES_VERSION__ installed"
+} catch {
+    Write-Host "[secagent] nuclei-templates download failed -- matcher-only mode will be used"
+}
 @{"console_url":"$CONSOLE","ca_path":"$CONFIG_DIR\\ca.pem","enroll_token":"$TOKEN"} | ConvertTo-Json | Out-File -Encoding utf8 "$CONFIG_DIR\\config.json"
 New-Service -Name "SecAgent" -BinaryPathName "$INSTALL_DIR\agent.exe" -DisplayName "Security Agent" -StartupType Automatic
 Start-Service -Name "SecAgent"
@@ -347,10 +396,21 @@ def get_install_script_content(token: str, os_type: str, console_url: str | None
     Uses simple token substitution (not str.format) so that bash / PowerShell
     constructs that contain literal ``{`` and ``}`` (JSON, awk scripts, etc.)
     do not need to be double-escaped.
+
+    nuclei base URL / version come from Nacos-backed settings so the operator
+    can bump the nuclei version without touching code: the generated install
+    script embeds whatever Nacos currently advertises.
     """
-    url = console_url or get_settings().agent_console_external_url
+    s = get_settings()
+    url = console_url or s.agent_console_external_url
     template = INSTALL_PS1 if os_type == "windows" else INSTALL_SH
-    return template.replace("__SECAGENT_TOKEN__", token).replace("__SECAGENT_CONSOLE_URL__", url)
+    return (
+        template.replace("__SECAGENT_TOKEN__", token)
+        .replace("__SECAGENT_CONSOLE_URL__", url)
+        .replace("__NUCLEI_DOWNLOAD_BASE_URL__", s.nuclei_download_base_url.rstrip("/"))
+        .replace("__NUCLEI_VERSION__", s.nuclei_version)
+        .replace("__NUCLEI_TEMPLATES_VERSION__", s.nuclei_templates_version)
+    )
 
 
 async def register_enroll_token(agent_id: str, agent_token: str, ttl_days: int = 365) -> None:

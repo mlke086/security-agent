@@ -14,7 +14,7 @@ Mirrors VulnscanStore:
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from elasticsearch import AsyncElasticsearch
@@ -140,18 +140,14 @@ class AlertStore:
                 document=alert.model_dump(mode="json"),
             )
         except Exception as exc:
-            logger.warning(
-                "alerts_es_index_failed", alert_id=alert.alert_id, error=str(exc)
-            )
+            logger.warning("alerts_es_index_failed", alert_id=alert.alert_id, error=str(exc))
 
     async def get_alert(self, alert_id: str) -> dict | None:
         from src.common.db.pg import get_pg_pool
 
         pool = await get_pg_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM alerts WHERE alert_id = $1", alert_id
-            )
+            row = await conn.fetchrow("SELECT * FROM alerts WHERE alert_id = $1", alert_id)
         if not row:
             return None
         return dict(row)
@@ -188,9 +184,12 @@ class AlertStore:
             "SELECT alert_id, source, severity, status, hostname, host_ip, "
             "agent_id, rule_id, title, occurred_at, received_at, "
             "iocs, mitre_attack, tags, raw "
-            "FROM alerts" + where +
-            " ORDER BY received_at DESC LIMIT $" + str(len(params)-1) +
-            " OFFSET $" + str(len(params))
+            "FROM alerts"
+            + where
+            + " ORDER BY received_at DESC LIMIT $"
+            + str(len(params) - 1)
+            + " OFFSET $"
+            + str(len(params))
         )
         pool = await get_pg_pool()
         async with pool.acquire() as conn:

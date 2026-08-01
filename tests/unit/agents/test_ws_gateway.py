@@ -1,4 +1,5 @@
-﻿"""Unit tests for WS gateway (agent communication)."""
+"""Unit tests for WS gateway (agent communication)."""
+
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,6 +30,7 @@ def mock_ws():
 # authenticate() validates the agent token against PG via
 # src.agents.enroll.validate_agent_token (P0-VS-1 moved it off Redis because
 # the Redis key writer was missing and every lookup returned None).
+
 
 class TestAuthenticate:
     @pytest.mark.asyncio
@@ -64,6 +66,7 @@ class TestAuthenticate:
 
 # -- connect / disconnect ----------------------------------------------------
 
+
 class TestConnect:
     @pytest.mark.asyncio
     async def test_connect_registers_agent(self, gateway, mock_ws):
@@ -81,6 +84,7 @@ class TestConnect:
     @pytest.mark.asyncio
     async def test_disconnect_cleans_up(self, gateway, mock_ws):
         import src.agents.ws_gateway as gw_mod
+
         gw_mod._conns["agent-1"] = mock_ws
         mock_redis = AsyncMock()
         mock_redis.delete = AsyncMock()
@@ -91,6 +95,7 @@ class TestConnect:
 
 
 # -- handle_message ----------------------------------------------------------
+
 
 class TestHandleMessage:
     @pytest.mark.asyncio
@@ -141,10 +146,12 @@ class TestHandleMessage:
 
 # -- send_to_agent / broadcast -----------------------------------------------
 
+
 class TestSendToAgent:
     @pytest.mark.asyncio
     async def test_send_to_connected_agent(self, gateway):
         import src.agents.ws_gateway as gw_mod
+
         mock_ws = AsyncMock()
         mock_ws.send_json = AsyncMock()
         gw_mod._conns["agent-1"] = mock_ws
@@ -158,6 +165,7 @@ class TestSendToAgent:
     @pytest.mark.asyncio
     async def test_send_to_disconnected_publishes_redis(self, gateway):
         import src.agents.ws_gateway as gw_mod
+
         gw_mod._conns.clear()
         mock_redis = AsyncMock()
         mock_redis.publish = AsyncMock(return_value=1)
@@ -175,6 +183,7 @@ class TestSendToAgent:
     @pytest.mark.asyncio
     async def test_send_to_disconnected_without_subscriber_fails(self, gateway):
         import src.agents.ws_gateway as gw_mod
+
         gw_mod._conns.clear()
         mock_redis = AsyncMock()
         mock_redis.publish = AsyncMock(return_value=0)
@@ -198,6 +207,7 @@ class TestSendToAgent:
 
 
 # -- worker_id ---------------------------------------------------------------
+
 
 class TestWorkerId:
     def test_worker_id_is_string(self, gateway):
@@ -227,14 +237,19 @@ AGENT_FINDING = {
 class TestScanResultAdaptation:
     @pytest.mark.asyncio
     async def test_agent_shaped_findings_adapted_not_rejected(self, gateway, mock_ws):
-        raw = json.dumps({
-            "type": "scan_result",
-            "payload": {
-                "task_id": "t1", "hostname": "host-1",
-                "findings": [AGENT_FINDING],
-                "batch": 1, "is_final": True, "ts": "2026-07-19T00:00:00Z",
-            },
-        })
+        raw = json.dumps(
+            {
+                "type": "scan_result",
+                "payload": {
+                    "task_id": "t1",
+                    "hostname": "host-1",
+                    "findings": [AGENT_FINDING],
+                    "batch": 1,
+                    "is_final": True,
+                    "ts": "2026-07-19T00:00:00Z",
+                },
+            }
+        )
         mock_store = AsyncMock()
         mock_store.save_result = AsyncMock()
         with patch("src.agents.ws_gateway.get_vulnscan_store", return_value=mock_store):
@@ -256,10 +271,19 @@ class TestScanResultAdaptation:
     @pytest.mark.asyncio
     async def test_invalid_severity_degraded_not_dropped(self, gateway, mock_ws):
         finding = {**AGENT_FINDING, "severity": "WARN"}
-        raw = json.dumps({"type": "scan_result", "payload": {
-            "task_id": "t1", "hostname": "h", "findings": [finding],
-            "batch": 1, "is_final": True, "ts": "",
-        }})
+        raw = json.dumps(
+            {
+                "type": "scan_result",
+                "payload": {
+                    "task_id": "t1",
+                    "hostname": "h",
+                    "findings": [finding],
+                    "batch": 1,
+                    "is_final": True,
+                    "ts": "",
+                },
+            }
+        )
         mock_store = AsyncMock()
         with patch("src.agents.ws_gateway.get_vulnscan_store", return_value=mock_store):
             await gateway.handle_message(mock_ws, raw)
@@ -270,10 +294,19 @@ class TestScanResultAdaptation:
     @pytest.mark.asyncio
     async def test_invalid_category_degraded(self, gateway, mock_ws):
         finding = {**AGENT_FINDING, "category": "weird"}
-        raw = json.dumps({"type": "scan_result", "payload": {
-            "task_id": "t1", "hostname": "h", "findings": [finding],
-            "batch": 1, "is_final": True, "ts": "",
-        }})
+        raw = json.dumps(
+            {
+                "type": "scan_result",
+                "payload": {
+                    "task_id": "t1",
+                    "hostname": "h",
+                    "findings": [finding],
+                    "batch": 1,
+                    "is_final": True,
+                    "ts": "",
+                },
+            }
+        )
         mock_store = AsyncMock()
         with patch("src.agents.ws_gateway.get_vulnscan_store", return_value=mock_store):
             await gateway.handle_message(mock_ws, raw)
@@ -283,10 +316,19 @@ class TestScanResultAdaptation:
     @pytest.mark.asyncio
     async def test_save_failure_does_not_disconnect(self, gateway, mock_ws):
         """An ES hiccup must not tear down the agent WS connection."""
-        raw = json.dumps({"type": "scan_result", "payload": {
-            "task_id": "t1", "hostname": "h", "findings": [AGENT_FINDING],
-            "batch": 1, "is_final": True, "ts": "",
-        }})
+        raw = json.dumps(
+            {
+                "type": "scan_result",
+                "payload": {
+                    "task_id": "t1",
+                    "hostname": "h",
+                    "findings": [AGENT_FINDING],
+                    "batch": 1,
+                    "is_final": True,
+                    "ts": "",
+                },
+            }
+        )
         mock_store = AsyncMock()
         mock_store.save_result = AsyncMock(side_effect=RuntimeError("es down"))
         with patch("src.agents.ws_gateway.get_vulnscan_store", return_value=mock_store):
@@ -294,11 +336,19 @@ class TestScanResultAdaptation:
 
     @pytest.mark.asyncio
     async def test_non_dict_finding_dropped_others_kept(self, gateway, mock_ws):
-        raw = json.dumps({"type": "scan_result", "payload": {
-            "task_id": "t1", "hostname": "h",
-            "findings": [AGENT_FINDING, "not-a-dict", {**AGENT_FINDING, "name": "second"}],
-            "batch": 1, "is_final": True, "ts": "",
-        }})
+        raw = json.dumps(
+            {
+                "type": "scan_result",
+                "payload": {
+                    "task_id": "t1",
+                    "hostname": "h",
+                    "findings": [AGENT_FINDING, "not-a-dict", {**AGENT_FINDING, "name": "second"}],
+                    "batch": 1,
+                    "is_final": True,
+                    "ts": "",
+                },
+            }
+        )
         mock_store = AsyncMock()
         with patch("src.agents.ws_gateway.get_vulnscan_store", return_value=mock_store):
             await gateway.handle_message(mock_ws, raw)
@@ -313,5 +363,7 @@ class TestScanResultAdaptation:
         """Any handler exception (here: heartbeat) must not propagate -- the
         receive loop in main.py treats a raised exception as fatal."""
         raw = json.dumps({"type": "heartbeat", "payload": {"cpu": 10}})
-        with patch("src.agents.ws_gateway.process_heartbeat", AsyncMock(side_effect=RuntimeError("boom"))):
+        with patch(
+            "src.agents.ws_gateway.process_heartbeat", AsyncMock(side_effect=RuntimeError("boom"))
+        ):
             await gateway.handle_message(mock_ws, raw)  # must NOT raise

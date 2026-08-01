@@ -1,4 +1,4 @@
-﻿import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import AppLayout from './components/AppLayout'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -15,12 +15,15 @@ import VulnListPage from './pages/VulnListPage'
 import ScanReportPage from './pages/ScanReportPage'
 import RulesPage from './pages/RulesPage'
 import ModelsPage from './pages/ModelsPage'
+import UsersPage from './pages/UsersPage'
 import { Spin } from 'antd'
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { token, loading } = useAuth()
+function ProtectedRoute({ children, adminOnly = false }: { children: React.ReactNode; adminOnly?: boolean }) {
+  const { token, user, loading } = useAuth()
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '200px auto' }} />
-  return token ? <>{children}</> : <Navigate to="/login" replace />
+  if (!token) return <Navigate to="/login" replace />
+  if (adminOnly && user?.role !== "admin") return <Navigate to="/" replace />
+  return <>{children}</>
 }
 
 export default function App() {
@@ -42,6 +45,7 @@ export default function App() {
             <Route path="/report" element={<ScanReportPage />} />
             <Route path="/rules" element={<RulesPage />} />
             <Route path="/models" element={<ModelsPage />} />
+            <Route path="/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

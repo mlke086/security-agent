@@ -1,4 +1,5 @@
-﻿"""SiemTagConnector — tag an event in Elasticsearch."""
+"""SiemTagConnector — tag an event in Elasticsearch."""
+
 from elasticsearch import AsyncElasticsearch
 
 from src.common.config.settings import get_settings
@@ -13,29 +14,40 @@ class SiemTagConnector:
 
     async def execute(self, op: dict, ctx: ActionContext) -> ActionResult:
         import hashlib
-        raw = f"{ctx.event_id}:{op.get('type','')}:{str(op.get('params',{}))}"
+
+        raw = f"{ctx.event_id}:{op.get('type', '')}:{str(op.get('params', {}))}"
         op_id = hashlib.sha256(raw.encode()).hexdigest()[:16]
         tag = op.get("params", {}).get("tag", op.get("params", {}).get("channel", "security"))
 
         try:
             settings = get_settings()
             es = AsyncElasticsearch(hosts=[settings.es_hosts])
-            await es.update(  # type: ignore[call-arg]
-                index=settings.es_index_events,
-                id=ctx.event_id,
-                body={"script": {
-                    "source": "if (!ctx._source.tags.contains(params.tag)) ctx._source.tags.add(params.tag)",
-                    "params": {"tag": tag},
-                    "lang": "painless",
-                }},
-                ignore=[404],
+            try:
+                await es.update(  # type: ignore[call-arg]
+                    index=settings.es_index_events,
+                    id=ctx.event_id,
+                    body={
+                        "script": {
+                            "source": "if (!ctx._source.tags.contains(params.tag)) ctx._source.tags.add(params.tag)",
+                            "params": {"tag": tag},
+                            "lang": "painless",
+                        }
+                    },
+                    ignore=[404],
+                )
+            finally:
+                await es.close()  # V12 5.6: exception-safe close (was leaking on failure)
+            return ActionResult(
+                op_id=op_id,
+                op_type=op.get("type", "siem_tag"),
+                status="success",
+                output=f"Tagged event with '{tag}'",
             )
-            await es.close()
-            return ActionResult(op_id=op_id, op_type=op.get("type", "siem_tag"), status="success",
-                                output=f"Tagged event with '{tag}'")
         except Exception as exc:
             logger.warning("siem_tag_failed", event_id=ctx.event_id, error=str(exc))
-            return ActionResult(op_id=op_id, op_type=op.get("type", "siem_tag"), status="failed", error=str(exc))
+            return ActionResult(
+                op_id=op_id, op_type=op.get("type", "siem_tag"), status="failed", error=str(exc)
+            )
 
     async def rollback(self, op: dict, ctx: ActionContext) -> None:
         logger.info("siem_tag_rollback", event_id=ctx.event_id, op_type=op.get("type"))

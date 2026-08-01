@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+﻿import { useEffect, useState, useMemo } from "react"
+import { showError } from "../utils/showError"
 import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumber, Select, Switch, Popconfirm, Tooltip } from "antd"
 import { PlusOutlined, ReloadOutlined, ThunderboltOutlined, StarOutlined, EditOutlined, DeleteOutlined } from "@ant-design/icons"
 import {
@@ -29,7 +30,7 @@ export default function ModelsPage() {
     try {
       const res = await listModels()
       setModels(res.items || [])
-    } catch { message.error("加载模型列表失败") }
+    } catch (err) { showError(err, "加载模型列表失败") }
     finally { setLoading(false) }
   }
 
@@ -88,12 +89,12 @@ export default function ModelsPage() {
 
   const handleDelete = async (id: number) => {
     try { await deleteModel(id); message.success("已删除"); fetchModels() }
-    catch { message.error("删除失败") }
+    catch (err) { showError(err, "删除失败") }
   }
 
   const handleSetDefault = async (id: number) => {
     try { await setDefaultModel(id); message.success("已设为默认"); fetchModels() }
-    catch { message.error("设置失败") }
+    catch (err) { showError(err, "设置失败") }
   }
 
   const handleTest = async (id: number) => {
@@ -102,11 +103,12 @@ export default function ModelsPage() {
       const res = await testModel(id)
       if (res.ok) message.success("连通正常：" + (res.reply || "").slice(0, 60))
       else message.error("连通失败：" + (res.error || "未知错误"))
-    } catch { message.error("测试失败") }
+    } catch (err) { showError(err, "测试失败") }
     finally { setTestingId(null) }
   }
 
-  const columns = [
+  // V12 阶段 3.2: memoize columns
+  const columns = useMemo(() => [
     { title: "名称", dataIndex: "name", key: "name", render: (v: string, r: LlmModel) => (
       <Space>
         <span>{v}</span>
@@ -144,7 +146,7 @@ export default function ModelsPage() {
         </Popconfirm>
       </Space>
     )},
-  ]
+  ], [testingId])
 
   return (
     <Card title="模型管理" extra={

@@ -14,12 +14,15 @@ from src.orchestration.subgraphs.vulnscan.nodes import (
 from src.orchestration.subgraphs.vulnscan.state import VulnScanState
 
 _vulnscan_subgraph = StateGraph(VulnScanState)
-_vulnscan_subgraph.add_node("parse_intent", parse_intent)
-_vulnscan_subgraph.add_node("dispatch", dispatch)
-_vulnscan_subgraph.add_node("collect", collect)
-_vulnscan_subgraph.add_node("aggregate", aggregate)
-_vulnscan_subgraph.add_node("llm_analysis", llm_analysis)
-_vulnscan_subgraph.add_node("generate_report", generate_report)
+# LangGraph's stub types add_node generically over the State type; our node
+# functions take/return plain dicts (partial-state transitions), which the
+# runtime accepts but mypy's stub rejects -- ignore the type-var complaint.
+_vulnscan_subgraph.add_node("parse_intent", parse_intent)  # type: ignore[type-var]
+_vulnscan_subgraph.add_node("dispatch", dispatch)  # type: ignore[type-var]
+_vulnscan_subgraph.add_node("collect", collect)  # type: ignore[type-var]
+_vulnscan_subgraph.add_node("aggregate", aggregate)  # type: ignore[type-var]
+_vulnscan_subgraph.add_node("llm_analysis", llm_analysis)  # type: ignore[type-var]
+_vulnscan_subgraph.add_node("generate_report", generate_report)  # type: ignore[type-var]
 _vulnscan_subgraph.set_entry_point("parse_intent")
 _vulnscan_subgraph.add_edge("parse_intent", "dispatch")
 _vulnscan_subgraph.add_edge("dispatch", "collect")
@@ -44,7 +47,9 @@ async def run_vulnscan(
     nuclei_severity: list | None = None,
     nuclei_tags: list | None = None,
     nuclei_templates: list | None = None,
+    nuclei_ports: list[int] | None = None,
     nuclei_timeout_sec: int = 0,
+    target_groups: list[str] | None = None,
 ):
     """Run the vulnscan subgraph. ``task_id`` is honored when provided so that
     the caller (router / orchestrator) can use the SAME id for the ES task, the
@@ -66,6 +71,8 @@ async def run_vulnscan(
         nuclei_tags=nuclei_tags,
         nuclei_templates=nuclei_templates,
         nuclei_timeout_sec=nuclei_timeout_sec,
+        target_groups=target_groups,
+        nuclei_ports=nuclei_ports,
     )
     result = await graph.ainvoke(initial)
     return result

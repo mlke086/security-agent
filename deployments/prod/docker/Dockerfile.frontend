@@ -36,24 +36,10 @@ LABEL org.opencontainers.image.title="security-agent-frontend" \
       org.opencontainers.image.source="https://example.local/security-agent"
 
 # 复制构建产物
-#
-# 维护说明 (2026-07-28): 之后任何在 frontend/src/ 下加的 pages / components /
-# api client 改动,都会被下面 `COPY frontend ./` 自动包含进构建上下文,
-# 无需改 Dockerfile。VITE_API_TARGET 通过 build arg 注入 (默认 /api,
-# docker-compose 中由 frontend 服务的 environment 提供),用于让 React
-# 知道 API 反代前缀。
 COPY --from=builder /build/dist /usr/share/nginx/html
 
 # 自定义 nginx 配置(根目录 + 反向代理 /api + SPA history fallback)
 COPY deployments/prod/docker/nginx.conf /etc/nginx/conf.d/default.conf
-
-# OCI image metadata
-ARG BUILD_DATE
-ARG GIT_SHA
-LABEL org.opencontainers.image.title="security-agent-frontend" \
-      org.opencontainers.image.source="https://example.local/security-agent" \
-      org.opencontainers.image.created=$BUILD_DATE \
-      org.opencontainers.image.revision=$GIT_SHA
 
 EXPOSE 80
 

@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useMemo } from "react"
 import { Card, Button, Descriptions, Tag, message, Space, Spin, Table, Input, Select, Tabs, Tooltip, Upload, Modal, Typography } from "antd"
-import { SafetyCertificateOutlined, ReloadOutlined, SearchOutlined, UploadOutlined, QuestionCircleOutlined, CloudSyncOutlined, GlobalOutlined, ApiOutlined } from "@ant-design/icons"
-import { listRules, getRuleVersion, syncRules, importRules, syncRulesToAgents, type RuleItem, getSigmaRules, getSigmaSummary, type SigmaRuleItem, type SigmaSummary } from "../api/client"
+import { SafetyCertificateOutlined, ReloadOutlined, SearchOutlined, UploadOutlined, QuestionCircleOutlined, CloudSyncOutlined, GlobalOutlined, ApiOutlined, ExperimentOutlined, EyeOutlined } from "@ant-design/icons"
+import { listRules, getRuleVersion, syncRules, importRules, syncRulesToAgents, syncNucleiTemplates, listNucleiTemplates, syncNucleiTemplatesLibrary, importNucleiTemplatesZip, type RuleItem, type NucleiTemplateMeta, getSigmaRules, getSigmaSummary, type SigmaRuleItem, type SigmaSummary } from "../api/client"
+import NucleiTemplateViewer from "../components/NucleiTemplateViewer"
 
 const { Text, Paragraph } = Typography
 
@@ -31,6 +32,7 @@ export default function RulesPage() {
   const [syncingNvd, setSyncingNvd] = useState(false)
   const [syncingGithub, setSyncingGithub] = useState(false)
   const [syncingToAgents, setSyncingToAgents] = useState(false)
+  const [syncingNucleiTpl, setSyncingNucleiTpl] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importHelpOpen, setImportHelpOpen] = useState(false)
   const [version, setVersion] = useState("")
@@ -58,6 +60,20 @@ export default function RulesPage() {
   const [sigmaLevel, setSigmaLevel] = useState<string | undefined>(undefined)
   const [sigmaDetectorOnly, setSigmaDetectorOnly] = useState<boolean | null>(null)
 
+  // Nuclei 模板库（内容存 Nacos，元数据走 ES manifest）
+  const [nucleiTpls, setNucleiTpls] = useState<NucleiTemplateMeta[]>([])
+  const [nucleiTotal, setNucleiTotal] = useState(0)
+  const [nucleiLoading, setNucleiLoading] = useState(false)
+  const [nucleiCategory, setNucleiCategory] = useState<string | undefined>(undefined)
+  const [nucleiQ, setNucleiQ] = useState("")
+  const [nucleiDebouncedQ, setNucleiDebouncedQ] = useState("")
+  const [nucleiPage, setNucleiPage] = useState(1)
+  const [nucleiPageSize, setNucleiPageSize] = useState(20)
+  const [nucleiVer, setNucleiVer] = useState("")
+  const [syncTplLoading, setSyncTplLoading] = useState(false)
+  const [importTplLoading, setImportTplLoading] = useState(false)
+  const [viewerPath, setViewerPath] = useState<string | null>(null)
+
   useEffect(() => {
     const t = setTimeout(() => {
       setDebouncedQ(q)
@@ -65,6 +81,38 @@ export default function RulesPage() {
     }, 300)
     return () => clearTimeout(t)
   }, [q])
+
+  // Nuclei 模板搜索 debounce
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setNucleiDebouncedQ(nucleiQ)
+      setNucleiPage(1)
+    }, 300)
+    return () => clearTimeout(t)
+  }, [nucleiQ])
+
+  const fetchNucleiTpls = useCallback(async () => {
+    setNucleiLoading(true)
+    try {
+      const res = await listNucleiTemplates({
+        category: nucleiCategory,
+        q: nucleiDebouncedQ || undefined,
+        page: nucleiPage,
+        page_size: nucleiPageSize,
+      })
+      setNucleiTpls(res.items || [])
+      setNucleiTotal(res.total || 0)
+      setNucleiVer(res.version || "")
+    } catch {
+      message.error("加载模板库失败")
+    } finally {
+      setNucleiLoading(false)
+    }
+  }, [nucleiCategory, nucleiDebouncedQ, nucleiPage, nucleiPageSize])
+
+  useEffect(() => {
+    if (activeTab === "nuclei_templates") fetchNucleiTpls()
+  }, [activeTab, fetchNucleiTpls])
 
   const fetchVersion = async () => {
     setLoadingVer(true)
@@ -164,6 +212,56 @@ export default function RulesPage() {
     }
   }
 
+  const handleSyncNucleiLib = async () => {
+    setSyncTplLoading(true)
+    try {
+      const res = await syncNucleiTemplatesLibrary()
+      const verify = res.matched ? "" : `（校对：ES 实际 ${res.es_actual} 条）`
+      message.success(`模板库已更新：${res.count} 条 (v${res.version})${verify}`)
+      fetchNucleiTpls()
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || "联网更新失败")
+    } finally {
+      setSyncTplLoading(false)
+    }
+  }
+
+  const handleImportNucleiZip = async (file: File) => {
+    setImportTplLoading(true)
+    try {
+      const res = await importNucleiTemplatesZip(file)
+      const note = res.upgraded ? `（从 v${res.previous_version || "无"} 升级）` : ""
+      message.success(`已导入：${res.count} 条模板 (v${res.version})${note}`)
+      fetchNucleiTpls()
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || "导入失败，请检查 zip")
+    } finally {
+      setImportTplLoading(false)
+    }
+    return false
+  }
+
+  const handleSyncNucleiTpl = async () => {
+    setSyncingNucleiTpl(true)
+    try {
+      const res = await syncNucleiTemplates()
+      if (res.total === 0) {
+        message.warning("当前无在线 agent")
+      } else {
+        message.success(`已向 ${res.synced}/${res.total} 台在线 agent 下发 Nuclei 模板 (v${res.version})`)
+      }
+    } catch (e: any) {
+      // 400 = 服务端未配置 NUCLEI_TEMPLATES_VERSION
+      if (e?.response?.status === 400) {
+        message.error("Nuclei 模板版本未配置：请在 Nacos 设置 NUCLEI_TEMPLATES_VERSION 与 NUCLEI_DOWNLOAD_BASE_URL")
+      } else {
+        message.error("同步 Nuclei 模板失败")
+      }
+    } finally {
+      setSyncingNucleiTpl(false)
+    }
+  }
+
   const handleImport = async (file: File) => {
     setImporting(true)
     try {
@@ -182,8 +280,12 @@ export default function RulesPage() {
 
   const handleTabChange = (key: string) => {
     setActiveTab(key)
-    setCategory(key === "all" ? "" : key)
-    setPage(1)
+    // 只有规则类 tab（all/sys_vuln/baseline）才设 rules 分类；
+    // detection / nuclei_templates 不是 rules 分类，避免触发无意义的 rules/list 请求。
+    if (key === "all" || key === "sys_vuln" || key === "baseline") {
+      setCategory(key === "all" ? "" : key)
+      setPage(1)
+    }
   }
 
   const handleSearch = (value: string) => {
@@ -191,7 +293,8 @@ export default function RulesPage() {
     // page(1) 由 debounce useEffect 触发，避免这里重复设置
   }
 
-  const columns = [
+  // V12 阶段 3.2: memoize columns（render 函数引用稳定组件作用域常量）
+  const columns = useMemo(() => [
     { title: "规则 ID", dataIndex: "id", key: "id", width: 150, ellipsis: true },
     { title: "规则名称", dataIndex: "name", key: "name", ellipsis: true,
       render: (v: string) => <Tooltip title={v}>{v}</Tooltip> },
@@ -211,7 +314,7 @@ export default function RulesPage() {
       render: (_: unknown, r: RuleItem) => CHECK_TYPE_LABEL[r.check?.type] || r.check?.type || "-" },
     { title: "修复建议", dataIndex: "fix", key: "fix", ellipsis: true,
       render: (v: string) => <Tooltip title={v}><span style={{ color: "#555" }}>{v || "-"}</span></Tooltip> },
-  ]
+  ], [])
 
   return (
     <div>
@@ -220,6 +323,9 @@ export default function RulesPage() {
           <Button icon={<ReloadOutlined />} onClick={() => { fetchVersion(); fetchRules() }} loading={loadingVer}>刷新</Button>
           <Button icon={<CloudSyncOutlined />} loading={syncingToAgents} onClick={handleSyncToAgents} title="强制下发当前规则到所有在线 agent">
             同步到 agent
+          </Button>
+          <Button icon={<ExperimentOutlined />} loading={syncingNucleiTpl} onClick={handleSyncNucleiTpl} title="下发 nuclei-templates 模板库到所有在线 agent（独立于漏洞规则）">
+            同步 Nuclei 模板
           </Button>
           <Upload accept=".zip" showUploadList={false} beforeUpload={handleImport}>
             <Button icon={<UploadOutlined />} loading={importing}>离线导入</Button>
@@ -258,6 +364,9 @@ export default function RulesPage() {
           <p style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>
             上方 <Tag color="blue">离线导入</Tag> 直接上传 zip 压缩包（仅含 rules.json），服务端用同一私钥重新签名后入库；导入后可点 <Tag color="cyan">同步到 agent</Tag> 强制下发到所有在线主机。
           </p>
+          <p style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>
+            <Tag color="purple">同步 Nuclei 模板</Tag> 是独立功能：下发 projectdiscovery nuclei-templates 模板包到所有在线 agent 的 <Text code>/opt/secagent/templates</Text>（nuclei 扫描引擎用 <Text code>-t</Text> 读取）。模板包从内网下载站拉取，版本由 Nacos <Text code>NUCLEI_TEMPLATES_VERSION</Text> 控制，与上面的漏洞规则包互不影响。
+          </p>
           <p style={{ fontSize: 13, color: "#666" }}>
             首次安装的 agent 在 enroll 阶段会从服务端响应里读到 server_public_key 并写入 <Text code>/etc/secagent/config.json</Text>（参见 install.sh + agent/cmd/agent/main.go）。
           </p>
@@ -268,8 +377,94 @@ export default function RulesPage() {
           { key: "sys_vuln", label: "漏洞扫描规则" },
           { key: "baseline", label: "安全基线规则" },
           { key: "detection", label: "检测规则" },
+          { key: "nuclei_templates", label: "Nuclei 模板库" },
         ]} />
 
+        {activeTab === "nuclei_templates" ? (
+          <div>
+            <Space style={{ marginBottom: 16, justifyContent: "space-between", width: "100%" }}>
+              <Space wrap>
+                <Select
+                  allowClear
+                  placeholder="分类"
+                  style={{ width: 150 }}
+                  value={nucleiCategory}
+                  onChange={(v) => { setNucleiCategory(v); setNucleiPage(1) }}
+                  options={[
+                    { value: "cves", label: "cves" },
+                    { value: "exposures", label: "exposures" },
+                    { value: "misconfigurations", label: "misconfigurations" },
+                    { value: "vulnerabilities", label: "vulnerabilities" },
+                    { value: "workflows", label: "workflows" },
+                    { value: "dns", label: "dns" },
+                    { value: "http", label: "http" },
+                    { value: "network", label: "network" },
+                    { value: "ssl", label: "ssl" },
+                    { value: "takeovers", label: "takeovers" },
+                    { value: "technologies", label: "technologies" },
+                  ]}
+                />
+                <Input
+                  allowClear
+                  placeholder="搜索模板 ID / 名称 / 路径"
+                  prefix={<SearchOutlined />}
+                  value={nucleiQ}
+                  onChange={(e) => setNucleiQ(e.target.value)}
+                  style={{ width: 280 }}
+                />
+                <Button onClick={fetchNucleiTpls} icon={<ReloadOutlined />} loading={nucleiLoading}>刷新</Button>
+              </Space>
+              <Space>
+                <Button type="primary" icon={<GlobalOutlined />} loading={syncTplLoading} onClick={handleSyncNucleiLib} title="从内网下载站拉取 nuclei-templates 包并入库 Nacos">
+                  联网更新
+                </Button>
+                <Upload accept=".zip" showUploadList={false} beforeUpload={handleImportNucleiZip}>
+                  <Button icon={<UploadOutlined />} loading={importTplLoading}>导入 zip</Button>
+                </Upload>
+              </Space>
+            </Space>
+            <Descriptions bordered column={2} size="small" style={{ marginBottom: 12 }}>
+              <Descriptions.Item label="模板库版本">{nucleiVer ? <Tag color="blue">{nucleiVer}</Tag> : "-"}</Descriptions.Item>
+              <Descriptions.Item label="模板总数">{nucleiTotal}</Descriptions.Item>
+            </Descriptions>
+            <Table
+              dataSource={nucleiTpls}
+              rowKey="path"
+              loading={nucleiLoading}
+              size="small"
+              pagination={{
+                current: nucleiPage,
+                pageSize: nucleiPageSize,
+                total: nucleiTotal,
+                showSizeChanger: true,
+                pageSizeOptions: ["20", "50", "100"],
+                showTotal: (t) => `共 ${t} 条`,
+                onChange: (p, ps) => { setNucleiPage(p); setNucleiPageSize(ps) },
+              }}
+              columns={[
+                { title: "模板 ID", dataIndex: "template_id", key: "template_id", width: 200, ellipsis: true,
+                  render: (v: string) => v ? <code style={{ fontSize: 12 }}>{v}</code> : <span style={{ color: "#bbb" }}>-</span> },
+                { title: "名称", dataIndex: "name", key: "name", ellipsis: true,
+                  render: (v: string) => <Tooltip title={v}>{v || "-"}</Tooltip> },
+                { title: "分类", dataIndex: "category", key: "category", width: 130,
+                  render: (v: string) => <Tag color="blue">{v}</Tag> },
+                { title: "严重等级", dataIndex: "severity", key: "severity", width: 100,
+                  render: (v: string) => {
+                    const s = SEVERITY_CONFIG[v]
+                    return s ? <Tag color={s.color}>{s.label}</Tag> : (v ? <Tag>{v}</Tag> : <span style={{ color: "#bbb" }}>-</span>)
+                  }},
+                { title: "路径", dataIndex: "path", key: "path", ellipsis: true,
+                  render: (v: string) => <Tooltip title={v}><code style={{ fontSize: 12, color: "#888" }}>{v}</code></Tooltip> },
+                { title: "操作", key: "action", width: 90,
+                  render: (_: unknown, r: NucleiTemplateMeta) => (
+                    <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => setViewerPath(r.path)}>查看</Button>
+                  )},
+              ]}
+              locale={{ emptyText: "暂无模板，请点击「联网更新」或「导入 zip」" }}
+            />
+          </div>
+        ) : (
+        <>
         <Space style={{ marginBottom: 16 }}>
           <Input
             allowClear
@@ -367,7 +562,7 @@ export default function RulesPage() {
               dataSource={sigmaRules}
               rowKey="rule_id"
               loading={sigmaLoading}
-              pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
+              pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"], showTotal: (t) => `共 ${t} 条` }}
               columns={[
                 { title: "规则 ID", dataIndex: "rule_id", width: 200,
                   render: (v: string) => <code>{v}</code> },
@@ -419,7 +614,11 @@ export default function RulesPage() {
             locale={{ emptyText: "暂无规则，请点击「联网更新」或「离线导入」" }}
           />
         )}
+        </>
+        )}
       </Card>
+
+      <NucleiTemplateViewer path={viewerPath} onClose={() => setViewerPath(null)} />
 
       <Modal title="离线导入说明" open={importHelpOpen} onCancel={() => setImportHelpOpen(false)} footer={null} width={620}>
         <Paragraph>

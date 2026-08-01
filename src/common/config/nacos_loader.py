@@ -42,28 +42,30 @@ _listener_task: asyncio.Task | None = None
 # 原则:只保护"凭据类",不保护"地址类"。CI Secret / KMS 注入的才是
 # 真正的签名材料;Nacos 全员可读写,不能让它静默替换。服务地址反过来
 # -- 同一份 nacos-config.yaml 应该能驱动新机器,不必回头改 docker-compose。
-PROTECTED_OVERRIDE_KEYS: frozenset[str] = frozenset({
-    # JWT / 签名材料
-    "API_SECRET_KEY",
-    "AGENT_SIGNING_KEY",
-    "AGENT_HMAC_KEY",
-    # 数据库 / 中间件 凭据(注意 URL 本身不在此列)
-    "PG_PASSWORD",
-    "REDIS_PASSWORD",
-    "NACOS_PASSWORD",
-    # 种子用户口令
-    "DEFAULT_ADMIN_PASSWORD",
-    "DEFAULT_ANALYST_PASSWORD",
-    "DEFAULT_VIEWER_PASSWORD",
-    "DEFAULT_RESPONDER_PASSWORD",
-    # 第三方 API 凭据
-    "VIRUSTOTAL_API_KEY",
-    "ALIENVAULT_OTX_API_KEY",
-    "NVD_API_KEY",
-    # LLM 凭据
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-})
+PROTECTED_OVERRIDE_KEYS: frozenset[str] = frozenset(
+    {
+        # JWT / 签名材料
+        "API_SECRET_KEY",
+        "AGENT_SIGNING_KEY",
+        "AGENT_HMAC_KEY",
+        # 数据库 / 中间件 凭据(注意 URL 本身不在此列)
+        "PG_PASSWORD",
+        "REDIS_PASSWORD",
+        "NACOS_PASSWORD",
+        # 种子用户口令
+        "DEFAULT_ADMIN_PASSWORD",
+        "DEFAULT_ANALYST_PASSWORD",
+        "DEFAULT_VIEWER_PASSWORD",
+        "DEFAULT_RESPONDER_PASSWORD",
+        # 第三方 API 凭据
+        "VIRUSTOTAL_API_KEY",
+        "ALIENVAULT_OTX_API_KEY",
+        "NVD_API_KEY",
+        # LLM 凭据
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+    }
+)
 
 
 def _make_client(timeout: float = 10.0) -> httpx.AsyncClient:
@@ -191,6 +193,7 @@ def _normalize_env_key(raw_key: str, valid_keys: set[str]) -> str | None:
     if snake in case_map:
         return case_map[snake]
     return None
+
 
 def apply_nacos_overrides(nacos_config: dict[str, Any]) -> dict[str, list[str]]:
     """把 Nacos 配置注入 os.environ。

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { formatBeijing } from "../utils/time"
+import { showError } from "../utils/showError"
 import { Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from "antd"
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, UndoOutlined } from "@ant-design/icons"
 import { createUser, deleteUser, listUsers, restoreUser, updateUser, type ManagedUser, type UserRole } from "../api/client"
@@ -14,19 +15,6 @@ const roleOptions = [
 
 const roleLabels: Record<UserRole, string> = { admin: "管理员", analyst: "分析员", responder: "响应员", viewer: "观察者" }
 
-// V10 4.5 (2026-07-30): shared error helper. The same
-// ``error?.response?.data?.detail || fallback`` pattern appeared
-// three times in this file (and a near-identical one in many
-// other pages -- the goal here is to centralise the message
-// shape so a future backend change (e.g. returning a structured
-// ``{code, message, hint}`` body) is a one-line update.
-function showError(err: unknown, fallback: string): void {
-  const anyErr = err as { response?: { data?: { detail?: unknown } } } | null | undefined
-  const detail = anyErr?.response?.data?.detail
-  const text = typeof detail === "string" && detail ? detail : fallback
-  message.error(text)
-}
-
 export default function UsersPage() {
   const { user: me } = useAuth()
   const [users, setUsers] = useState<ManagedUser[]>([])
@@ -39,7 +27,7 @@ export default function UsersPage() {
   const load = async () => {
     setLoading(true)
     try { setUsers((await listUsers(includeDeleted)).items) }
-    catch { message.error("加载用户列表失败") }
+    catch (err) { showError(err, "加载用户列表失败") }
     finally { setLoading(false) }
   }
   useEffect(() => { void load() }, [includeDeleted])
@@ -72,7 +60,7 @@ export default function UsersPage() {
     <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button>
     <Button type="primary" icon={<PlusOutlined />} onClick={showCreate}>新增用户</Button>
   </Space>}>
-    <Table rowKey="username" loading={loading} dataSource={users} pagination={{ pageSize: 20 }} columns={[
+    <Table rowKey="username" loading={loading} dataSource={users} pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }} columns={[
       { title: "用户名", dataIndex: "username" },
       { title: "角色", dataIndex: "role", width: 120, render: (v: UserRole) => <Tag color={v === "admin" ? "red" : v === "analyst" ? "blue" : v === "responder" ? "orange" : "default"}>{roleLabels[v]}</Tag> },
       { title: "状态", width: 110, render: (_: unknown, r: ManagedUser) => r.deleted_at ? <Tag>已删除</Tag> : r.disabled ? <Tag color="warning">已停用</Tag> : <Tag color="success">启用</Tag> },

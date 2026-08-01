@@ -184,7 +184,7 @@ func TestSendResult_DisconnectedQueues(t *testing.T) {
 	defer q.Close()
 	client.Queue = q
 
-	client.SendResult("task-1", "host-1", []map[string]string{}, 1, true)
+	client.SendResult("task-1", "host-1", []map[string]string{}, 1, true, nil)
 
 	count, err := q.Count()
 	if err != nil {

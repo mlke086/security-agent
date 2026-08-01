@@ -39,6 +39,7 @@ class GraphRAGEngine:
         cached = await self._redis.get(cache_key)
         if cached:
             import json
+
             return json.loads(cached)
 
         vector_hits, graph_hits = await asyncio.gather(
@@ -57,6 +58,7 @@ class GraphRAGEngine:
         }
 
         import json
+
         await self._redis.setex(cache_key, self._cache_ttl, json.dumps(result))
         return result
 

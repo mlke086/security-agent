@@ -7,12 +7,12 @@ When a Sigma rule matches, build an Alert with:
   hostname/host_ip/agent_id best-effort extracted from event
   source = secagent (our own Agent in this MVP)
 """
+
 import hashlib
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 from src.agents.models import Alert, AlertIOC, AlertSeverity, AlertSource
-from src.detection.sigma import RuleLevel, SigmaRule, matches
-
+from src.detection.sigma import RuleLevel, matches
 
 _LEVEL_TO_SEVERITY = {
     RuleLevel.INFORMATIONAL: AlertSeverity.INFO,

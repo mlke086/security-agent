@@ -1,4 +1,5 @@
 """Tests for orchestrator_node with mocked LLM adapter."""
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,9 +14,15 @@ async def test_honeypot_rule_match():
     state = MainGraphState(
         event_id="evt-001",
         raw_event={"sanitized_text": "whoami && id from attacker"},
-        priority="high", event_tags=[], stage="triage",
-        final_verdict=None, confidence_score=None,
-        pending_action=None, subgraph_result=None, error=None, audit_log=[],
+        priority="high",
+        event_tags=[],
+        stage="triage",
+        final_verdict=None,
+        confidence_score=None,
+        pending_action=None,
+        subgraph_result=None,
+        error=None,
+        audit_log=[],
     )
     result = await orchestrator_node(state)
     assert result["priority"] == "high"
@@ -27,8 +34,10 @@ async def test_honeypot_rule_match():
 async def test_no_honeypot_uses_llm():
     """Non-honeypot text triggers LLM path with mock."""
     mock_result = TriageResult(
-        priority="high", event_tags=["exploit"],
-        noise_score=0.1, reasoning="Mock",
+        priority="high",
+        event_tags=["exploit"],
+        noise_score=0.1,
+        reasoning="Mock",
     )
     mock_adapter = AsyncMock()
     mock_adapter.chat_completion.return_value = mock_result
@@ -36,13 +45,21 @@ async def test_no_honeypot_uses_llm():
     state = MainGraphState(
         event_id="evt-002",
         raw_event={"sanitized_text": "CVE-2024-1234 exploit attempt"},
-        priority="medium", event_tags=[], stage="triage",
-        final_verdict=None, confidence_score=None,
-        pending_action=None, subgraph_result=None, error=None, audit_log=[],
+        priority="medium",
+        event_tags=[],
+        stage="triage",
+        final_verdict=None,
+        confidence_score=None,
+        pending_action=None,
+        subgraph_result=None,
+        error=None,
+        audit_log=[],
     )
 
-    with patch("src.orchestration.main_graph.nodes.orchestrator.get_model_adapter",
-               return_value=mock_adapter):
+    with patch(
+        "src.orchestration.main_graph.nodes.orchestrator.get_model_adapter",
+        return_value=mock_adapter,
+    ):
         result = await orchestrator_node(state)
 
     assert result["priority"] == "high"
@@ -59,13 +76,21 @@ async def test_llm_fallback_on_error():
     state = MainGraphState(
         event_id="evt-003",
         raw_event={"sanitized_text": "Some unclear event"},
-        priority="medium", event_tags=[], stage="triage",
-        final_verdict=None, confidence_score=None,
-        pending_action=None, subgraph_result=None, error=None, audit_log=[],
+        priority="medium",
+        event_tags=[],
+        stage="triage",
+        final_verdict=None,
+        confidence_score=None,
+        pending_action=None,
+        subgraph_result=None,
+        error=None,
+        audit_log=[],
     )
 
-    with patch("src.orchestration.main_graph.nodes.orchestrator.get_model_adapter",
-               return_value=mock_adapter):
+    with patch(
+        "src.orchestration.main_graph.nodes.orchestrator.get_model_adapter",
+        return_value=mock_adapter,
+    ):
         result = await orchestrator_node(state)
 
     assert result["priority"] == "medium"

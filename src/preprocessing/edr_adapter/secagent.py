@@ -1,6 +1,8 @@
 """Identity / pass-through adapter for our own in-house alerts (Phase 2)."""
+
 from src.agents.models import AlertIOC, AlertSeverity, AlertSource
 from src.preprocessing.edr_adapter.base import EDRAdapter
+
 
 class SecAgentAdapter(EDRAdapter):
     source = AlertSource.SECAGENT
@@ -23,11 +25,21 @@ class SecAgentAdapter(EDRAdapter):
     def _occurred_at(self):
         return self.raw.get("occurred_at") or self.raw.get("timestamp") or super()._occurred_at()
 
-    def _hostname(self): return str(self.raw.get("hostname") or "")
-    def _host_ip(self): return str(self.raw.get("host_ip") or "")
-    def _agent_id(self): return str(self.raw.get("agent_id") or "")
-    def _rule_id(self): return str(self.raw.get("rule_id") or "")
-    def _mitre(self): return list(self.raw.get("mitre_attack", []) or [])
+    def _hostname(self):
+        return str(self.raw.get("hostname") or "")
+
+    def _host_ip(self):
+        return str(self.raw.get("host_ip") or "")
+
+    def _agent_id(self):
+        return str(self.raw.get("agent_id") or "")
+
+    def _rule_id(self):
+        return str(self.raw.get("rule_id") or "")
+
+    def _mitre(self):
+        return list(self.raw.get("mitre_attack", []) or [])
+
     def _iocs(self):
         iocs = self.raw.get("iocs", {}) or {}
         return AlertIOC(

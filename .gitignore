@@ -86,3 +86,17 @@ secrets/
 
 # Sigma rule importer output (operator-managed)
 src/detection/rules/imported/
+
+# One-shot migration outputs (Spec-P1-MIG / V12)
+vulnscan_consolidate_backup_*.json
+
+# Local agent build artifacts (V12)
+/agent/agent.exe
+/agent-new
+**/nuclei-test/
+/tmp-restart*.ps1
+/.tmp-restart*.ps1
+**/.tmp-restart*.ps1
+
+# Dev session text exports
+对话界面.txt

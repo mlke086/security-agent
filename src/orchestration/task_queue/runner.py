@@ -78,6 +78,8 @@ async def run_vulnscan_from_envelope(envelope: TaskEnvelope) -> dict:
             nuclei_tags=envelope.nuclei_tags,
             nuclei_templates=envelope.nuclei_templates,
             nuclei_timeout_sec=envelope.nuclei_timeout_sec,
+            nuclei_ports=list(envelope.nuclei_ports or []),
+            target_groups=list(envelope.target_groups or []),
         )
         final_status = "completed"
         if result.get("status") == "cancelled" or await redis.exists(cancel_key(envelope.task_id)):

@@ -50,6 +50,57 @@ kubectl apply -f deployments/k8s/hpa.yaml
 kubectl get all -n security-agent
 ```
 
+## 4b. Production Deployment (docker-compose)
+生产部署使用 `deployments/prod/`（详见其 README.md）。流程：
+
+```bash
+# 1. 构建镜像（默认 tag 0.1.0；PROXY 指向可出网的代理）
+cd deployments/prod
+VERSION=0.1.0 PROXY=http://192.168.254.121:7897 bash build-images.sh
+
+# 2. 准备环境变量
+cp deployments/prod/.env.example .env   # 编辑 PG/Redis/ES/Nacos 地址与密钥
+
+# 3. 启动
+cd deployments/prod
+docker compose -f docker-compose.yml up -d
+
+# 4. 健康检查
+curl -fsS http://127.0.0.1:8000/health    # API
+curl -fsS http://127.0.0.1:8081/healthz   # 前端
+```
+
+### 架构要点
+- **API/TaskWorker/Celery**：`network_mode: host`，直接占宿主机 8000 端口
+- **前端**：bridge 网络 `8081:80`，nginx 反代 `/api` 到后端——
+  compose 用 `extra_hosts: secagent-api:host-gateway` 让 nginx 经宿主机网关
+  访问 host 网络模式的 API 容器
+- **配置**：业务配置走 Nacos（`deployments/prod/docker/nacos-config.yaml`），
+  docker-compose 只注入引导变量（中间件地址 + 密钥）
+
+### Nacos 配置（含 nuclei 内网下载）
+`nacos-config.yaml` 是配置源，**首次部署需推送到 Nacos**：
+
+```bash
+# 在 API 容器内执行（或本地改 NACOS_SERVER 后执行）
+docker exec secagent-api bash /app/deployments/prod/docker/init-nacos.sh
+```
+
+> ⚠️ **group 大小写**：init-nacos.sh 默认 `NACOS_GROUP=SECURITY`（大写），
+> 但应用读取用 `nacos_group=security`（小写）。**推送前必须对齐**：
+> `NACOS_GROUP=security bash init-nacos.sh`，否则配置落到错误 group，
+> 应用读不到（曾导致 nuclei 下载版本为空、安装脚本 nuclei 失败）。
+
+**nuclei 配置项**（Nacos 中的 `NUCLEI_*`，代码默认已为空串，必须由 Nacos 提供）：
+```yaml
+NUCLEI_DOWNLOAD_BASE_URL: "http://<内网镜像>:8081"
+NUCLEI_VERSION: "3.11.0"
+NUCLEI_TEMPLATES_VERSION: "10.4.6"
+```
+
+Agent 安装脚本由服务端生成时会注入上述值；缺失时 install.sh 显示
+`Downloading nuclei CLI v from internal mirror...`（版本空）并降级 matcher-only。
+
 ## 5. Docker Build & Sandbox
 ```bash
 # Build app image

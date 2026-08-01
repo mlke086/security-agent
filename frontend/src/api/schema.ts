@@ -99,6 +99,148 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/events/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Events List Stream */
+        get: operations["events_list_stream_api_v1_events_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/metrics/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Metrics Stream */
+        get: operations["metrics_stream_api_v1_metrics_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/events/{event_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Stream */
+        get: operations["event_stream_api_v1_events__event_id__stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Me
+         * @description Return the current user's info (incl. created_at / last_login_at).
+         */
+        get: operations["get_me_api_v1_users_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change Own Password */
+        post: operations["change_own_password_api_v1_users_me_password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Users */
+        get: operations["list_users_api_v1_users_get"];
+        put?: never;
+        /** Create User */
+        post: operations["create_user_api_v1_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{username}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User One */
+        get: operations["get_user_one_api_v1_users__username__get"];
+        put?: never;
+        post?: never;
+        /** Delete User */
+        delete: operations["delete_user_api_v1_users__username__delete"];
+        options?: never;
+        head?: never;
+        /** Update User */
+        patch: operations["update_user_api_v1_users__username__patch"];
+        trace?: never;
+    };
+    "/api/v1/users/{username}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore User */
+        post: operations["restore_user_api_v1_users__username__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/events/{event_id}": {
         parameters: {
             query?: never;
@@ -324,10 +466,7 @@ export interface paths {
          *     registration replaces it cleanly. This keeps the host list de-duplicated
          *     by IP and prevents stale offline rows from accumulating.
          *
-         *     P1-6 修复：IP 去重用服务端可信 IP（X-Forwarded-For 或 request.client.host），
-         *     不信任请求体里的 req.ip -- 否则攻击者用合法 enroll token 伪造 ip 即可
-         *     decommission_host_by_ip(任意ip) 下线任意在产主机。req.ip 仅作为展示用
-         *     Host.ip 字段保留（agent 上报的真实内网 IP，NAT 后服务端看不到）。
+         *     P1-6 濞ｅ浂鍠栭ˇ鏌ユ晬濞嗙硽 闁告ê顭烽崳鎼佹偨閵婏附绠涢柛鏃撶磿椤忣剟宕ｉ娆庣箚 IP闁挎稑婀?Forwarded-For 闁?request.client.host闁挎稑顧€缁?    濞戞挸绉虫穱濠冪閺勫浚鍤炴慨鐟板€风紞瀣煂瀹€鈧▓?req.ip -- 闁告熬绠戦崹顖炲绩鐠囨彃姣婇柤鏉挎噽閺併倝宕ラ崼鐔恒€?enroll token 濞寸⒈浜埀?ip 闁告鍟胯ぐ?    decommission_host_by_ip(濞寸姷绮崜鐧穚) 濞戞挸顑囬崵搴㈢缂佹ê澹堥柛锔哄妺妤犲洦绋夌紒妯荤皻闁靛棔鎷積q.ip 濞寸姴鎳嶇紞鏃€绋夐崫鍕綌缂佲偓閾忚鏆?    Host.ip 閻庢稒顨嗛灞剧┍濠靛牊娈岄柨娑樻綂gent 濞戞挸锕ユ慨銈夋儍閸曨厽鍩傞悗鍦仜閸炲绱?IP闁挎稑顒T 闁告艾瀛╁﹢鍥礉閿涘嫷浼傞柣顏勵儎缁楀宕氱敮顔剧闁?
          */
         post: operations["api_enroll_host_api_v1_agents_enroll_post"];
         delete?: never;
@@ -347,10 +486,10 @@ export interface paths {
          * Api Download Binary
          * @description Download the agent binary for ``os``/``arch``.
          *
-         *     The enrollment token is accepted via either the ``token`` query param (legacy,
-         *     kept for backward compatibility with older install scripts) or the
-         *     ``Authorization: Bearer <token>`` header. Header-based auth is preferred
-         *     because query params leak into proxy / shell logs.
+         *     Accepts either an enrollment token (install scripts, operator curl) or an
+         *     agent token (self-upgrade flow).  Enrollment tokens are tried first;
+         *     when that fails and an ``agent_id`` is present, the token is validated as
+         *     an agent bearer token instead.
          */
         get: operations["api_download_binary_api_v1_agents_binary__os___arch__get"];
         put?: never;
@@ -423,6 +562,10 @@ export interface paths {
         /**
          * Api List Hosts
          * @description List enrolled hosts.
+         *
+         *     By default ``decommissioned`` hosts are hidden -- clicking 闁告帞濞€濞?makes
+         *     the host disappear from the table. The admin-only 鐎规瓕寮撶粭鍛棯婢剁鐦滈柡?view
+         *     passes ``include_decommissioned=true`` to see the full roster.
          */
         get: operations["api_list_hosts_api_v1_agents_get"];
         put?: never;
@@ -471,8 +614,8 @@ export interface paths {
          * Api Delete Group
          * @description Delete a host group (admin only).
          *
-         *     P1-4 修复：组内仍有主机时拒绝删除（返回 409），避免 hosts.group_name
-         *     引用已删组变成 legacy 孤儿。操作员需先迁移或下线组内主机。
+         *     P1-4 濞ｅ浂鍠栭ˇ鏌ユ晬濮樿京鐭嬮柛鎰噸缁盯寮垫径澶婄槣闁哄牏鍎ゅ鍌炲箯閹烘梻鍗滈柛鎺斿█濞呭酣鏁嶉崼锝囩闁?409闁挎稑顧€缁辨繈鏌嗛崹顔煎赋 hosts.group_name
+         *     鐎殿喗娲滈弫銈咁啅閹绘帒鐏╃紓浣稿瑜板骞?legacy 閻庢稏鍊曢崝褰掑Υ閸屾稒鎯欏ù锝嗙矊閹叉娊妫侀埀顒勫礂閸絿璁ｇ紒澶岀帛閸ㄣ劍绋夌€ｎ剙娈犵紓浣稿閸炲瓨绋夌紒妯荤皻闁?
          */
         delete: operations["api_delete_group_api_v1_agents_groups__name__delete"];
         options?: never;
@@ -498,7 +641,7 @@ export interface paths {
          * Api Delete Host
          * @description Delete a host (admin only).
          *
-         *     需求1.4：purge=True 时物理删除（仅 decommissioned 主机允许），purge=False 时软删除（下线）。
+         *     闂傚洠鍋撴慨?.4闁挎稒顒猽rge=True 闁哄啫澧庢晶鍧楁偠閸℃鐏╅梻鍕╁€х槐娆愮?decommissioned 濞戞挾绮┃鈧柛蹇庢祰椤斿繘鏁嶆径娑氱purge=False 闁哄啯鍎奸拏瀣礆閻樼粯鐝熼柨娑樼墔缁楀懐鐥崠锛勭闁?
          */
         delete: operations["api_delete_host_api_v1_agents__agent_id__delete"];
         options?: never;
@@ -510,6 +653,36 @@ export interface paths {
         patch: operations["api_update_host_api_v1_agents__agent_id__patch"];
         trace?: never;
     };
+    "/api/v1/agents/{agent_id}/token-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Agent Token Status
+         * @description Diagnostic: does PG have an agent_token for this agent, and is it
+         *     currently active? Use this when an agent keeps failing the WS handshake
+         *     with 403 -- the three possible outcomes map 1:1 to the agent_auth_*
+         *     warnings emitted by enroll.validate_agent_token.
+         *
+         *     Returns:
+         *       { status: "missing" | "revoked" | "active",
+         *         agent_id: ...,
+         *         token_hash_prefix: "ab12cd34" | null,
+         *         issued_at: ISO string | null,
+         *         revoked_at: ISO string | null }
+         */
+        get: operations["api_agent_token_status_api_v1_agents__agent_id__token_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent_id}/upgrade": {
         parameters: {
             query?: never;
@@ -517,11 +690,20 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Api Upgrade Status
+         * @description Return the latest upgrade record for this host (operator UI).
+         */
+        get: operations["api_upgrade_status_api_v1_agents__agent_id__upgrade_get"];
         put?: never;
         /**
          * Api Upgrade Agent
-         * @description Trigger an agent_upgrade command via the WS gateway.
+         * @description Stage a server-controlled agent_upgrade and dispatch it.
+         *
+         *     The signed payload is built from the on-disk Agent binary so the operator
+         *     can't redirect the Agent to an attacker-controlled URL. We also persist a
+         *     Redis status row that the UI polls and the heartbeat handler uses to mark
+         *     the upgrade confirmed once the Agent's new version appears in a heartbeat.
          */
         post: operations["api_upgrade_agent_api_v1_agents__agent_id__upgrade_post"];
         delete?: never;
@@ -609,7 +791,11 @@ export interface paths {
         get: operations["api_get_task_api_v1_vulnscan_tasks__task_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Api Delete Task
+         * @description 删除扫描任务记录及其关联数据（results/vulns/report）。
+         */
+        delete: operations["api_delete_task_api_v1_vulnscan_tasks__task_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -641,7 +827,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Api Cancel Task */
+        /**
+         * Api Cancel Task
+         * @description Cancel queued or running work and notify every assigned Agent.
+         */
         post: operations["api_cancel_task_api_v1_vulnscan_tasks__task_id__cancel_post"];
         delete?: never;
         options?: never;
@@ -713,7 +902,21 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Api Get Vuln */
+        /**
+         * Api Get Vuln
+         * @description Return the finding with the host it belongs to.
+         *
+         *     2026-07-29 UX upgrade (host meta): the vuln detail drawer needs the
+         *     host's business group / owner / env / ip / os so the operator can
+         *     see the asset context without leaving the page. We look up the host
+         *     by ``agent_id`` (preferred) and fall back to ``hostname`` so we
+         *     still get useful context for findings whose agent has been
+         *     decommissioned since the scan.
+         *
+         *     The host field is added alongside the existing vuln record -- the
+         *     base shape is unchanged, so old clients that only read the vuln
+         *     fields keep working.
+         */
         get: operations["api_get_vuln_api_v1_vulnscan_vulns__finding_id__get"];
         put?: never;
         post?: never;
@@ -722,6 +925,31 @@ export interface paths {
         head?: never;
         /** Api Update Vuln Status */
         patch: operations["api_update_vuln_status_api_v1_vulnscan_vulns__finding_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/vulnscan/host-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Host Stats
+         * @description Per-group vuln counts and by-severity breakdown.
+         *
+         *     Used by the host-onboarding page to render the "业务分布" bar chart
+         *     and by the scan-task list to display a host's business group. The
+         *     aggregation is a small N+1 (one ES query per group), so the result
+         *     is cached for 30s in-process.
+         */
+        get: operations["api_host_stats_api_v1_vulnscan_host_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/vulnscan/queue/stats": {
@@ -898,6 +1126,148 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent_id}/actions/{action_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch Action
+         * @description Dispatch one response action to ``agent_id``.
+         *
+         *     Body shape:
+         *         { "params": { ... action-specific ... }, "reason": "optional note" }
+         *
+         *     The ``reason`` field is logged but not enforced -- operators sometimes
+         *     want a fast button without writing a justification.
+         */
+        post: operations["dispatch_action_api_v1_agents__agent_id__actions__action_name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/actions/{action_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Action Status
+         * @description Read the current status of a dispatched action.
+         *
+         *     Returns ``status="unknown"`` if no record is found (TTL expired, never
+         *     existed, or wrong id). Callers should treat ``unknown`` as
+         *     "investigate manually" rather than retry.
+         */
+        get: operations["get_action_status_api_v1_agents_actions__action_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sigma-rules/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sigma Summary
+         * @description Import summary suitable for the console dashboard tab.
+         *
+         *     Returns counts and the skipped-reason list. If no import has run
+         *     yet, returns an empty placeholder so the UI can show a "no rules
+         *     imported" state without a 404.
+         */
+        get: operations["sigma_summary_api_v1_sigma_rules_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sigma-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sigma Rules
+         * @description Filtered list of imported Sigma rules.
+         *
+         *     Served straight from the manifest -- no DB, no walk of the rules
+         *     directory on every request. If the manifest is missing we 404 so
+         *     the operator notices the import never ran.
+         */
+        get: operations["list_sigma_rules_api_v1_sigma_rules_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sigma-rules/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Sigma Dry Run
+         * @description Run the importer against ``body.path`` and return the result.
+         *
+         *     Does NOT write the manifest or copy any .yml files. The operator
+         *     is expected to use the CLI for the actual filesystem change so
+         *     the change is auditable on the host rather than over HTTP.
+         */
+        post: operations["import_sigma_dry_run_api_v1_sigma_rules_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/monitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Monitor Events
+         * @description Return the most recent N monitor snapshots for ``agent_id``.
+         */
+        get: operations["list_monitor_events_api_v1_agents__agent_id__monitor_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/models": {
         parameters: {
             query?: never;
@@ -971,6 +1341,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Chat
+         * @description Single-shot chat: classify + dispatch + answer.
+         */
+        post: operations["api_chat_api_v1_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vulnscan/conversations": {
         parameters: {
             query?: never;
@@ -1019,7 +1409,8 @@ export interface paths {
         put?: never;
         /**
          * Api Chat
-         * @description 多轮对话。把历史 + 用户新消息发给 LLM（可选切换模型），回复追加进会话。
+         * @description Multi-turn dialog. Persists user + assistant, returns the updated
+         *     conversation along with the (auto-extracted) ScanIntent if any.
          */
         post: operations["api_chat_api_v1_vulnscan_conversations__conv_id__chat_post"];
         delete?: never;
@@ -1028,15 +1419,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/events/{event_id}/stream": {
+    "/api/v1/alerts/ingest": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Event Stream */
-        get: operations["event_stream_api_v1_events__event_id__stream_get"];
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Alert
+         * @description Normalize a vendor JSON into our common Alert model and persist.
+         *
+         *     The `source` field in the body is the canonical hint, but if a future
+         *     adapter ships raw bytes (e.g. syslog over webhook) we let the normalizer
+         *     fall back to its default mapping.
+         */
+        post: operations["ingest_alert_api_v1_alerts_ingest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Alerts */
+        get: operations["list_alerts_api_v1_alerts_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1045,15 +1460,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/metrics/stream": {
+    "/api/v1/alerts/{alert_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Metrics Stream */
-        get: operations["metrics_stream_api_v1_metrics_stream_get"];
+        /** Get Alert */
+        get: operations["get_alert_api_v1_alerts__alert_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1062,17 +1477,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/events/stream": {
+    "/api/v1/alerts/{alert_id}/status": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Events List Stream */
-        get: operations["events_list_stream_api_v1_events_stream_get"];
+        get?: never;
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Status
+         * @description Update operator workflow state (new -> acknowledged -> in_progress -> resolved).
+         */
+        patch: operations["update_status_api_v1_alerts__alert_id__status_patch"];
+        trace?: never;
+    };
+    "/api/v1/detect/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Detection
+         * @description Run all loaded Sigma rules against ``body.event`` and persist hits.
+         *
+         *     Returns the matched alert_ids. Already-matched (rule_id, event_id)
+         *     pairs are deduped by ``build_alert`` (sha256-derived stable id), so
+         *     re-running the same input is safe.
+         */
+        post: operations["run_detection_api_v1_detect_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detect/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Rules */
+        get: operations["list_rules_api_v1_detect_rules_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detect/rules/load": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reload Builtin Rules */
+        post: operations["reload_builtin_rules_api_v1_detect_rules_load_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1083,6 +1559,43 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ActionDispatchResponse */
+        ActionDispatchResponse: {
+            /** Action Id */
+            action_id: string;
+            /** Action */
+            action: string;
+            /** Agent Id */
+            agent_id: string;
+            /**
+             * Status
+             * @description dispatched | succeeded | failed | unknown
+             * @default dispatched
+             */
+            status: string;
+        };
+        /** ActionStatusResponse */
+        ActionStatusResponse: {
+            /** Action Id */
+            action_id: string;
+            /** Status */
+            status: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Agent Id
+             * @default
+             */
+            agent_id: string;
+            /**
+             * Received At
+             * @default
+             */
+            received_at: string;
+        };
         /** AgentConfigRequest */
         AgentConfigRequest: {
             /** Heartbeat Interval */
@@ -1095,6 +1608,35 @@ export interface components {
             /** Resource Limit */
             resource_limit?: Record<string, never> | null;
         };
+        /**
+         * AlertIngestRequest
+         * @description Webhook payload from a third-party EDR. The "source" field tells
+         *     the server which adapter to use for normalization. Vendors that do not
+         *     supply source metadata may rely on the URL path (see router).
+         */
+        AlertIngestRequest: {
+            /**
+             * Source
+             * @default
+             */
+            source: string;
+            /** Payload */
+            payload: Record<string, never>;
+        };
+        /** AlertIngestResponse */
+        AlertIngestResponse: {
+            /** Alert Id */
+            alert_id: string;
+            /** Received At */
+            received_at: string;
+            severity: components["schemas"]["AlertSeverity"];
+        };
+        /**
+         * AlertSeverity
+         * @description Standard severity levels across all EDR sources.
+         * @enum {string}
+         */
+        AlertSeverity: "critical" | "high" | "medium" | "low" | "info";
         /** ApprovalActionResponse */
         ApprovalActionResponse: {
             /** Status */
@@ -1136,17 +1678,32 @@ export interface components {
              */
             file: string;
         };
-        /** ChatRequest */
-        ChatRequest: {
-            /** Message */
-            message: string;
-            /** Model Id */
-            model_id?: number | null;
+        /**
+         * ChangePasswordRequest
+         * @description POST /api/v1/users/me/password body. Any user.
+         */
+        ChangePasswordRequest: {
+            /** Old Password */
+            old_password: string;
+            /** New Password */
+            new_password: string;
+        };
+        /** ChatResponse */
+        ChatResponse: {
             /**
-             * Parse Intent
-             * @default false
+             * Intent
+             * @enum {string}
              */
-            parse_intent: boolean;
+            intent: "scan" | "project" | "web" | "chat";
+            /** Confidence */
+            confidence: number;
+            /** Reply */
+            reply: string;
+            /**
+             * Sources
+             * @default []
+             */
+            sources: components["schemas"]["SourceRef"][];
         };
         /** CreateConversationRequest */
         CreateConversationRequest: {
@@ -1157,6 +1714,30 @@ export interface components {
             title: string;
             /** Model Id */
             model_id?: number | null;
+        };
+        /** DetectRunRequest */
+        DetectRunRequest: {
+            /**
+             * Event
+             * @description Raw event payload (any JSON the Sigma rules can match).
+             */
+            event: Record<string, never>;
+            /**
+             * Event Id
+             * @description Optional caller-supplied event id. A uuid4 is generated if missing.
+             */
+            event_id?: string | null;
+        };
+        /** DetectRunResponse */
+        DetectRunResponse: {
+            /** Event Id */
+            event_id: string;
+            /** Matched */
+            matched: number;
+            /** Alert Ids */
+            alert_ids: string[];
+            /** Rule Ids */
+            rule_ids: string[];
         };
         /** EnrollRequest */
         EnrollRequest: {
@@ -1200,11 +1781,13 @@ export interface components {
             group?: string | null;
             /**
              * Ttl Hours
+             * @description Token lifetime in hours; 0 falls back to the default
              * @default 24
              */
             ttl_hours: number;
             /**
              * Uses
+             * @description Max number of agents that can enroll with this token
              * @default 1
              */
             uses: number;
@@ -1324,14 +1907,14 @@ export interface components {
         GroupCreateRequest: {
             /**
              * Name
-             * @description 组名
+             * @description Group name
              */
             name: string;
             /**
              * Description
-             * @default
+             * @description Optional human-readable description
              */
-            description: string;
+            description?: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1365,6 +1948,11 @@ export interface components {
              */
             rule_version: string;
             /**
+             * Target Groups
+             * @default []
+             */
+            target_groups: string[];
+            /**
              * Last Heartbeat
              * @default
              */
@@ -1385,7 +1973,7 @@ export interface components {
         HostGroupUpdateRequest: {
             /**
              * Group
-             * @description 目标组名，传 null 清空
+             * @description Target group name; pass null to clear
              */
             group?: string | null;
         };
@@ -1486,6 +2074,216 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
         };
+        /** RuleSummary */
+        RuleSummary: {
+            /** Rule Id */
+            rule_id: string;
+            /** Title */
+            title: string;
+            /** Level */
+            level: string;
+            /** Product */
+            product: string;
+            /** Service */
+            service: string;
+            /** Category */
+            category: string;
+        };
+        /**
+         * ScanModule
+         * @enum {string}
+         */
+        ScanModule: "sys_vuln" | "baseline";
+        /** ScanPolicy */
+        ScanPolicy: {
+            /**
+             * Modules
+             * @default [
+             *       "sys_vuln",
+             *       "baseline"
+             *     ]
+             */
+            modules: components["schemas"]["ScanModule"][];
+            /**
+             * Resource Limit
+             * @default {
+             *       "cpu_percent": 30,
+             *       "mem_percent": 30
+             *     }
+             */
+            resource_limit: Record<string, never>;
+            /** Time Window */
+            time_window?: string | null;
+            /**
+             * Timeout Sec
+             * @default 1800
+             */
+            timeout_sec: number;
+        };
+        /** ScanReport */
+        ScanReport: {
+            /** Task Id */
+            task_id: string;
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /**
+             * Ai Analysis
+             * @default
+             */
+            ai_analysis: string;
+            /**
+             * Stats
+             * @default {}
+             */
+            stats: Record<string, never>;
+            /**
+             * Top Vulns
+             * @default []
+             */
+            top_vulns: Record<string, never>[];
+            /**
+             * Recommendations
+             * @default []
+             */
+            recommendations: string[];
+            /**
+             * Generated At
+             * @default
+             */
+            generated_at: string;
+            /**
+             * Ai Processed
+             * @default false
+             */
+            ai_processed: boolean;
+            /**
+             * Ai Model
+             * @default
+             */
+            ai_model: string;
+            /**
+             * Ai Overall Advice
+             * @default
+             */
+            ai_overall_advice: string;
+            /**
+             * Ai Processed At
+             * @default
+             */
+            ai_processed_at: string;
+        };
+        /** ScanTask */
+        ScanTask: {
+            /** Task Id */
+            task_id: string;
+            /**
+             * Source
+             * @default manual
+             * @enum {string}
+             */
+            source: "dialog" | "manual";
+            /** Intent Text */
+            intent_text?: string | null;
+            /**
+             * Targets
+             * @default []
+             */
+            targets: string[];
+            /**
+             * Target Groups
+             * @default []
+             */
+            target_groups: string[];
+            /**
+             * @default {
+             *       "modules": [
+             *         "sys_vuln",
+             *         "baseline"
+             *       ],
+             *       "resource_limit": {
+             *         "cpu_percent": 30,
+             *         "mem_percent": 30
+             *       },
+             *       "timeout_sec": 1800
+             *     }
+             */
+            policy: components["schemas"]["ScanPolicy"];
+            /**
+             * Rule Version
+             * @default
+             */
+            rule_version: string;
+            /**
+             * Engine
+             * @default matcher
+             * @enum {string}
+             */
+            engine: "matcher" | "nuclei" | "global";
+            /**
+             * Nuclei Severity
+             * @default []
+             */
+            nuclei_severity: string[];
+            /**
+             * Nuclei Tags
+             * @default []
+             */
+            nuclei_tags: string[];
+            /**
+             * Nuclei Templates
+             * @default []
+             */
+            nuclei_templates: string[];
+            /**
+             * Nuclei Timeout Sec
+             * @default 0
+             */
+            nuclei_timeout_sec: number;
+            /**
+             * Nuclei Ports
+             * @default []
+             */
+            nuclei_ports: number[];
+            /**
+             * Status
+             * @default queued
+             * @enum {string}
+             */
+            status: "queued" | "dispatching" | "scanning" | "analyzing" | "cancelling" | "cancelled" | "completed" | "failed";
+            /**
+             * Stats
+             * @default {
+             *       "total": 0,
+             *       "done": 0,
+             *       "failed": 0
+             *     }
+             */
+            stats: Record<string, never>;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+        };
+        /** SourceRef */
+        SourceRef: {
+            /** Title */
+            title: string;
+            /** Url */
+            url?: string | null;
+            /**
+             * Snippet
+             * @default
+             */
+            snippet: string;
+        };
         /** SseTokenRequest */
         SseTokenRequest: {
             /**
@@ -1571,14 +2369,58 @@ export interface components {
         UpgradeRequest: {
             /**
              * Version
-             * @description Target agent binary version, e.g. v0.2.0
+             * @description Optional override; defaults to the currently packaged version
              */
-            version: string;
+            version?: string | null;
+        };
+        /**
+         * UserCreate
+         * @description POST /api/v1/users body. Admin only.
+         */
+        UserCreate: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
             /**
-             * Download Url
-             * @description HTTPS URL the agent downloads the new binary from
+             * Role
+             * @default viewer
+             * @enum {string}
              */
-            download_url: string;
+            role: "admin" | "analyst" | "viewer" | "responder";
+        };
+        /** UserListResponse */
+        UserListResponse: {
+            /** Items */
+            items: components["schemas"]["UserPublic"][];
+            /** Count */
+            count: number;
+        };
+        /**
+         * UserPublic
+         * @description API representation of a user (no password).
+         */
+        UserPublic: {
+            /** Username */
+            username: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "admin" | "analyst" | "viewer" | "responder";
+            /**
+             * Disabled
+             * @default false
+             */
+            disabled: boolean;
+            /** Created At */
+            created_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Last Login At */
+            last_login_at?: string | null;
+            /** Deleted At */
+            deleted_at?: string | null;
         };
         /** UserResponse */
         UserResponse: {
@@ -1589,6 +2431,18 @@ export interface components {
             /** Disabled */
             disabled: boolean;
         };
+        /**
+         * UserUpdate
+         * @description PATCH /api/v1/users/{username} body. Admin only.
+         */
+        UserUpdate: {
+            /** Username */
+            username?: string | null;
+            /** Role */
+            role?: ("admin" | "analyst" | "viewer" | "responder") | null;
+            /** Disabled */
+            disabled?: boolean | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1597,6 +2451,209 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** VulnFinding */
+        VulnFinding: {
+            /** Finding Id */
+            finding_id: string;
+            /** Task Id */
+            task_id: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Hostname */
+            hostname: string;
+            category: components["schemas"]["ScanModule"];
+            /** Cve */
+            cve?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "high" | "medium" | "low" | "info";
+            /** Ai Severity */
+            ai_severity?: string | null;
+            /**
+             * Ai Filtered
+             * @default false
+             */
+            ai_filtered: boolean;
+            /**
+             * Evidence
+             * @default
+             */
+            evidence: string;
+            /** Fix Advice */
+            fix_advice?: string | null;
+            /**
+             * Status
+             * @default open
+             * @enum {string}
+             */
+            status: "open" | "fixed" | "accepted";
+            /**
+             * Detected At
+             * @default
+             */
+            detected_at: string;
+            /**
+             * Scan History
+             * @default []
+             */
+            scan_history: string[];
+            /**
+             * Ai Processed
+             * @default false
+             */
+            ai_processed: boolean;
+            /** Ai Reason */
+            ai_reason?: string | null;
+            /** Ai Fix Summary */
+            ai_fix_summary?: string | null;
+            /**
+             * Ai Processed At
+             * @default
+             */
+            ai_processed_at: string;
+            /** First Fixed At */
+            first_fixed_at?: string | null;
+            /** Last Fixed At */
+            last_fixed_at?: string | null;
+        };
+        /** _HostStatsItem */
+        _HostStatsItem: {
+            /** Group */
+            group: string;
+            /** Member Count */
+            member_count: number;
+            /** Total */
+            total: number;
+            /**
+             * By Severity
+             * @default {}
+             */
+            by_severity: {
+                [key: string]: number;
+            };
+        };
+        /** _HostStatsResponse */
+        _HostStatsResponse: {
+            /** Items */
+            items: components["schemas"]["_HostStatsItem"][];
+            /**
+             * Cached
+             * @default false
+             */
+            cached: boolean;
+        };
+        /** _TaskListResponse */
+        _TaskListResponse: {
+            /** Items */
+            items: components["schemas"]["ScanTask"][];
+        };
+        /**
+         * _VulnDetailResponse
+         * @description GET /vulnscan/vulns/{id} response. The router attaches
+         *     an optional host dict when the agent_id / hostname lookup
+         *     succeeds; otherwise the field is absent. Modelling the host
+         *     as Optional keeps the OpenAPI schema honest about the union.
+         */
+        _VulnDetailResponse: {
+            /** Finding Id */
+            finding_id: string;
+            /** Task Id */
+            task_id: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Hostname */
+            hostname: string;
+            category: components["schemas"]["ScanModule"];
+            /** Cve */
+            cve?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "high" | "medium" | "low" | "info";
+            /** Ai Severity */
+            ai_severity?: string | null;
+            /**
+             * Ai Filtered
+             * @default false
+             */
+            ai_filtered: boolean;
+            /**
+             * Evidence
+             * @default
+             */
+            evidence: string;
+            /** Fix Advice */
+            fix_advice?: string | null;
+            /**
+             * Status
+             * @default open
+             * @enum {string}
+             */
+            status: "open" | "fixed" | "accepted";
+            /**
+             * Detected At
+             * @default
+             */
+            detected_at: string;
+            /**
+             * Ai Processed
+             * @default false
+             */
+            ai_processed: boolean;
+            /** Ai Reason */
+            ai_reason?: string | null;
+            /** Ai Fix Summary */
+            ai_fix_summary?: string | null;
+            /**
+             * Ai Processed At
+             * @default
+             */
+            ai_processed_at: string;
+            /** First Fixed At */
+            first_fixed_at?: string | null;
+            /** Last Fixed At */
+            last_fixed_at?: string | null;
+            /** Host */
+            host?: Record<string, never> | null;
+        };
+        /** _VulnListResponse */
+        _VulnListResponse: {
+            /** Items */
+            items: components["schemas"]["VulnFinding"][];
+        };
+        /** ChatRequest */
+        src__api__routers__chat__ChatRequest: {
+            /** Message */
+            message: string;
+            /**
+             * History
+             * @default []
+             */
+            history: Record<string, never>[];
+            /** Model Id */
+            model_id?: number | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+        };
+        /** ChatRequest */
+        src__api__routers__scan_chat__ChatRequest: {
+            /** Message */
+            message: string;
+            /** Model Id */
+            model_id?: number | null;
+            /**
+             * Parse Intent
+             * @default false
+             */
+            parse_intent: boolean;
         };
     };
     responses: never;
@@ -1773,6 +2830,356 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SseTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    events_list_stream_api_v1_events_stream_get: {
+        parameters: {
+            query: {
+                token: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    metrics_stream_api_v1_metrics_stream_get: {
+        parameters: {
+            query: {
+                token: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_stream_api_v1_events__event_id__stream_get: {
+        parameters: {
+            query: {
+                token: string;
+            };
+            header?: never;
+            path: {
+                event_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_me_api_v1_users_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"];
+                };
+            };
+        };
+    };
+    change_own_password_api_v1_users_me_password_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_api_v1_users_get: {
+        parameters: {
+            query?: {
+                /** @description include soft-deleted users */
+                include_deleted?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_user_api_v1_users_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_one_api_v1_users__username__get: {
+        parameters: {
+            query?: {
+                include_deleted?: boolean;
+            };
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_user_api_v1_users__username__delete: {
+        parameters: {
+            query?: {
+                /** @description actually DELETE the row */
+                hard?: boolean;
+            };
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_user_api_v1_users__username__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_user_api_v1_users__username__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"];
                 };
             };
             /** @description Validation Error */
@@ -2107,6 +3514,7 @@ export interface operations {
         parameters: {
             query?: {
                 token?: string | null;
+                agent_id?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -2197,6 +3605,8 @@ export interface operations {
             query?: {
                 status?: string | null;
                 group?: string | null;
+                /** @description True=show soft-deleted hosts too (used by the admin 缂佺媴绱曢幃濠勬喆閸℃绂?; False=hide them so deletion actually removes the row from the list */
+                include_decommissioned?: boolean;
             };
             header?: never;
             path?: never;
@@ -2342,7 +3752,7 @@ export interface operations {
     api_delete_host_api_v1_agents__agent_id__delete: {
         parameters: {
             query?: {
-                /** @description True=物理删除(仅已下线主机允许); False=软删除(下线) */
+                /** @description description */
                 purge?: boolean;
             };
             header?: never;
@@ -2387,6 +3797,68 @@ export interface operations {
                 "application/json": components["schemas"]["HostGroupUpdateRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_agent_token_status_api_v1_agents__agent_id__token_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_upgrade_status_api_v1_agents__agent_id__upgrade_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -2528,7 +4000,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["_TaskListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2579,6 +4051,37 @@ export interface operations {
         };
     };
     api_get_task_api_v1_vulnscan_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_delete_task_api_v1_vulnscan_tasks__task_id__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -2680,6 +4183,22 @@ export interface operations {
                 hostname?: string | null;
                 severity?: string | null;
                 status?: string | null;
+                /** @description Exact CVE id, e.g. CVE-2024-0001 */
+                cve?: string | null;
+                /** @description Case-insensitive substring on CVE id */
+                cve_keyword?: string | null;
+                /** @description Case-insensitive substring on hostname */
+                hostname_keyword?: string | null;
+                /** @description Case-insensitive substring on finding name */
+                name_keyword?: string | null;
+                /** @description Filter by business group (host.group) */
+                group?: string | null;
+                /** @description Filter by AI processing state */
+                ai_processed?: boolean | null;
+                /** @description ISO 8601, e.g. 2026-07-01T00:00:00Z */
+                date_from?: string | null;
+                /** @description ISO 8601, e.g. 2026-07-29T23:59:59Z */
+                date_to?: string | null;
             };
             header?: never;
             path?: never;
@@ -2693,7 +4212,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["_VulnListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2724,7 +4243,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ScanReport"];
                 };
             };
             /** @description Validation Error */
@@ -2789,7 +4308,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["_VulnDetailResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2834,6 +4353,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_host_stats_api_v1_vulnscan_host_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["_HostStatsResponse"];
                 };
             };
         };
@@ -3071,6 +4610,199 @@ export interface operations {
             };
         };
     };
+    dispatch_action_api_v1_agents__agent_id__actions__action_name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                action_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionDispatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_action_status_api_v1_agents_actions__action_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sigma_summary_api_v1_sigma_rules_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    list_sigma_rules_api_v1_sigma_rules_get: {
+        parameters: {
+            query?: {
+                /** @description process_creation / file_event / ... */
+                category?: string | null;
+                /** @description critical / high / medium / low / informational */
+                level?: string | null;
+                /** @description linux / macos / windows */
+                os?: string | null;
+                detector_supported?: boolean | null;
+                /** @description substring match on rule_id or title */
+                q?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_sigma_dry_run_api_v1_sigma_rules_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_monitor_events_api_v1_agents__agent_id__monitor_get: {
+        parameters: {
+            query?: {
+                /** @description Max snapshots to return (most recent first) */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     api_list_models_api_v1_models_get: {
         parameters: {
             query?: never;
@@ -3252,6 +4984,39 @@ export interface operations {
             };
         };
     };
+    api_chat_api_v1_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["src__api__routers__chat__ChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     api_list_conversations_api_v1_vulnscan_conversations_get: {
         parameters: {
             query?: never;
@@ -3413,7 +5178,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ChatRequest"];
+                "application/json": components["schemas"]["src__api__routers__scan_chat__ChatRequest"];
             };
         };
         responses: {
@@ -3437,14 +5202,83 @@ export interface operations {
             };
         };
     };
-    event_stream_api_v1_events__event_id__stream_get: {
+    ingest_alert_api_v1_alerts_ingest_post: {
         parameters: {
-            query: {
-                token: string;
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertIngestRequest"];
             };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertIngestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_alerts_api_v1_alerts_get: {
+        parameters: {
+            query?: {
+                /** @description critical/high/medium/low/info */
+                severity?: string | null;
+                /** @description new/acknowledged/in_progress/resolved/false_positive */
+                status?: string | null;
+                source?: string | null;
+                hostname?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_alert_api_v1_alerts__alert_id__get: {
+        parameters: {
+            query?: never;
             header?: never;
             path: {
-                event_id: string;
+                alert_id: string;
             };
             cookie?: never;
         };
@@ -3456,7 +5290,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -3470,16 +5304,20 @@ export interface operations {
             };
         };
     };
-    metrics_stream_api_v1_metrics_stream_get: {
+    update_status_api_v1_alerts__alert_id__status_patch: {
         parameters: {
-            query: {
-                token: string;
-            };
+            query?: never;
             header?: never;
-            path?: never;
+            path: {
+                alert_id: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -3487,7 +5325,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -3501,11 +5339,42 @@ export interface operations {
             };
         };
     };
-    events_list_stream_api_v1_events_stream_get: {
+    run_detection_api_v1_detect_run_post: {
         parameters: {
-            query: {
-                token: string;
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DetectRunRequest"];
             };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_rules_api_v1_detect_rules_get: {
+        parameters: {
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -3518,16 +5387,27 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RuleSummary"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
+        };
+    };
+    reload_builtin_rules_api_v1_detect_rules_load_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": Record<string, never>;
                 };
             };
         };

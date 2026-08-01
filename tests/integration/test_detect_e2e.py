@@ -1,4 +1,4 @@
-﻿"""End-to-end verification for the Phase 3 Sigma detection pipeline.
+"""End-to-end verification for the Phase 3 Sigma detection pipeline.
 
 Exercises:
   - POST /api/v1/detect/run          (Sigma rule firing + alert persist)
@@ -11,6 +11,7 @@ PG persistence is mocked so the test runs offline-safe on a dev box
 that does not have asyncpg / a reachable PG. The on-disk
 ``test_alerts_e2e.py`` covers the real PG path.
 """
+
 from __future__ import annotations
 
 import os
@@ -27,8 +28,8 @@ os.environ.setdefault("LOG_LEVEL", "WARNING")
 
 import pytest
 
-
 # ---------- in-memory AlertStore stub ----------------------------------------
+
 
 class _StubAlertStore:
     """Drop-in replacement for AlertStore that records save_alert calls."""
@@ -64,20 +65,22 @@ class _StubAlertStore:
 
 # ---------- fixtures ----------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def client():
     from fastapi.testclient import TestClient
-    from src.api.main import app
 
     # Patch the alert_store singleton BEFORE TestClient sends any request
     # so /detect/run (which goes through detector.run_rules -> save_alert)
     # never touches PG.
     from src.agents import alert_store as _as_mod
+    from src.api.main import app
 
     stub = _StubAlertStore()
     _as_mod._alert_store = stub
     try:
         from src.detection import detector as _det_mod
+
         _det_mod._detector = None  # force fresh registry on first call
 
         with TestClient(app) as c:
@@ -88,23 +91,20 @@ def client():
 
 @pytest.fixture(scope="module")
 def admin_headers(client):
-    r = client.post(
-        "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
-    )
+    r = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
     assert r.status_code == 200, f"admin login failed: {r.text}"
     return {"Authorization": "Bearer " + r.json()["access_token"]}
 
 
 @pytest.fixture(scope="module")
 def viewer_headers(client):
-    r = client.post(
-        "/api/v1/auth/login", json={"username": "viewer", "password": "viewer123"}
-    )
+    r = client.post("/api/v1/auth/login", json={"username": "viewer", "password": "viewer123"})
     assert r.status_code == 200, f"viewer login failed: {r.text}"
     return {"Authorization": "Bearer " + r.json()["access_token"]}
 
 
 # ---------- tests -------------------------------------------------------------
+
 
 def test_01_list_rules_after_login(client, admin_headers):
     """GET /detect/rules should expose the bundled Sigma rules."""

@@ -85,10 +85,37 @@ class TestTasks:
         headers = auth_headers("analyst")
         with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
             store = _mock_store()
+            store.count_tasks = AsyncMock(return_value=0)
             mock_vs.return_value = store
             resp = client.get("/api/v1/vulnscan/tasks", headers=headers)
             assert resp.status_code == 200
-            assert "items" in resp.json()
+            body = resp.json()
+            assert "items" in body
+            # V12 5.8: server-side pagination + true total (the old endpoint
+            # silently truncated at the store default of 50 tasks).
+            assert "total" in body
+            assert body["page"] == 1
+            assert body["page_size"] == 20
+
+    def test_list_tasks_pagination_passed_to_store(self, auth_headers):
+        headers = auth_headers("analyst")
+        with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
+            store = _mock_store()
+            store.count_tasks = AsyncMock(return_value=0)
+            mock_vs.return_value = store
+            resp = client.get(
+                "/api/v1/vulnscan/tasks?page=3&page_size=50", headers=headers
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["page"] == 3
+            assert body["page_size"] == 50
+            # store.list_tasks must have received the page bounds
+            calls = store.list_tasks.call_args_list
+            assert calls, "list_tasks not called"
+            kw = calls[-1].kwargs
+            assert kw.get("limit") == 50
+            assert kw.get("offset") == 100
 
     def test_get_task_not_found(self, auth_headers):
         headers = auth_headers("admin")
@@ -112,6 +139,44 @@ class TestTasks:
         headers = auth_headers("viewer")
         resp = client.post("/api/v1/vulnscan/tasks/task-1/cancel", headers=headers)
         assert resp.status_code == 403
+
+    def test_batch_delete_admin(self, auth_headers):
+        headers = auth_headers("admin")
+        with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
+            store = _mock_store()
+            # t1/t2 exist, t3 does not -> deleted=2, not_found=["t3"].
+            store.get_task.side_effect = lambda tid: {"task_id": tid} if tid in ("t1", "t2") else None
+            mock_vs.return_value = store
+            resp = client.post(
+                "/api/v1/vulnscan/tasks/batch-delete",
+                json={"task_ids": ["t1", "t2", "t3"]},
+                headers=headers,
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] == 2
+        assert body["not_found"] == ["t3"]
+        assert body["failed"] == []
+        # delete_task called once per existing task.
+        assert store.delete_task.await_count == 2
+
+    def test_batch_delete_viewer_403(self, auth_headers):
+        headers = auth_headers("viewer")
+        resp = client.post(
+            "/api/v1/vulnscan/tasks/batch-delete",
+            json={"task_ids": ["t1"]},
+            headers=headers,
+        )
+        assert resp.status_code == 403
+
+    def test_batch_delete_empty_422(self, auth_headers):
+        headers = auth_headers("admin")
+        resp = client.post(
+            "/api/v1/vulnscan/tasks/batch-delete",
+            json={"task_ids": []},
+            headers=headers,
+        )
+        assert resp.status_code == 422
 
 
 # -- stream -------------------------------------------------------------------
@@ -754,3 +819,40 @@ class TestVulnDetailHostMeta:
             )
             second_count = store.list_hosts.await_count
             assert second_count == first_count, "second create must reuse the cache"
+
+
+class TestTaskFindingsEndpoint:
+    """V12 5.7 (问题1 修复): /tasks/{id}/findings reads the RESULTS index so a
+    task whose vulns were merged into an older record still sees its own
+    scan findings on the monitor page."""
+
+    def test_task_findings_returns_results_findings(self, auth_headers):
+        from unittest.mock import AsyncMock, patch
+
+        from src.agents.models import ScanModule, ScanResult, VulnFinding
+
+        store = AsyncMock()
+        f1 = VulnFinding(
+            finding_id="f-1", task_id="t-1", agent_id="a-1", hostname="h-1",
+            category=ScanModule.SYS_VULN, name="CVE-2026-0001", cve="CVE-2026-0001",
+            severity="high",
+        )
+        f2 = VulnFinding(
+            finding_id="f-2", task_id="t-1", agent_id="a-1", hostname="h-1",
+            category=ScanModule.SYS_VULN, name="CVE-2026-0002", cve="CVE-2026-0002",
+            severity="medium",
+        )
+        r1 = ScanResult(task_id="t-1", agent_id="a-1", hostname="h-1",
+                        findings=[f1.model_dump()], batch=1, is_final=False)
+        r2 = ScanResult(task_id="t-1", agent_id="a-1", hostname="h-1",
+                        findings=[f2.model_dump()], batch=2, is_final=True)
+        store.list_results = AsyncMock(return_value=[r1, r2])
+
+        headers = auth_headers("viewer")
+        with patch("src.api.routers.vulnscan.get_vulnscan_store", return_value=store):
+            resp = client.get("/api/v1/vulnscan/tasks/t-1/findings", headers=headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total"] == 2
+        assert [i["finding_id"] for i in body["items"]] == ["f-1", "f-2"]
+        store.list_results.assert_awaited_once_with("t-1")

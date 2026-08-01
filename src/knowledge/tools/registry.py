@@ -1,4 +1,5 @@
 """Tool registry — decorator-based registration and lookup."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -18,6 +19,7 @@ def tool(
         @tool(name="virustotal", category="threat_intel")
         async def query_virustotal(ioc: str) -> dict: ...
     """
+
     def wrapper(func: Callable) -> Callable:
         tool_name = name or func.__name__
         _TOOL_REGISTRY[tool_name] = {
@@ -26,6 +28,7 @@ def tool(
             "category": category,
         }
         return func
+
     return wrapper
 
 
@@ -38,11 +41,13 @@ def list_tools(category: str | None = None) -> list[dict[str, str]]:
     results = []
     for name, entry in _TOOL_REGISTRY.items():
         if category is None or entry["category"] == category:
-            results.append({
-                "name": name,
-                "description": entry["description"],
-                "category": entry["category"],
-            })
+            results.append(
+                {
+                    "name": name,
+                    "description": entry["description"],
+                    "category": entry["category"],
+                }
+            )
     return results
 
 
@@ -63,4 +68,3 @@ async def call_tool(name: str, *args: Any, **kwargs: Any) -> Any:
     if hasattr(result, "__await__"):
         return await result
     return result
-

@@ -36,7 +36,7 @@ class ActionDispatcher:
             self._registry[ot] = connector
 
     def _op_id(self, event_id: str, op: dict[str, Any]) -> str:
-        raw = f"{event_id}:{op.get('type','')}:{str(op.get('params',{}))}"
+        raw = f"{event_id}:{op.get('type', '')}:{str(op.get('params', {}))}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     async def execute_playbook(

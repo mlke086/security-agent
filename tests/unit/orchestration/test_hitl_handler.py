@@ -49,7 +49,9 @@ def _mock_store(monkeypatch, wait_returns):
 @pytest.mark.asyncio
 async def test_l3_approved(monkeypatch):
     store = _mock_store(monkeypatch, "approved")
-    result = await hitl_approval_node({"operation_level": "L3", "event_id": "e1", "playbook_draft": {}})
+    result = await hitl_approval_node(
+        {"operation_level": "L3", "event_id": "e1", "playbook_draft": {}}
+    )
     assert result["approval_status"] == "approved"
     store.create.assert_awaited_once()
 
@@ -57,14 +59,18 @@ async def test_l3_approved(monkeypatch):
 @pytest.mark.asyncio
 async def test_l3_rejected(monkeypatch):
     _mock_store(monkeypatch, "rejected")
-    result = await hitl_approval_node({"operation_level": "L3", "event_id": "e1", "playbook_draft": {}})
+    result = await hitl_approval_node(
+        {"operation_level": "L3", "event_id": "e1", "playbook_draft": {}}
+    )
     assert result["approval_status"] == "rejected"
 
 
 @pytest.mark.asyncio
 async def test_l3_timeout_treated_as_rejected(monkeypatch):
     _mock_store(monkeypatch, "timeout")
-    result = await hitl_approval_node({"operation_level": "L3", "event_id": "e1", "playbook_draft": {}})
+    result = await hitl_approval_node(
+        {"operation_level": "L3", "event_id": "e1", "playbook_draft": {}}
+    )
     assert result["approval_status"] == "rejected"
 
 
@@ -81,6 +87,7 @@ async def test_execute_runs_dispatcher_when_approved(monkeypatch):
         return_value=[{"op_id": "x", "op_type": "notify", "status": "success"}]
     )
     import src.execution.actions as actions_mod
+
     monkeypatch.setattr(actions_mod, "ActionDispatcher", lambda **kw: mock_disp)
 
     state = {

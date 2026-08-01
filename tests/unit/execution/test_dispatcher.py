@@ -19,7 +19,9 @@ def _mock_audit(monkeypatch):
 async def test_dry_run_skips_real_execution():
     d = ActionDispatcher(dry_run=True)
     ctx = ActionContext(event_id="e1", dry_run=True)
-    pb = {"operations": [{"type": "notify", "params": {}}, {"type": "firewall_block", "params": {}}]}
+    pb = {
+        "operations": [{"type": "notify", "params": {}}, {"type": "firewall_block", "params": {}}]
+    }
     results = await d.execute_playbook(pb, ctx)
     assert len(results) == 2
     assert all(r["status"] == "dry_run" for r in results)
@@ -73,16 +75,16 @@ async def test_rollback_on_failure(monkeypatch):
     monkeypatch.setattr(d, "_mark_done", AsyncMock())
 
     ok = MagicMock()
-    ok.execute = AsyncMock(
-        return_value=ActionResult(op_id="a", op_type="notify", status="success")
-    )
+    ok.execute = AsyncMock(return_value=ActionResult(op_id="a", op_type="notify", status="success"))
     ok.rollback = AsyncMock()
     bad = MagicMock()
     bad.execute = AsyncMock(side_effect=RuntimeError("boom"))
     d._registry["notify"] = ok
     d._registry["firewall_block"] = bad
 
-    pb = {"operations": [{"type": "notify", "params": {}}, {"type": "firewall_block", "params": {}}]}
+    pb = {
+        "operations": [{"type": "notify", "params": {}}, {"type": "firewall_block", "params": {}}]
+    }
     results = await d.execute_playbook(pb, ctx)
     assert results[0]["status"] == "success"
     assert results[1]["status"] == "failed"

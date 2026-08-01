@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
 import { theme as antdTheme, ConfigProvider } from "antd"
 
 export type ThemeKey = "light" | "dark" | "tech-blue" | "eye-green"
@@ -83,6 +83,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }
 
   const profile = THEMES[themeKey]
+
+  // 2026-08-01 UX upgrade: mirror the active theme onto <html data-theme=...>
+  // so custom CSS (chat / markdown) can branch on it via [data-theme] blocks.
+  // Without this the attribute is never set and all dark/tech-blue CSS is dead
+  // code (the chat page rendered light-only in every theme).
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", themeKey)
+  }, [themeKey])
 
   return (
     <ThemeContext.Provider value={{ themeKey, setThemeKey, profile }}>

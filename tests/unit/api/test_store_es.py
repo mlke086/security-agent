@@ -62,6 +62,46 @@ async def test_get_event_missing(store):
 
 
 @pytest.mark.asyncio
+async def test_get_event_fetches_trace_by_event_id_keyword(store):
+    """_fetch_trace must query event_id.keyword, not event_id.
+
+    event_id is a UUID with hyphens (e.g. 550e8400-e29b-41d4-...). The audit
+    index has no explicit mapping, so ES dynamic-maps event_id as text+keyword.
+    A `term` on the text field matches analyzed tokens -- the standard analyzer
+    splits the UUID on hyphens, so the full id is never a single token and the
+    query returns 0 hits -> event detail page showed "暂无推理轨迹". Querying
+    event_id.keyword matches the exact, unanalyzed value.
+    """
+    uuid_id = "550e8400-e29b-41d4-a716-446655440000"
+    store._es.get = AsyncMock(return_value={"found": True, "_source": _src(event_id=uuid_id)})
+    store._es.search = AsyncMock(
+        return_value={
+            "hits": {
+                "hits": [
+                    {
+                        "_source": {
+                            "node": "entry",
+                            "action": "received",
+                            "summary": "Event received",
+                            "timestamp": "2026-07-30T00:00:00",
+                            "details": {},
+                        }
+                    }
+                ]
+            }
+        }
+    )
+    ev = await store.get_event(uuid_id)
+    assert ev is not None
+    assert len(ev.trace) == 1
+    assert ev.trace[0].node == "entry"
+    # The trace query must use the .keyword subfield for an exact match --
+    # querying the analyzed `event_id` text field returns 0 hits for UUIDs.
+    query = store._es.search.await_args.kwargs["query"]
+    assert query == {"term": {"event_id.keyword": uuid_id}}
+
+
+@pytest.mark.asyncio
 async def test_update_event(store):
     store._es.update = AsyncMock()
     await store.update_event("e1", status="completed", final_verdict="true_positive")
@@ -78,28 +118,36 @@ async def test_update_event_noop_when_all_none(store):
 @pytest.mark.asyncio
 async def test_add_trace_step(store):
     store._es.index = AsyncMock()
-    await store.add_trace_step("e1", TraceStep(node="entry", action="recv", summary="s", timestamp="t", details={}))
+    await store.add_trace_step(
+        "e1", TraceStep(node="entry", action="recv", summary="s", timestamp="t", details={})
+    )
     store._es.index.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_add_approval(store):
     store._es.update = AsyncMock()
-    await store.add_approval("e1", ApprovalEntry(
-        event_id="e1", action="approved", note="", actor="admin", role="admin", timestamp="t"))
+    await store.add_approval(
+        "e1",
+        ApprovalEntry(
+            event_id="e1", action="approved", note="", actor="admin", role="admin", timestamp="t"
+        ),
+    )
     store._es.update.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_metrics(store):
-    store._es.search = AsyncMock(return_value={
-        "hits": {"total": {"value": 5}, "hits": []},
-        "aggregations": {
-            "by_verdict": {"buckets": [{"key": "true_positive", "doc_count": 3}]},
-            "by_priority": {"buckets": [{"key": "high", "doc_count": 2}]},
-            "avg_duration": {"value": 1500},
-        },
-    })
+    store._es.search = AsyncMock(
+        return_value={
+            "hits": {"total": {"value": 5}, "hits": []},
+            "aggregations": {
+                "by_verdict": {"buckets": [{"key": "true_positive", "doc_count": 3}]},
+                "by_priority": {"buckets": [{"key": "high", "doc_count": 2}]},
+                "avg_duration": {"value": 1500},
+            },
+        }
+    )
     store._es.count = AsyncMock(return_value={"count": 1})
     m = await store.metrics()
     assert m["total_events"] == 5

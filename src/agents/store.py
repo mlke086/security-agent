@@ -5,15 +5,37 @@ Tasks/Results/Vulns/Reports remain ES-only (full-text / aggregation).
 
 import asyncio
 import re
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from elasticsearch import AsyncElasticsearch
 
-from src.agents.models import Host, ScanReport, ScanResult, ScanTask, VulnFinding
+from src.agents.models import Host, ScanReport, ScanResult, ScanTask, VulnFilter, VulnFinding
 from src.common.config.settings import get_settings
 from src.common.logging.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def detected_sort_key(value: str):
+    """Sort key for scan_history / detected_at values (S-P2-2 shared util).
+
+    ISO-8601 strings parse to (0, datetime) so history sorts chronologically;
+    empty / unparseable values fall back to a stable lexical key. Lives here
+    because both the aggregate node (vulnscan subgraph) and the one-shot
+    consolidation migration script consume the same key semantics -- keeping
+    one implementation prevents the two copies from drifting.
+    """
+    s = (value or "").strip()
+    if not s:
+        return (2, "")
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return (0, datetime.fromisoformat(s))
+    except ValueError:
+        return (1, s)
+
 
 INDEX_HOSTS = "vulnscan-hosts"
 INDEX_TASKS = "vulnscan-tasks"
@@ -69,12 +91,18 @@ _MAPPINGS = {
                 "hostname": {"type": "keyword"},
                 "category": {"type": "keyword"},
                 "detected_at": {"type": "date"},
+                # 2026-07-31 UX upgrade: prior-scan detection times (date array).
+                "scan_history": {"type": "date"},
                 # 2026-07-29 UX upgrade: AI processing evidence on each finding.
                 "ai_processed": {"type": "boolean"},
                 "ai_reason": {"type": "text"},
                 "ai_processed_at": {"type": "date"},
                 "first_fixed_at": {"type": "date"},
                 "last_fixed_at": {"type": "date"},
+                # V12 阶段 5.5: name is free text; declare the keyword
+                # sub-field explicitly so the wildcard filter never depends
+                # on dynamic-mapping defaults.
+                "name": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
             }
         },
     },
@@ -305,7 +333,7 @@ class VulnscanStore:
         except Exception as exc:
             logger.warning("host_pg_list_failed", error=str(exc))
         # ES fallback
-        must = []
+        must: list[dict] = []
         if status:
             must.append({"term": {"status": status}})
         elif exclude_decommissioned:
@@ -523,6 +551,13 @@ class VulnscanStore:
         )
         return [ScanTask(**h["_source"]) for h in resp["hits"]["hits"]]
 
+    async def count_tasks(self, status: str | None = None) -> int:
+        """Total task count (V12 5.8: true pagination for the task list)."""
+        must = [{"term": {"status": status}}] if status else []
+        query = {"bool": {"must": must}} if must else {"match_all": {}}
+        resp = await self._es.count(index=INDEX_TASKS, query=query)
+        return int(resp.get("count", 0))
+
     async def update_task(self, task_id: str, **fields) -> None:
         doc = {k: v for k, v in fields.items() if v is not None}
         if doc:
@@ -583,44 +618,90 @@ class VulnscanStore:
         if actions:
             await async_bulk(self._es, actions)
 
-    async def list_vulns(
-        self,
-        task_id: str | None = None,
-        hostname: str | None = None,
-        hostnames: list[str] | None = None,
-        severity: str | None = None,
-        status: str | None = None,
-        limit: int = 200,
-        offset: int = 0,
-        # 2026-07-29 UX upgrade: extended filter set. All optional, so the
-        # call signature stays backwards compatible. Keyword filters use
-        # ES wildcard (case-insensitive) on .keyword; date_from/to are
-        # inclusive ISO 8601 strings parsed by ES.
-        cve: str | None = None,
-        cve_keyword: str | None = None,
-        hostname_keyword: str | None = None,
-        name_keyword: str | None = None,
-        ai_processed: bool | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
-    ) -> list[VulnFinding]:
+    async def bulk_update_vulns(self, actions: list[dict]) -> None:
+        """Apply a mixed batch of index/update/delete actions to the vulns index.
+
+        2026-07-31 UX upgrade: the aggregate reconcile step emits one action per
+        finding (update existing doc, index new doc, update auto-fix, delete
+        duplicate copies) and submits them in a single bulk call. Callers are
+        responsible for attaching ``_index`` / ``_id`` / ``_op_type`` on each
+        action (the same shape ``save_vulns`` uses for index actions).
+
+        Spec-P1-RECON (V12): the batch is chunked (2000 actions per request)
+        and retried up to 3 times on transient ES errors, so a 50k-finding
+        reconcile no longer hammers ES with one giant round-trip.
+        """
+        if not actions:
+            return
+        # Local import mirrors save_vulns (keeps heavy elasticsearch.helpers
+        # out of the module import path).
+        from elasticsearch.helpers import async_bulk
+
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                await async_bulk(self._es, actions, chunk_size=2000)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                logger.warning(
+                    "bulk_update_vulns_retry",
+                    attempt=attempt + 1,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+        # All retries exhausted -- surface the last error so the caller
+        # (aggregate node) can fail loudly instead of silently dropping
+        # the reconcile writes.
+        if last_exc is not None:
+            raise last_exc
+
+    @staticmethod
+    def _vulns_query(fltr: VulnFilter) -> dict:
+        """Build the ES query for ``list_vulns`` / ``list_vulns_all``."""
+        # V12 阶段 5.5 (Spec-P2-OVERLONG): cap keyword inputs at the query
+        # layer. ES wildcard compiles the pattern to a regex with a 1000-char
+        # max_regex_length limit -- an unbounded value would turn a user typo
+        # into ES 400 -> our 500. Reject early with a clear error.
+        for field in ("cve_keyword", "hostname_keyword", "name_keyword"):
+            val = getattr(fltr, field)
+            if val is not None and len(val) > 200:
+                raise ValueError(f"{field} exceeds 200 chars")
         must: list[dict] = []
-        if task_id:
-            must.append({"term": {"task_id": task_id}})
-        if hostname:
-            must.append({"term": {"hostname": hostname}})
-        if hostnames:
+        if fltr.task_id:
+            # V12 5.7 (2026-08-02): a task must see vulns it ORIGINALLY found
+            # (task_id) as well as ones it later confirmed via reconcile
+            # (last_seen_task_id). Before this fix the merge overwrote
+            # task_id, so a task's monitor page showed 0 findings while its
+            # report snapshot still had them.
+            must.append(
+                {
+                    "bool": {
+                        "should": [
+                            {"term": {"task_id": fltr.task_id}},
+                            {"term": {"last_seen_task_id": fltr.task_id}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }
+            )
+        if fltr.hostname:
+            must.append({"term": {"hostname": fltr.hostname}})
+        if fltr.hostnames:
             # Server-side multi-host filter (business-group view). Pushing
             # the host set into the query as a `terms` filter avoids the
             # silent truncation of post-filtering a capped result set.
-            must.append({"terms": {"hostname": hostnames}})
-        if severity:
-            must.append({"term": {"severity": severity}})
-        if status:
-            must.append({"term": {"status": status}})
-        if cve:
-            must.append({"term": {"cve": cve}})
-        if cve_keyword:
+            must.append({"terms": {"hostname": fltr.hostnames}})
+        if fltr.agent_ids:
+            # Server-side multi-agent batch fetch (aggregate reconcile step).
+            must.append({"terms": {"agent_id": fltr.agent_ids}})
+        if fltr.severity:
+            must.append({"term": {"severity": fltr.severity}})
+        if fltr.status:
+            must.append({"term": {"status": fltr.status}})
+        if fltr.cve:
+            must.append({"term": {"cve": fltr.cve}})
+        if fltr.cve_keyword:
             # case-insensitive substring on CVE id
             must.append(
                 {
@@ -630,51 +711,120 @@ class VulnscanStore:
                         # than an ES wildcard metacharacter (which would
                         # otherwise return unexpected matches).
                         "cve": {
-                            "value": f"*{re.escape(cve_keyword.upper())}*",
+                            "value": f"*{re.escape(fltr.cve_keyword.upper())}*",
                             "case_insensitive": True,
                         }
                     }
                 }
             )
-        if hostname_keyword:
+        if fltr.hostname_keyword:
             must.append(
                 {
                     "wildcard": {
                         "hostname": {
-                            "value": f"*{hostname_keyword.lower()}*",
+                            "value": f"*{fltr.hostname_keyword.lower()}*",
                             "case_insensitive": True,
                         }
                     }
                 }
             )
-        if name_keyword:
+        if fltr.name_keyword:
             # name is free text; ES dynamic-mapped as text + keyword. Use
             # the keyword sub-field so the wildcard is fast and exact-ish.
             must.append(
                 {
                     "wildcard": {
-                        "name.keyword": {"value": f"*{name_keyword}*", "case_insensitive": True}
+                        "name.keyword": {
+                            "value": f"*{fltr.name_keyword}*",
+                            "case_insensitive": True,
+                        }
                     }
                 }
             )
-        if ai_processed is not None:
-            must.append({"term": {"ai_processed": ai_processed}})
-        if date_from or date_to:
+        if fltr.ai_processed is not None:
+            must.append({"term": {"ai_processed": fltr.ai_processed}})
+        if fltr.date_from or fltr.date_to:
             rng: dict = {}
-            if date_from:
-                rng["gte"] = date_from
-            if date_to:
-                rng["lte"] = date_to
+            if fltr.date_from:
+                rng["gte"] = fltr.date_from
+            if fltr.date_to:
+                rng["lte"] = fltr.date_to
             must.append({"range": {"detected_at": rng}})
-        query = {"bool": {"must": must}} if must else {"match_all": {}}
-        resp = await self._es.search(
-            index=INDEX_VULNS,
-            query=query,
-            sort=[{"detected_at": {"order": "desc"}}],
-            from_=offset,
-            size=limit,
-        )
-        return [VulnFinding(**h["_source"]) for h in resp["hits"]["hits"]]
+        return {"bool": {"must": must}} if must else {"match_all": {}}
+
+    async def _list_vulns_page(self, fltr: VulnFilter) -> tuple[list[VulnFinding], list | None]:
+        """One page of vulns + the ES sort cursor for the next page.
+
+        Spec-P1-RECON (V12): when ``fltr.search_after`` is set the page is
+        fetched by cursor instead of from_/size. The returned cursor is the
+        raw sort keys from the last hit, which ES requires verbatim on the
+        next request (date fields come back as epoch millis, so they must
+        not be re-synthesised).
+        """
+        query = self._vulns_query(fltr)
+        if fltr.search_after is not None:
+            # Cursor paging: tie-break on _id so the order is stable across
+            # pages (detected_at alone can repeat). search_after cannot be
+            # combined with from_.
+            resp = await self._es.search(
+                index=INDEX_VULNS,
+                query=query,
+                sort=[
+                    {"detected_at": {"order": "desc"}},
+                    {"_id": {"order": "asc"}},
+                ],
+                search_after=fltr.search_after,
+                size=fltr.limit,
+            )
+        else:
+            resp = await self._es.search(
+                index=INDEX_VULNS,
+                query=query,
+                sort=[{"detected_at": {"order": "desc"}}],
+                from_=fltr.offset,
+                size=fltr.limit,
+            )
+        hits = resp["hits"]["hits"]
+        findings = [VulnFinding(**h["_source"]) for h in hits]
+        cursor = hits[-1]["sort"] if hits else None
+        return findings, cursor
+
+    async def list_vulns(self, fltr: VulnFilter) -> list[VulnFinding]:
+        """List vulns matching ``fltr`` (server-side ES query).
+
+        V10 阶段 1.1: takes a single ``VulnFilter`` dataclass instead of a
+        long kwarg list -- callers (vulnscan router, vulnscan subgraph) all
+        build one, and the frozen dataclass keeps the filter immutable while
+        the query is being assembled. Keyword filters use ES wildcard
+        (case-insensitive) on .keyword; date_from/to are inclusive ISO 8601
+        strings parsed by ES.
+        """
+        findings, _ = await self._list_vulns_page(fltr)
+        return findings
+
+    async def list_vulns_all(self, fltr: VulnFilter) -> list[VulnFinding]:
+        """Fetch EVERY vuln matching ``fltr`` via search_after cursor paging.
+
+        Spec-P1-RECON (V12): the aggregate reconcile step used to cap its
+        "current vuln set" fetch at 10k with from_/size. Past that cap,
+        older vulns silently missed the reconcile -- they were re-created
+        as duplicates on the next scan and never auto-fixed. Cursor paging
+        removes the window; callers pass a page ``limit`` and this keeps
+        paging until ES returns a short page. Note this is NOT a snapshot:
+        concurrent writes can shift pages mid-scan, which is fine for the
+        reconcile use-case (the next scan reconciles again).
+        """
+        out: list[VulnFinding] = []
+        cursor: list | None = None
+        while True:
+            page, cursor = await self._list_vulns_page(replace(fltr, offset=0, search_after=cursor))
+            if not page:
+                break
+            out.extend(page)
+            if len(page) < fltr.limit:
+                # Short page => no more hits.
+                break
+        return out
 
     async def get_vuln(self, finding_id: str) -> VulnFinding | None:
         """O(1) 单条漏洞查询（ES _id get）。P2-8 修复：替代 list_vulns(10000)

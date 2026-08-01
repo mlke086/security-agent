@@ -1,0 +1,114 @@
+/* 态势感知 - 加粗指标条 + 动效 */
+
+/* 宽度过渡：SSE 推送 / 首屏生长时进度条平滑伸缩 */
+.dash-bar .ant-progress-bg {
+  transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1) !important;
+}
+.dash-bar .ant-progress-inner {
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.06);
+}
+.dash-bar .ant-progress-bg {
+  border-radius: 10px;
+}
+
+/* 结论 / 定级分布：粗条 + 高光流动 shimmer */
+.dash-bar-thick .ant-progress-bg {
+  background-image: linear-gradient(
+    105deg,
+    rgba(255, 255, 255, 0) 30%,
+    rgba(255, 255, 255, 0.45) 50%,
+    rgba(255, 255, 255, 0) 70%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: dash-shimmer 2.6s linear infinite;
+}
+@keyframes dash-shimmer {
+  0%   { background-position: 180% 0; }
+  100% { background-position: -120% 0; }
+}
+
+/* 事件趋势：行 hover 高亮 + 条亮度提升 */
+.dash-trend-row {
+  transition: background 0.2s;
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+.dash-trend-row:hover {
+  background: rgba(22, 119, 255, 0.07);
+}
+.dash-trend-row:hover .ant-progress-bg {
+  filter: brightness(1.15);
+}
+
+/* 数值 / 标签更醒目 */
+.dash-value {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dash-pct {
+  font-size: 13px;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+}
+.dash-time {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 卡片 / 区块淡入入场 */
+.dash-fade-in {
+  animation: dash-fade-in 0.5s ease both;
+}
+@keyframes dash-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 顶部指标卡 hover 抬升 */
+.dash-stat-card {
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.dash-stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* 主机纳管 - 业务分布堆叠条（多严重度色段） */
+.dash-stack-bar {
+  position: relative;
+  display: flex;
+  height: 22px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.06);
+}
+.dash-stack-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    105deg,
+    rgba(255, 255, 255, 0) 30%,
+    rgba(255, 255, 255, 0.45) 50%,
+    rgba(255, 255, 255, 0) 70%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: dash-shimmer 2.6s linear infinite;
+  pointer-events: none;
+}
+.dash-stack-seg {
+  height: 100%;
+  transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.dash-stack-row {
+  transition: background 0.2s;
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin-bottom: 6px;
+}
+.dash-stack-row:hover {
+  background: rgba(22, 119, 255, 0.07);
+}

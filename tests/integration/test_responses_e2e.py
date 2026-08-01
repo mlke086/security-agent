@@ -1,4 +1,4 @@
-﻿"""End-to-end verification for the Phase 4 response-action pipeline.
+"""End-to-end verification for the Phase 4 response-action pipeline.
 
 Exercises:
   - POST /api/v1/agents/{id}/actions/{name}  (RBAC + dispatch)
@@ -12,10 +12,10 @@ Exercises:
                        subscribers, which is fine -- we only check the
                        response shape)
 """
+
 from __future__ import annotations
 
 import os
-from typing import Any
 
 os.environ.setdefault("NACOS_SERVER", "")
 os.environ.setdefault("API_SECRET_KEY", "test-secret-key-12345678")
@@ -27,13 +27,15 @@ os.environ.setdefault("LOG_LEVEL", "WARNING")
 
 import pytest
 
-
 # ---------- fixtures ----------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def client():
     from fastapi.testclient import TestClient
+
     from src.api.main import app
+
     with TestClient(app) as c:
         yield c
 
@@ -65,6 +67,7 @@ def analyst_headers(client):
 
 
 # ---------- tests --------------------------------------------------------------
+
 
 def test_01_unknown_action_400(client, admin_headers):
     r = client.post(

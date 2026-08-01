@@ -1,4 +1,5 @@
-﻿"""Unit tests for the Redis key/stream naming helpers."""
+"""Unit tests for the Redis key/stream naming helpers."""
+
 from __future__ import annotations
 
 from src.orchestration.task_queue import keys

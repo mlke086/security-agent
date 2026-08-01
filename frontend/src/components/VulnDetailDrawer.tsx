@@ -141,6 +141,15 @@ export default function VulnDetailDrawer({ findingId, onClose, onUpdated }: Prop
                 ]} />
             </Descriptions.Item>
             <Descriptions.Item label="发现时间">{formatBeijing(vuln.detected_at)}</Descriptions.Item>
+            {(vuln.scan_history ?? []).length > 0 && (
+              <Descriptions.Item label="历史扫描时间">
+                {(vuln.scan_history ?? []).map((t, i) => (
+                  <div key={i} style={{ lineHeight: "20px" }}>
+                    {formatBeijing(t)}
+                  </div>
+                ))}
+              </Descriptions.Item>
+            )}
             {vuln.first_fixed_at && (
               <Descriptions.Item label="首次修复">{formatBeijing(vuln.first_fixed_at)}</Descriptions.Item>
             )}

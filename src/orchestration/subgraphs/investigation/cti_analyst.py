@@ -64,7 +64,7 @@ async def _query_graphrag(ioc_values: list[str]) -> str:
             parts.append(
                 "Graph relations:\n"
                 + "\n".join(
-                    f"  [{r.get('node_type','?')}] {r.get('name','')} {r.get('cve_id','')}"
+                    f"  [{r.get('node_type', '?')}] {r.get('name', '')} {r.get('cve_id', '')}"
                     for r in result["graph_relations"][:10]
                 )
             )

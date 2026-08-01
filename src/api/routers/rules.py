@@ -11,6 +11,7 @@ from src.agents.rules_sync import (
     current_rule_version,
     get_rule_pack,
     get_rule_pack_body,
+    sync_nuclei_templates_to_all_agents,
     sync_rules,
     sync_rules_to_all_agents,
 )
@@ -93,6 +94,38 @@ async def api_sync_to_agents(
         actor=current_user.username,
         details={"synced": result["synced"], "total": result["total"]},
     )
+    return result
+
+
+@router.post("/sync-nuclei-templates")
+async def api_sync_nuclei_templates(
+    current_user=Depends(require_role("admin", "analyst")),
+):
+    """下发 nuclei-templates 模板库到所有在线 agent（独立于 matcher 规则包）。
+
+    nuclei-templates 是 projectdiscovery 模板包，nuclei CLI 从
+    /opt/secagent/templates 读取（runner -t）。模板包放在内网下载站，服务端
+    推送签名的 nuclei_templates_update 命令，agent 从内网拉取 zip 并解压。
+    返回 {synced, total, version, agents: [{agent_id, sent}]}。
+    """
+    result = await sync_nuclei_templates_to_all_agents()
+    await get_audit_logger().log(
+        event_id="rules",
+        node="rules.router",
+        action="sync_nuclei_templates",
+        actor=current_user.username,
+        details={
+            "synced": result.get("synced", 0),
+            "total": result.get("total", 0),
+            "version": result.get("version", ""),
+        },
+    )
+    if result.get("error"):
+        # 配置缺失 -> 400，让前端提示运维去 Nacos 配 NUCLEI_TEMPLATES_VERSION
+        raise HTTPException(
+            status_code=400,
+            detail="nuclei 模板版本未配置：请在 Nacos 设置 NUCLEI_TEMPLATES_VERSION 与 NUCLEI_DOWNLOAD_BASE_URL",
+        )
     return result
 
 

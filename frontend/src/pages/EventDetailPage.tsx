@@ -1,9 +1,12 @@
 ﻿import { useEffect, useState } from "react"
 import { Typography, Spin, Descriptions, Tag, Timeline, Button, Space, message, Collapse, Empty, Input } from "antd"
+import { formatBeijing } from "../utils/time"
+import { sseBaseUrl } from "../utils/sseBaseUrl"
+import { showError } from "../utils/showError"
 import { Card } from "antd"
 import { ArrowLeftOutlined, CheckOutlined, CloseOutlined, BugOutlined, SafetyOutlined, SearchOutlined } from "@ant-design/icons"
 import { useParams, useNavigate } from "react-router-dom"
-import api, { getEventDetail, approveEvent, getSseToken } from "../api/client"
+import { getEventDetail, approveEvent, getSseToken } from "../api/client"
 import { useAuth } from "../context/AuthContext"
 import type { EventRecord } from "../types"
 
@@ -46,7 +49,7 @@ export default function EventDetailPage() {
       try {
         const shortToken = await getSseToken("events")
         if (cancelled) return
-        const base = (api.defaults.baseURL || "").replace(/\/+$/, "")
+        const base = sseBaseUrl()
         // base 已含 /api/v1，只拼 /events/...（不能重复 /api/v1，否则 404 致
         // EventSource 无限重连占满连接数致所有请求阻塞）。
         source = new EventSource(`${base}/events/${eventIdStr}/stream?token=${shortToken}`)
@@ -75,7 +78,7 @@ export default function EventDetailPage() {
   const doApprove = async (action: "approved" | "rejected") => {
     if (!eventId) return; setApproving(true)
     try { await approveEvent(eventId, action, note); message.success(action === "approved" ? "已批准" : "已驳回"); getEventDetail(eventId).then(setEv) }
-    catch { message.error("操作失败") }
+    catch (err) { showError(err, "操作失败") }
     finally { setApproving(false) }
   }
 
@@ -118,7 +121,7 @@ export default function EventDetailPage() {
               ),
               children: (
                 <div>
-                  {step.timestamp && <Typography.Paragraph style={{ fontSize: 12, margin: 0 }} type="secondary">{new Date(step.timestamp).toLocaleString()}</Typography.Paragraph>}
+                  {step.timestamp && <Typography.Paragraph style={{ fontSize: 12, margin: 0 }} type="secondary">{formatBeijing(step.timestamp)}</Typography.Paragraph>}
                   {Object.keys(step.details).length > 0 && (
                     <pre style={{ fontSize: 12, background: "#f6f8fa", padding: 8, borderRadius: 4, maxHeight: 200, overflow: "auto" }}>
                       {JSON.stringify(step.details, null, 2)}

@@ -13,6 +13,9 @@ type Request struct {
 	Severity    []string          // -severity list (e.g. ["critical","high"])
 	Tags        []string          // -tags (e.g. ["rce","auth-bypass"])
 	Targets     []string          // hosts/CIDRs to scan
+	// Ports optionally restricts the scan to the given TCP ports.
+	// Empty = runner auto-discovers every listening port on the host.
+	Ports         []int
 	TimeoutSec  int               // 0 = use runner default
 	ExtraArgs   map[string]string // any extra -key=value flags the console wants to pass
 }

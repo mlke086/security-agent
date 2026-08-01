@@ -1,6 +1,7 @@
 """EDR adapter base + registry."""
+
 import hashlib
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from src.agents.models import Alert, AlertIOC, AlertSeverity, AlertSource
@@ -61,18 +62,41 @@ class EDRAdapter:
         return AlertSeverity.MEDIUM
 
     def _occurred_at(self) -> str:
-        return self.raw.get("timestamp") or self.raw.get("timestamp_utc") or datetime.now(UTC).isoformat()
+        return (
+            self.raw.get("timestamp")
+            or self.raw.get("timestamp_utc")
+            or datetime.now(UTC).isoformat()
+        )
 
-    def _hostname(self) -> str: return ""
-    def _host_ip(self) -> str: return ""
-    def _agent_id(self) -> str: return ""
-    def _rule_id(self) -> str: return ""
-    def _rule_name(self) -> str: return ""
-    def _category(self) -> str: return ""
-    def _mitre(self) -> list: return []
-    def _iocs(self) -> AlertIOC: return AlertIOC()
-    def _tags(self) -> list: return []
-    def _source_url(self) -> str: return ""
+    def _hostname(self) -> str:
+        return ""
+
+    def _host_ip(self) -> str:
+        return ""
+
+    def _agent_id(self) -> str:
+        return ""
+
+    def _rule_id(self) -> str:
+        return ""
+
+    def _rule_name(self) -> str:
+        return ""
+
+    def _category(self) -> str:
+        return ""
+
+    def _mitre(self) -> list:
+        return []
+
+    def _iocs(self) -> AlertIOC:
+        return AlertIOC()
+
+    def _tags(self) -> list:
+        return []
+
+    def _source_url(self) -> str:
+        return ""
 
 
 class EDRAlertNormalizer:

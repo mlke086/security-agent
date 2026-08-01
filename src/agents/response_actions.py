@@ -1,4 +1,4 @@
-﻿"""Response action registry for direct agent commands.
+"""Response action registry for direct agent commands.
 
 Phase 4 of the monitoring/alerting refactor: operators can dispatch a small
 set of defensive actions (kill a process, quarantine a file) directly to a
@@ -22,11 +22,12 @@ Design notes:
   - Action ids are server-side UUIDs, NOT caller-supplied, so the
     ``response_ack`` correlation can never collide across operators.
 """
+
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -50,6 +51,7 @@ ACTION_ACK_MSG_TYPE: str = "response_ack"
 
 
 # ---------- per-action payload models ---------------------------------------
+
 
 class KillProcessPayload(BaseModel):
     """Payload for ``kill_process``.
@@ -82,7 +84,9 @@ class QuarantineFilePayload(BaseModel):
     must know exactly which file they want quarantined.
     """
 
-    path: str = Field(..., min_length=1, max_length=4096, description="Absolute path to the file to quarantine")
+    path: str = Field(
+        ..., min_length=1, max_length=4096, description="Absolute path to the file to quarantine"
+    )
     reason: str = Field(
         default="",
         max_length=512,
@@ -102,13 +106,14 @@ class QuarantineFilePayload(BaseModel):
 # Discriminated union by ``action`` field. Pydantic v2 supports this via
 # ``discriminated unions`` but for two actions a hand-rolled dispatcher
 # keeps the error messages friendlier.
-_PAYLOAD_MODELS = {
+_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "kill_process": KillProcessPayload,
     "quarantine_file": QuarantineFilePayload,
 }
 
 
 # ---------- envelope -------------------------------------------------------
+
 
 class ResponseActionRequest(BaseModel):
     """Server-side envelope that becomes the ``payload`` of a ``response_action`` WS message.
@@ -139,15 +144,20 @@ class ResponseActionRequest(BaseModel):
 
 # ---------- dispatcher helper ----------------------------------------------
 
-def build_action_message(
-    agent_id: str, action: str, params: dict, actor: str
-) -> dict:
+
+def build_action_message(agent_id: str, action: str, params: dict, actor: str) -> dict:
     """Build the full WS message dict for a response_action.
 
     Returns a dict shaped as ``{v, type, ts, payload, ...}`` ready for
     ``AgentGateway.send_to_agent`` to sign and ship.
     """
-    envelope = ResponseActionRequest(action=action, params=params, actor=actor)
+    envelope = ResponseActionRequest(
+        # Callers pass a validated action string; cast to the Literal so mypy
+        # accepts the boundary without weakening the model's runtime check.
+        action=cast(Literal["kill_process", "quarantine_file"], action),
+        params=params,
+        actor=actor,
+    )
     payload = envelope.model_dump()
     return {
         "v": 1,

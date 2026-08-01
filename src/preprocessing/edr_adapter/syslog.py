@@ -1,10 +1,13 @@
 """Generic syslog / RFC5424 line + structured fields."""
+
 import hashlib
 import re
+
 from src.agents.models import AlertIOC, AlertSeverity, AlertSource
 from src.preprocessing.edr_adapter.base import EDRAdapter
 
-_SYSLOG_PRI_RE = re.compile("\<(\d+)\>")
+_SYSLOG_PRI_RE = re.compile(r"\<(\d+)\>")
+
 
 class SyslogAdapter(EDRAdapter):
     source = AlertSource.SYSLOG
@@ -26,10 +29,14 @@ class SyslogAdapter(EDRAdapter):
             m = _SYSLOG_PRI_RE.search(str(pri))
             sev_int = int(m.group(1)) % 8 if m else 5
         sev = sev_int
-        if sev <= 1: return AlertSeverity.CRITICAL
-        if sev <= 3: return AlertSeverity.HIGH
-        if sev <= 4: return AlertSeverity.MEDIUM
-        if sev <= 5: return AlertSeverity.LOW
+        if sev <= 1:
+            return AlertSeverity.CRITICAL
+        if sev <= 3:
+            return AlertSeverity.HIGH
+        if sev <= 4:
+            return AlertSeverity.MEDIUM
+        if sev <= 5:
+            return AlertSeverity.LOW
         return AlertSeverity.INFO
 
     def _hostname(self):
@@ -40,5 +47,5 @@ class SyslogAdapter(EDRAdapter):
 
     def _iocs(self):
         msg = str(self.raw.get("msg") or self.raw.get("message") or "")
-        ips = re.findall("\b(?:\d{1,3}\.){3}\d{1,3}\b", msg)
+        ips = re.findall("\b(?:\\d{1,3}\\.){3}\\d{1,3}\b", msg)
         return AlertIOC(ips=list(set(ips)))

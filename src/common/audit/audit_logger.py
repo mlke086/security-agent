@@ -44,6 +44,33 @@ class AuditLogger:
     async def close(self) -> None:
         await self._es.close()
 
+    async def count_for_user(self, username: str) -> int:
+        """Count audit events where ``username`` is the actor or the target
+        (``details.target``).
+
+        The users router uses this to refuse hard-deleting a user who still
+        has audit history: actor/target are stored as bare usernames, so a
+        physical DELETE would orphan every audit entry they appear in
+        (S-P1-2). Best-effort -- on ES errors we return 0 and let the PG
+        dependency check remain the hard gate.
+        """
+        try:
+            resp = await self._es.count(
+                index=self._index,
+                query={
+                    "bool": {
+                        "should": [
+                            {"term": {"actor": username}},
+                            {"term": {"details.target": username}},
+                        ]
+                    }
+                },
+            )
+            return int(resp.get("count", 0))
+        except Exception as exc:
+            logger.warning("audit_count_failed", username=username, error=str(exc))
+            return 0
+
 
 _audit: AuditLogger | None = None
 

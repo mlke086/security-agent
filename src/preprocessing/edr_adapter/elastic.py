@@ -1,6 +1,8 @@
 """Elastic Security / Kibana detection alert."""
-from src.agents.models import AlertIOC, AlertSeverity, AlertSource
+
+from src.agents.models import AlertSeverity, AlertSource
 from src.preprocessing.edr_adapter.base import EDRAdapter
+
 
 class ElasticAdapter(EDRAdapter):
     source = AlertSource.ELASTIC
@@ -17,8 +19,10 @@ class ElasticAdapter(EDRAdapter):
         sev = str(sig.get("severity", "")).lower()
         if sev in ("critical", "high"):
             return AlertSeverity(sev)
-        if sev == "medium": return AlertSeverity.MEDIUM
-        if sev == "low": return AlertSeverity.LOW
+        if sev == "medium":
+            return AlertSeverity.MEDIUM
+        if sev == "low":
+            return AlertSeverity.LOW
         return AlertSeverity.INFO
 
     def _rule_id(self):

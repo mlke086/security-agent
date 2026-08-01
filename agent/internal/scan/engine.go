@@ -31,13 +31,16 @@ type ScanEngine struct {
 	matcher   *Matcher
 	nuclei    *nuclei.CLIRunner // may be nil when nuclei binary is not installed
 	Monitor   *resource.Monitor
-	Protector *protection.Monitor // optional self-protection (P1 of docs/架构改造设计.md)
+	Protector *protection.Monitor // optional self-protection (P1 of docs/架构改造设计md)
 	mu        sync.Mutex
 
 	// Callback for sending progress updates
 	OnStep func(taskID, step, status, message string)
-	// Callback for sending result batches
-	OnResult func(taskID, hostname string, findings []Finding, batch int, isFinal bool)
+	// Callback for sending result batches. scannedCategories is only populated
+	// on the final batch: the modules (sys_vuln/baseline/nuclei) this agent
+	// actually completed, so the server's auto-fix only acts on covered
+	// categories. Legacy agents that pass nil are skipped conservatively.
+	OnResult func(taskID, hostname string, findings []Finding, batch int, isFinal bool, scannedCategories []string)
 	// Callback for sending task ack
 	OnAck func(taskID string, accepted bool, reason string)
 
@@ -90,6 +93,8 @@ type ScanCommand struct {
 	NucleiSeverity  []string `json:"nuclei_severity,omitempty"`
 	NucleiTags      []string `json:"nuclei_tags,omitempty"`
 	NucleiTemplates []string `json:"nuclei_templates,omitempty"`
+	// NucleiPorts optionally restricts the scan to the listed TCP ports.
+	NucleiPorts     []int    `json:"nuclei_ports,omitempty"`
 	NucleiTimeout   int      `json:"nuclei_timeout_sec,omitempty"`
 }
 
@@ -185,7 +190,7 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 			e.OnAck(taskID, false, string(reason))
 		}
 		if e.OnResult != nil {
-			e.OnResult(taskID, hostname, nil, 1, true)
+			e.OnResult(taskID, hostname, nil, 1, true, nil)
 		}
 		return
 	}
@@ -218,6 +223,10 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 	}
 
 	var allFindings []Finding
+	// 2026-07-31: modules actually completed (collection ok + rules present +
+	// matching ran). Reported on the final batch so the server only auto-fixes
+	// vulns whose category this scan really covered.
+	var scanned []string
 	batch := 1
 
 	// Step 1: System vulnerability collection
@@ -255,9 +264,10 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 					findings[i].Category = "sys_vuln"
 				}
 				e.sendStep(taskID, "match_cve", "done", "CVE matching complete")
-				e.sendResult(taskID, hostname, findings, batch, false)
+				e.sendResult(taskID, hostname, findings, batch, false, nil)
 				batch++
 				allFindings = append(allFindings, findings...)
+				scanned = append(scanned, "sys_vuln")
 			}
 		}
 	}
@@ -296,9 +306,10 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 				for i := range findings {
 					findings[i].Category = "baseline"
 				}
-				e.sendResult(taskID, hostname, findings, batch, false)
+				e.sendResult(taskID, hostname, findings, batch, false, nil)
 				allFindings = append(allFindings, findings...)
 				batch++
+				scanned = append(scanned, "baseline")
 			}
 			e.sendStep(taskID, "baseline_check", "done", "Baseline checks complete")
 		}
@@ -306,7 +317,7 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 
 	// Step 4: Send final result
 	e.sendStep(taskID, "report", "done", "Scan complete")
-	e.sendResult(taskID, hostname, nil, batch, true)
+	e.sendResult(taskID, hostname, nil, batch, true, scanned)
 
 	log.Printf("[engine] scan %s complete: %d findings", taskID, len(allFindings))
 }
@@ -333,6 +344,7 @@ func (e *ScanEngine) runNuclei(parent context.Context, cmd ScanCommand, hostname
 		Severity:    cmd.NucleiSeverity,
 		Tags:        cmd.NucleiTags,
 		Targets:     cmd.NucleiTargets,
+		Ports:       cmd.NucleiPorts,
 		TimeoutSec:  cmd.NucleiTimeout,
 	}
 
@@ -344,7 +356,7 @@ func (e *ScanEngine) runNuclei(parent context.Context, cmd ScanCommand, hostname
 	findingsCh, summary, err := e.nuclei.Run(ctx, req)
 	if err != nil {
 		e.sendStep(taskID, "nuclei", "failed", err.Error())
-		e.sendResult(taskID, hostname, nil, 1, true)
+		e.sendResult(taskID, hostname, nil, 1, true, nil)
 		return
 	}
 
@@ -356,7 +368,7 @@ func (e *ScanEngine) runNuclei(parent context.Context, cmd ScanCommand, hostname
 			return
 		}
 		findings := []Finding{toFinding(f)}
-		e.sendResult(taskID, hostname, findings, batch, false)
+		e.sendResult(taskID, hostname, findings, batch, false, nil)
 		batch++
 		totalFindings++
 	}
@@ -367,7 +379,7 @@ func (e *ScanEngine) runNuclei(parent context.Context, cmd ScanCommand, hostname
 
 	e.sendStep(taskID, "nuclei", "done",
 		"nuclei finished, "+itoa(totalFindings)+" findings (exit="+itoa(summary.ExitCode)+")")
-	e.sendResult(taskID, hostname, nil, batch, true)
+	e.sendResult(taskID, hostname, nil, batch, true, []string{"nuclei"})
 
 	log.Printf("[engine] nuclei scan %s complete: %d findings exit=%d",
 		taskID, totalFindings, summary.ExitCode)
@@ -424,7 +436,7 @@ func itoa(n int) string {
 
 func (e *ScanEngine) sendCancelled(taskID, hostname string, batch int) {
 	e.sendStep(taskID, "scan_cancelled", "done", "Scan cancelled by server")
-	e.sendResult(taskID, hostname, nil, batch, true)
+	e.sendResult(taskID, hostname, nil, batch, true, nil)
 }
 
 func (e *ScanEngine) sendStep(taskID, step, status, message string) {
@@ -433,9 +445,9 @@ func (e *ScanEngine) sendStep(taskID, step, status, message string) {
 	}
 }
 
-func (e *ScanEngine) sendResult(taskID, hostname string, findings []Finding, batch int, isFinal bool) {
+func (e *ScanEngine) sendResult(taskID, hostname string, findings []Finding, batch int, isFinal bool, scannedCategories []string) {
 	if e.OnResult != nil {
-		e.OnResult(taskID, hostname, findings, batch, isFinal)
+		e.OnResult(taskID, hostname, findings, batch, isFinal, scannedCategories)
 	}
 }
 

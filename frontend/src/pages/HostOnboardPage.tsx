@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react"
+﻿import { useEffect, useRef, useState, useMemo } from "react"
+import { showError } from "../utils/showError"
 import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty, Switch, Dropdown, Drawer, Spin } from "antd"
 import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined, DownOutlined, PoweroffOutlined, LockOutlined, MonitorOutlined } from "@ant-design/icons"
 import type { Host, HostGroup } from "../api/client"
@@ -21,6 +22,7 @@ import {
   type MonitorEvent,
   type AgentUpgradeStatus,
 } from "../api/client"
+import "./DashboardPage.css"
 
 const { Text } = Typography
 
@@ -59,6 +61,9 @@ export default function HostOnboardPage() {
   // host table. Refreshed alongside the host list so the bar chart
   // stays in sync.
   const [hostStats, setHostStats] = useState<HostStatsRow[]>([])
+  // 业务分布条首屏生长动画：数据首次到位后从 0 长到真实比例（仅一次）；
+  // 后续刷新靠 CSS width 过渡平滑伸缩。
+  const [statsAnimDone, setStatsAnimDone] = useState(false)
 
   const refreshHostStats = async () => {
     try {
@@ -66,6 +71,13 @@ export default function HostOnboardPage() {
       setHostStats(r.items || [])
     } catch { /* ignore */ }
   }
+
+  useEffect(() => {
+    if (hostStats.length > 0 && !statsAnimDone) {
+      const t = setTimeout(() => setStatsAnimDone(true), 60)
+      return () => clearTimeout(t)
+    }
+  }, [hostStats, statsAnimDone])
   const [groupFilter, setGroupFilter] = useState<string | undefined>(undefined)
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   // 需求1.3：主机列表搜索（前端过滤，debounce 300ms）
@@ -243,7 +255,7 @@ export default function HostOnboardPage() {
       )
       setHosts(res.items)
     }
-    catch { message.error("加载主机列表失败") }
+    catch (err) { showError(err, "加载主机列表失败") }
     finally { setLoading(false) }
   }
 
@@ -364,7 +376,7 @@ export default function HostOnboardPage() {
       if (failed > 0) {
         message.warning(`令牌已生成，但 ${failed} 个安装命令预拉失败，可手动复制安装命令`)
       }
-    } catch { message.error("生成令牌失败") }
+    } catch (err) { showError(err, "生成令牌失败") }
   }
 
   const copyToClipboard = (text: string, label: string) => {
@@ -427,7 +439,7 @@ export default function HostOnboardPage() {
 
   const handleDelete = async (agentId: string) => {
     try { await deleteHost(agentId); message.success("主机已下线"); refreshHostsData() }
-    catch { message.error("操作失败") }
+    catch (err) { showError(err, "操作失败") }
   }
 
   const handlePurgeHost = async (agentId: string) => {
@@ -449,7 +461,7 @@ export default function HostOnboardPage() {
       // 需求1.2：切换组后同时刷新主机列表和组列表（组 member_count 需更新，
       // 否则立即删原组会用旧 count 误判"还存在主机"）。用 refreshHostsData 不清令牌。
       await Promise.all([refreshHostsData(), fetchGroups()])
-    } catch { message.error("更改组失败") }
+    } catch (err) { showError(err, "更改组失败") }
   }
 
   const handleCreateGroup = async () => {
@@ -491,7 +503,8 @@ export default function HostOnboardPage() {
       )
     : hosts
 
-  const columns = [
+  // V12 阶段 3.2: memoize columns
+  const columns = useMemo(() => [
     { title: "主机名", dataIndex: "hostname", key: "hostname" },
     { title: "IP", dataIndex: "ip", key: "ip" },
     { title: "OS", dataIndex: "os", key: "os", render: (v: string) => <Tag>{v}</Tag> },
@@ -599,7 +612,7 @@ export default function HostOnboardPage() {
       </Button>
     ),
   },
-  ]
+  ], [upgrading, upgradeById])
 
   const groupColumns = [
     { title: "组名", dataIndex: "name", key: "name", render: (v: string, r: HostGroup) => (
@@ -703,7 +716,7 @@ export default function HostOnboardPage() {
         />
       </Card>
 
-      <Card title="业务分布" size="small" style={{ marginBottom: 16 }}>
+      <Card title="业务分布" size="small" style={{ marginBottom: 16 }} className="dash-fade-in">
         {hostStats.length === 0 ? (
           <div style={{ color: "#999" }}>暂无业务分组数据</div>
         ) : (
@@ -711,22 +724,23 @@ export default function HostOnboardPage() {
             const maxTotal = Math.max(...hostStats.map((g) => g.total), 1)
             const SEV_COLORS_BAR: Record<string, string> = { critical: "#cf1322", high: "#d4380d", medium: "#d4b106", low: "#389e0d", info: "#1677ff" }
             return (
-              <div>
+              <div className="dash-bar">
                 {hostStats.map((g) => (
-                  <div key={g.group} style={{ marginBottom: 10 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+                  <div key={g.group} className="dash-stack-row">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, marginBottom: 6 }}>
                       <span>
-                        <b>{g.group}</b>
+                        <b style={{ fontSize: 14 }}>{g.group}</b>
                         <span style={{ color: "#999", marginLeft: 8 }}>{g.member_count} 主机</span>
                       </span>
-                      <span style={{ color: "#666" }}>{g.total} 漏洞</span>
+                      <span className="dash-value">{g.total} 漏洞</span>
                     </div>
-                    <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "#f5f5f5" }}>
+                    <div className="dash-stack-bar">
                       {Object.entries(g.by_severity || {}).map(([sev, n]) => (
                         <span
                           key={sev}
                           title={sev + ": " + n}
-                          style={{ width: ((Number(n) / maxTotal) * 100) + "%", background: SEV_COLORS_BAR[sev] || "#999" }}
+                          className="dash-stack-seg"
+                          style={{ width: (statsAnimDone ? (Number(n) / maxTotal) * 100 : 0) + "%", background: SEV_COLORS_BAR[sev] || "#999" }}
                         />
                       ))}
                     </div>
@@ -744,7 +758,7 @@ export default function HostOnboardPage() {
           columns={columns}
           rowKey="agent_id"
           loading={loading}
-          pagination={{ pageSize: 20 }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
           rowClassName={(r: Host) => r.status === "decommissioned" ? "host-row-decommissioned" : ""}
           locale={{
             emptyText: showDecommissioned ? (

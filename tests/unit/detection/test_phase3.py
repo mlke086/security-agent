@@ -1,5 +1,7 @@
-"\"\"\"Tests for Phase 3 detection engine (sigma parser + evaluator + builder).\"\"\""
+'"""Tests for Phase 3 detection engine (sigma parser + evaluator + builder)."""'
+
 import os
+
 os.environ.setdefault("NACOS_SERVER", "")
 os.environ.setdefault("API_SECRET_KEY", "test-secret-key-12345678")
 os.environ.setdefault("STORE_BACKEND", "memory")
@@ -9,13 +11,15 @@ os.environ.setdefault("REDIS_HOST", "192.168.80.101")
 
 import pytest
 
-from src.detection.sigma import (
-    parse_sigma_dict, parse_sigma_yaml, matches,
-    Operator, RuleLevel,
-)
 from src.detection.builder import build_alert
 from src.detection.detector import Detector
-
+from src.detection.sigma import (
+    Operator,
+    RuleLevel,
+    matches,
+    parse_sigma_dict,
+    parse_sigma_yaml,
+)
 
 SAMPLE_SSH_FAIL = {
     "RuleName": "sshd",
@@ -35,53 +39,59 @@ SAMPLE_REVERSE_SHELL = {
 }
 
 
-RULE_SSH = parse_sigma_dict({
-    "title": "SSH brute force",
-    "id": "ssh-test-001",
-    "level": "high",
-    "logsource": {"product": "linux", "service": "sshd"},
-    "detection": {
-        "selection": {
-            "RuleName|contains": "ssh",
-            "Status|contains": "failed",
-            "ip|exists": True,
+RULE_SSH = parse_sigma_dict(
+    {
+        "title": "SSH brute force",
+        "id": "ssh-test-001",
+        "level": "high",
+        "logsource": {"product": "linux", "service": "sshd"},
+        "detection": {
+            "selection": {
+                "RuleName|contains": "ssh",
+                "Status|contains": "failed",
+                "ip|exists": True,
+            },
+            "condition": "selection",
         },
-        "condition": "selection",
-    },
-    "fields": ["ip", "hostname", "agent.id"],
-    "tags": ["attack.credential_access", "attack.t1110"],
-})
+        "fields": ["ip", "hostname", "agent.id"],
+        "tags": ["attack.credential_access", "attack.t1110"],
+    }
+)
 
 
-RULE_REVSHELL = parse_sigma_dict({
-    "title": "Reverse shell",
-    "id": "revshell-test-001",
-    "level": "critical",
-    "logsource": {"product": "linux", "category": "process_creation"},
-    "detection": {
-        "selection": {
-            "process.name": "nc",
-            "process.cmdline|contains": "-e",
+RULE_REVSHELL = parse_sigma_dict(
+    {
+        "title": "Reverse shell",
+        "id": "revshell-test-001",
+        "level": "critical",
+        "logsource": {"product": "linux", "category": "process_creation"},
+        "detection": {
+            "selection": {
+                "process.name": "nc",
+                "process.cmdline|contains": "-e",
+            },
+            "condition": "selection",
         },
-        "condition": "selection",
-    },
-    "fields": ["process.cmdline", "process.pid", "hostname"],
-    "tags": ["attack.execution", "attack.t1059.004"],
-})
+        "fields": ["process.cmdline", "process.pid", "hostname"],
+        "tags": ["attack.execution", "attack.t1059.004"],
+    }
+)
 
 
 class TestSigmaParser:
     def test_parse_basic_yaml(self):
-        rule = parse_sigma_dict({
-            "title": "test",
-            "id": "test-1",
-            "level": "high",
-            "logsource": {"product": "linux"},
-            "detection": {
-                "selection": {"field|gte": 5},
-                "condition": "selection",
-            },
-        })
+        rule = parse_sigma_dict(
+            {
+                "title": "test",
+                "id": "test-1",
+                "level": "high",
+                "logsource": {"product": "linux"},
+                "detection": {
+                    "selection": {"field|gte": 5},
+                    "condition": "selection",
+                },
+            }
+        )
         assert rule.title == "test"
         assert rule.level == RuleLevel.HIGH
         assert rule.product == "linux"
@@ -91,14 +101,16 @@ class TestSigmaParser:
 
     def test_unsupported_condition_rejected(self):
         with pytest.raises(ValueError) as exc:
-            parse_sigma_dict({
-                "title": "x",
-                "id": "x",
-                "detection": {
-                    "selection": {"a": 1},
-                    "condition": "aggregation",
-                },
-            })
+            parse_sigma_dict(
+                {
+                    "title": "x",
+                    "id": "x",
+                    "detection": {
+                        "selection": {"a": 1},
+                        "condition": "aggregation",
+                    },
+                }
+            )
         assert "unsupported Sigma condition" in str(exc.value)
 
     def test_load_yml_file(self):
@@ -125,77 +137,102 @@ class TestSigmaParser:
 
     def test_mitre_extraction_from_tags(self):
         from src.detection.builder import _extract_mitre
+
         result = _extract_mitre(["attack.t1059.004", "attack.credential_access", "not_mitre"])
         assert result == ["T1059.004"]
 
 
 class TestEvaluator:
     def test_simple_eq_match(self):
-        rule = parse_sigma_dict({
-            "title": "eq", "id": "t1", "level": "low",
-            "detection": {
-                "selection": {"status": "failed"},
-                "condition": "selection",
-            },
-        })
+        rule = parse_sigma_dict(
+            {
+                "title": "eq",
+                "id": "t1",
+                "level": "low",
+                "detection": {
+                    "selection": {"status": "failed"},
+                    "condition": "selection",
+                },
+            }
+        )
         is_match, matched = matches(rule, {"status": "failed"})
         assert is_match
         assert matched["status"] == "failed"
 
     def test_eq_no_match(self):
-        rule = parse_sigma_dict({
-            "title": "eq", "id": "t2", "level": "low",
-            "detection": {
-                "selection": {"status": "failed"},
-                "condition": "selection",
-            },
-        })
+        rule = parse_sigma_dict(
+            {
+                "title": "eq",
+                "id": "t2",
+                "level": "low",
+                "detection": {
+                    "selection": {"status": "failed"},
+                    "condition": "selection",
+                },
+            }
+        )
         is_match, _ = matches(rule, {"status": "success"})
         assert not is_match
 
     def test_gte_numeric(self):
-        rule = parse_sigma_dict({
-            "title": "gte", "id": "t3", "level": "low",
-            "detection": {
-                "selection": {"level|gte": 10},
-                "condition": "selection",
-            },
-        })
+        rule = parse_sigma_dict(
+            {
+                "title": "gte",
+                "id": "t3",
+                "level": "low",
+                "detection": {
+                    "selection": {"level|gte": 10},
+                    "condition": "selection",
+                },
+            }
+        )
         assert matches(rule, {"level": 12})[0]
         assert not matches(rule, {"level": 9})[0]
         assert matches(rule, {"level": "10"})[0]
         assert not matches(rule, {"level": "9"})[0]
 
     def test_contains_substring(self):
-        rule = parse_sigma_dict({
-            "title": "contains", "id": "t4", "level": "low",
-            "detection": {
-                "selection": {"msg|contains": "failed"},
-                "condition": "selection",
-            },
-        })
+        rule = parse_sigma_dict(
+            {
+                "title": "contains",
+                "id": "t4",
+                "level": "low",
+                "detection": {
+                    "selection": {"msg|contains": "failed"},
+                    "condition": "selection",
+                },
+            }
+        )
         assert matches(rule, {"msg": "Failed password for root"})[0]
         assert not matches(rule, {"msg": "Accepted publickey"})[0]
 
     def test_dotted_path(self):
-        rule = parse_sigma_dict({
-            "title": "dotted", "id": "t5", "level": "low",
-            "detection": {
-                "selection": {"process.cmdline|contains": "nc"},
-                "condition": "selection",
-            },
-        })
+        rule = parse_sigma_dict(
+            {
+                "title": "dotted",
+                "id": "t5",
+                "level": "low",
+                "detection": {
+                    "selection": {"process.cmdline|contains": "nc"},
+                    "condition": "selection",
+                },
+            }
+        )
         assert matches(rule, SAMPLE_REVERSE_SHELL)[0]
 
     def test_logsource_filter(self):
-        rule = parse_sigma_dict({
-            "title": "ls", "id": "t6", "level": "low",
-            "logsource": {"product": "linux", "service": "sshd"},
-            "detection": {
-                "selection": {"x": 1},
-                "condition": "selection",
-            },
-        })
+        rule = parse_sigma_dict(
+            {
+                "title": "ls",
+                "id": "t6",
+                "level": "low",
+                "logsource": {"product": "linux", "service": "sshd"},
+                "detection": {
+                    "selection": {"x": 1},
+                    "condition": "selection",
+                },
+            }
+        )
         event = {"logsource": {"product": "linux", "service": "cron"}, "x": 1}
         assert not matches(rule, event)[0]
         event2 = {"logsource": {"product": "linux", "service": "sshd"}, "x": 1}

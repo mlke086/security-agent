@@ -44,8 +44,7 @@ async def test_cancel_running_task_broadcasts_to_assigned_agents() -> None:
     assert message["type"] == "scan_cancel"
     assert message["payload"] == {"task_id": "task-1"}
     assert any(
-        call.kwargs.get("status") == "cancelled"
-        for call in store.update_task.await_args_list
+        call.kwargs.get("status") == "cancelled" for call in store.update_task.await_args_list
     )
     redis.publish.assert_awaited()
 
@@ -88,15 +87,12 @@ async def test_cancelled_graph_never_generates_a_report() -> None:
         "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
         return_value=store,
     ):
-        result = await generate_report(
-            {"task_id": "task-1", "status": "cancelled"}
-        )
+        result = await generate_report({"task_id": "task-1", "status": "cancelled"})
 
     assert result == {"report": None, "status": "cancelled"}
     store.save_report.assert_not_awaited()
     assert any(
-        call.kwargs.get("status") == "cancelled"
-        for call in store.update_task.await_args_list
+        call.kwargs.get("status") == "cancelled" for call in store.update_task.await_args_list
     )
 
 
@@ -124,9 +120,7 @@ async def test_late_result_for_cancelled_task_is_ignored() -> None:
         }
     )
 
-    with patch(
-        "src.agents.ws_gateway.get_vulnscan_store", return_value=store
-    ):
+    with patch("src.agents.ws_gateway.get_vulnscan_store", return_value=store):
         await gateway.handle_message(ws, raw)
 
     store.save_result.assert_not_awaited()

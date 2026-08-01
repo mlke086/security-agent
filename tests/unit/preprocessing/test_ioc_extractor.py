@@ -1,4 +1,5 @@
 """Tests for IOCExtractor — IP, domain, hash, URL extraction."""
+
 from src.preprocessing.ioc_extractor.extractor import IOCExtractor
 
 extractor = IOCExtractor()

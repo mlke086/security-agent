@@ -153,7 +153,7 @@ export async function getAgentMonitor(agentId: string, limit = 20): Promise<Moni
 }
 
 // -- Sigma detection rules (Phase 6 of monitoring plan) -----------------
-// Read the imported Sigma rules inventory. The console's "检测规则"
+// Read the imported Sigma rules inventory. The console's "妫€娴嬭鍒?
 // tab on the Rules page uses these to show the operator what is
 // actually loaded into the detector.
 export interface SigmaRuleItem {
@@ -313,6 +313,65 @@ export async function syncRulesToAgents() {
   return res.data as { synced: number; total: number; agents: { agent_id: string; sent: boolean }[] }
 }
 
+export async function syncNucleiTemplates() {
+  const res = await api.post("/rules/sync-nuclei-templates", {}, { timeout: 300000 })
+  return res.data as {
+    synced: number
+    total: number
+    version: string
+    agents: { agent_id: string; sent: boolean }[]
+  }
+}
+
+// -- Nuclei 妯℃澘搴?--------------------------------------------------------
+
+export interface NucleiTemplateMeta {
+  path: string
+  category: string
+  template_id: string
+  name: string
+  severity: string
+  tags: string[]
+  author: string
+  version: string
+  content?: string
+}
+
+export async function listNucleiTemplates(params?: { category?: string; q?: string; page?: number; page_size?: number }) {
+  const res = await api.get("/nuclei-templates", { params })
+  return res.data as { items: NucleiTemplateMeta[]; total: number; page: number; size: number; version: string }
+}
+
+export async function getNucleiTemplate(path: string) {
+  const res = await api.get(`/nuclei-templates/${path}`)
+  return res.data as NucleiTemplateMeta
+}
+
+export async function saveNucleiTemplate(path: string, content: string) {
+  const res = await api.put(`/nuclei-templates/${path}`, { content })
+  return res.data as { ok: boolean; path: string; template_id: string; name: string; severity: string }
+}
+
+export async function syncNucleiTemplatesLibrary() {
+  const res = await api.post("/nuclei-templates/sync", {}, { timeout: 600000 })
+  return res.data as { version: string; count: number; indexed: number; es_actual: number; matched: boolean }
+}
+
+export async function importNucleiTemplatesZip(file: File) {
+  const formData = new FormData()
+  formData.append("file", file)
+  const res = await api.post("/nuclei-templates/import", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 600000,
+  })
+  return res.data as { version: string; count: number; upgraded: boolean; previous_version: string }
+}
+
+export async function getNucleiTemplatesVersion() {
+  const res = await api.get("/nuclei-templates/version")
+  return res.data as { version: string }
+}
+
 // -- LLM Models -----------------------------------------------------------
 
 export interface LlmModel {
@@ -365,10 +424,36 @@ export async function testModel(id: number) {
 
 // -- Scan conversations (legacy scan-intent flow) -------------------------
 
+/**
+ * Structured scan intent returned by the LLM and persisted on the assistant
+ * turn (see ChatMessage.intent). Mirrors ScanIntent on the backend; keep
+ * the field names in sync with src/agents/models.py.
+ */
+export interface ScanIntentData {
+  targets: string[]
+  modules: string[]
+  engine?: string
+  resource_limit?: Record<string, unknown>
+  schedule?: string | null
+  // nuclei-specific knobs (only used when engine === 'nuclei')
+  nuclei_severity?: string[]
+  nuclei_tags?: string[]
+  nuclei_templates?: string[]
+  nuclei_timeout_sec?: number
+}
+
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system"
   content: string
   ts?: string
+  // Persisted per-message metadata (backend whitelists: route, intent,
+  // sources, task_id). Used so historical intent cards re-render without
+  // a second LLM call and to surface the created task_id as a link.
+  route?: ChatRoute
+  intent?: ScanIntentData
+  sources?: ChatSource[]
+  task_id?: string
 }
 
 export interface Conversation {
@@ -413,6 +498,23 @@ export async function deleteConversation(id: string) {
   return res.data
 }
 
+/**
+ * Write back per-message metadata (e.g. the task_id produced by clicking
+ * "执行扫描"). Lets the historical intent card show "已创建任务 #xxx → 查看"
+ * instead of the original executable button on reload.
+ */
+export async function patchMessage(
+  conversationId: string,
+  ts: string,
+  patch: { task_id?: string },
+): Promise<Conversation> {
+  const res = await api.patch(
+    `/vulnscan/conversations/${conversationId}/messages/${encodeURIComponent(ts)}`,
+    patch,
+  )
+  return res.data as Conversation
+}
+
 // -- General assistant (project Q&A + web search + scan routing) ----------
 
 export type ChatRoute = "scan" | "project" | "web" | "chat"
@@ -428,6 +530,13 @@ export interface ChatAssistantResponse {
   confidence: number
   reply: string
   sources: ChatSource[]
+  // The PG-persisted `ts` of the assistant turn we just wrote. The
+  // frontend adopts this verbatim so the in-memory `ts` matches what
+  // lives in the conversation store -- a later
+  // `patchMessage(task_id)` is then guaranteed to find the same
+  // row by `ts` (otherwise microsecond / timezone drift causes the
+  // patch to silently miss).
+  assistant_ts?: string
 }
 
 /**
@@ -451,12 +560,16 @@ export async function chatAssistant(
     content: m.content,
   }))
   // Step 2: call the unified router.
+  // V12 5.9 (2026-08-02): the axios default is 30s, but LLM-generated
+  // answers ("详细介绍某主机漏洞情况") routinely take longer -- a long
+  // answer times out client-side as "timeout of 30000ms exceeded".
+  // Override per-request to 120s, matching server llm_request_timeout_sec.
   const res = await api.post("/chat", {
     message,
     history,
     model_id: modelId ?? null,
     conversation_id: conversationId,
-  })
+  }, { timeout: 120000 })
   const body = res.data as ChatAssistantResponse
   // F2 (2026-07-29): the unified /chat router now persists the user +
   // assistant turn itself (via the conversation store), so the reply we
@@ -468,16 +581,24 @@ export async function chatAssistant(
 
 // -- Scan tasks -----------------------------------------------------------
 
+// Scan engine options. "global" runs the internal matcher AND nuclei on
+// each target in a single task so the operator only waits once.
+export type ScanEngine = "matcher" | "nuclei" | "global"
+
 export interface CreateScanTaskRequest {
   source: string
   intent_text?: string
   targets: string[]
   modules?: string[]
-  engine?: string
+  engine?: ScanEngine
   nuclei_severity?: string[]
   nuclei_tags?: string[]
   nuclei_templates?: string[]
   nuclei_timeout_sec?: number
+  // Empty / unset = scan every listening TCP port on the host (resolved
+  // via ss -tlnpH on the agent). Populated when the operator wants to
+  // limit the nuclei scan to a specific port list (e.g. 80,443,8000).
+  nuclei_ports?: number[]
 }
 
 export async function createScanTask(req: CreateScanTaskRequest, sync = false) {
@@ -499,12 +620,17 @@ export async function deleteScanTask(taskId: string) {
   return res.data
 }
 
+export async function batchDeleteScanTasks(taskIds: string[]) {
+  const res = await api.post("/vulnscan/tasks/batch-delete", { task_ids: taskIds })
+  return res.data as { deleted: number; not_found: string[]; failed: string[] }
+}
+
 export async function listScanTasks() {
   const res = await api.get("/vulnscan/tasks")
   return res.data as { items: any[] }
 }
 
-// ── Host groups (stubs for pre-existing pages) ───────────────────────
+// ---- Host groups (stubs for pre-existing pages) ----
 export interface HostGroup {
   name: string
   description: string | null
@@ -599,6 +725,8 @@ export interface VulnFinding {
   fix_advice: string | null
   status: "open" | "fixed" | "accepted"
   detected_at: string
+  // Prior-scan detection times (consolidation 2026-07-31); detected_at is the latest.
+  scan_history?: string[]
   // AI evidence (optional; old docs may not have them)
   ai_processed?: boolean
   ai_reason?: string | null

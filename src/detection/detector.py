@@ -7,8 +7,8 @@ called by the background detector loop or via the on-demand API.
 The background loop is a separate concern (background_tasks.py). This
 module is just the rule-fan-out + alert-build glue.
 """
+
 from pathlib import Path
-from typing import Iterable
 
 from src.agents.alert_store import get_alert_store
 from src.common.logging.logger import get_logger

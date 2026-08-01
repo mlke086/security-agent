@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 import socket
-from typing import Any
+from typing import Any, cast
 
 import redis.asyncio as aioredis
 from redis.exceptions import ResponseError
@@ -89,8 +89,14 @@ async def read_message_blocking(
     )
     if not resp:
         return None
-    # resp is [(stream_name, [(id, payload), ...]), ...]
-    _stream_name, entries = resp[0]
+    # resp is [(stream_name, [(entry_id, payload), ...]), ...]. redis-py's
+    # stub types this as an opaque nested union -- cast to the real shape
+    # (runtime value unchanged; the worker creates redis with
+    # decode_responses=True, so stream/entry ids are str).
+    stream_entries: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = cast(
+        list[tuple[str, list[tuple[str, dict[str, Any]]]]], resp
+    )
+    _stream_name, entries = stream_entries[0]
     if not entries:
         return None
     entry_id, payload = entries[0]
@@ -224,4 +230,7 @@ async def delivery_count(redis: aioredis.Redis, entry_id: str) -> int:
 
 def get_redis() -> aioredis.Redis:
     """Helper for tests so they can poke the same connection settings."""
-    return aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    # Redis-py currently defaults socket reads to 5 seconds, the same as the
+    # worker's XREADGROUP BLOCK window. Boundary jitter then turns an ordinary
+    # empty poll into TimeoutError and restarts the worker with backoff.
+    return aioredis.from_url(get_settings().redis_url, decode_responses=True, socket_timeout=15)

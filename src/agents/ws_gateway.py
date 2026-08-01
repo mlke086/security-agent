@@ -16,7 +16,6 @@ from src.agents.manager import register_online
 from src.agents.models import ScanModule, ScanResult, VulnFinding
 from src.agents.signing import sign_message
 from src.agents.store import get_vulnscan_store
-from src.common.config.settings import get_settings
 from src.common.logging.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,6 +23,20 @@ logger = get_logger(__name__)
 _worker_id = os.environ.get("HOSTNAME", socket.gethostname())
 
 _conns: dict[str, WebSocket] = {}
+
+# V12 阶段 5.6 (2026-08-02): shared lazy redis client -- the old per-call
+# _redis() leaked one connection per scan_result publish.
+_redis_client = None
+
+
+def _get_redis() -> aioredis.Redis:
+    global _redis_client
+    if _redis_client is None:
+        from src.common.config.settings import get_settings
+
+        _redis_client = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    return _redis_client
+
 
 # V10 1.2: fire-and-forget task set. asyncio.create_task() returns
 # a Task that may be garbage-collected mid-execution if no strong
@@ -48,7 +61,11 @@ class AgentGateway:
         return _worker_id
 
     def _redis(self) -> aioredis.Redis:
-        return aioredis.from_url(get_settings().redis_url, decode_responses=True)
+        # V12 阶段 5.6 (2026-08-02): scan_result publish + pubsub used to
+        # create a fresh client per call; the publish path never closed it.
+        # Share one module-level client (safe for publish; pubsub consumers
+        # hold their own subscription object on the same connection pool).
+        return _get_redis()
 
     async def authenticate(self, agent_id: str, token: str) -> bool:
         """Validate agent_token against PG (agent_tokens.token_hash).
@@ -74,10 +91,28 @@ class AgentGateway:
             return False
 
     async def drop_revoked_connection(self, agent_id: str) -> None:
-        """Close the local WebSocket for ``agent_id`` if we still hold it."""
+        """Close the local WebSocket for ``agent_id`` if we still hold it.
+
+        Before tearing down the connection we push a signed ``agent_shutdown``
+        command so the agent can gracefully stop its process (systemd unit,
+        cleanup, etc.). If the WS is already dead we skip the send -- the
+        agent will naturally exit when the root context is cancelled by the
+        OS service manager, but that could take until the next restart cycle.
+        """
         self._revoked_conns.add(agent_id)
         ws = _conns.pop(agent_id, None)
         if ws is not None:
+            try:
+                shutdown_msg = {
+                    "v": 1,
+                    "type": "agent_shutdown",
+                    "ts": datetime.now(UTC).isoformat(),
+                    "payload": {"reason": "server_revoked"},
+                }
+                signed = sign_message(shutdown_msg)
+                await ws.send_json(signed)
+            except Exception:
+                pass
             try:
                 await ws.close(code=1011, reason="server_revoked")
             except Exception:
@@ -280,7 +315,9 @@ class AgentGateway:
             raw = await r.get(key)
             if not raw:
                 return
-            await ws.send_text(raw)
+            # send_text requires str; redis may return bytes if the client was
+            # created without decode_responses.
+            await ws.send_text(raw.decode() if isinstance(raw, bytes) else raw)
             await r.delete(key)
             logger.info("pending_agent_command_delivered", agent_id=agent_id)
         except Exception as exc:
@@ -486,6 +523,10 @@ class AgentGateway:
                 batch=payload.get("batch", 0),
                 is_final=payload.get("is_final", False),
                 ts=payload.get("ts") or datetime.now(UTC).isoformat(),
+                # 2026-07-31 UX upgrade: modules this agent actually completed
+                # (from the is_final result). Empty for legacy agents -> the
+                # aggregate reconcile skips auto-fix for them (conservative).
+                scanned_categories=payload.get("scanned_categories") or [],
             )
             await store.save_result(result)
         except Exception as exc:

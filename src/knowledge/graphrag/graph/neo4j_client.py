@@ -47,9 +47,7 @@ class Neo4jGraphClient:
         P1-CORE-2: MemoryManager.cleanup() now calls this so Neo4j does not
         grow forever with orphan evidence nodes from old sessions.
         """
-        query = (
-            "MATCH (e:Event {event_id: $event_id})-[r:HAS_EVIDENCE]->(ev:Evidence) " "DELETE r, ev"
-        )
+        query = "MATCH (e:Event {event_id: $event_id})-[r:HAS_EVIDENCE]->(ev:Evidence) DELETE r, ev"
         try:
             async with self._driver.session() as session:
                 result = await session.run(query, event_id=event_id)

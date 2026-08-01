@@ -1,8 +1,10 @@
-""" "VulnScan subgraph node implementations."""
+"""VulnScan subgraph node implementations."""
 
 import asyncio
 import uuid
+from collections import defaultdict
 from datetime import UTC, datetime
+from typing import Any
 
 from src.agents.models import (
     ScanModule,
@@ -12,11 +14,45 @@ from src.agents.models import (
     VulnFilter,
     VulnFinding,
 )
-from src.agents.store import get_vulnscan_store
+from src.agents.store import INDEX_VULNS, detected_sort_key, get_vulnscan_store
 from src.agents.ws_gateway import get_agent_gateway
+from src.common.audit.audit_logger import get_audit_logger
 from src.common.logging.logger import get_logger
 
 logger = get_logger(__name__)
+
+# S-P1-1 (V12): shared lazy redis client. Every _pub_progress / collect
+# counter / cancellation check used to build + close a connection per call
+# (~180 connects per scan task). One module-level client is reused; it is
+# safe across workers (redis-py is thread/event-loop safe for publish),
+# and each call still tolerates a dead connection via try/except.
+_redis_client = None
+
+
+def _get_redis():
+    """Return the shared redis client, lazily created on first use."""
+    global _redis_client
+    if _redis_client is None:
+        import redis.asyncio as aioredis
+
+        from src.common.config.settings import get_settings
+
+        _redis_client = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    return _redis_client
+
+
+def _finding_field(f, name: str, default=None):
+    """Read a field from a finding that may be a Pydantic VulnFinding model or
+    a plain dict.
+
+    state.py types ``collected_findings`` as ``list[dict]`` but aggregate
+    returns models, and P1-VULN-GBL (2026-07-31) swapped `.get()` for
+    ``getattr()`` -- which silently reads the default on dicts. Reading through
+    one helper keeps callers correct regardless of which shape reaches them.
+    """
+    if isinstance(f, dict):
+        return f.get(name, default)
+    return getattr(f, name, default)
 
 
 def _default_state(
@@ -31,6 +67,7 @@ def _default_state(
     nuclei_templates: list[str] | None = None,
     nuclei_timeout_sec: int = 0,
     target_groups: list[str] | None = None,
+    nuclei_ports: list[int] | None = None,
 ) -> dict:
     """Build the initial VulnScanState from input params.
 
@@ -54,6 +91,7 @@ def _default_state(
         "nuclei_tags": nuclei_tags or [],
         "nuclei_templates": nuclei_templates or [],
         "nuclei_timeout_sec": nuclei_timeout_sec,
+        "nuclei_ports": nuclei_ports or [],
         "resource_limit": {"cpu_percent": 30, "mem_percent": 30},
         "target_groups": target_groups or [],
         "schedule": None,
@@ -73,6 +111,15 @@ async def parse_intent(state: dict) -> dict:
     """Parse natural-language intent into structured scan parameters (dialog source only)."""
     if state["source"] == "manual":
         # Manual scan: targets/modules already set by caller
+        return {
+            "status": "dispatching",
+            "messages": state.get("messages", []),
+        }
+
+    # Confirmed dialog intent: the orchestrator already resolved targets (and
+    # modules/engine) before starting the subgraph -- re-parsing would just
+    # call the LLM again for data we already have.
+    if state.get("targets"):
         return {
             "status": "dispatching",
             "messages": state.get("messages", []),
@@ -109,6 +156,37 @@ resource_limit (dict with cpu_percent/mem_percent), schedule (null for "now" or 
         return {"error": f"Intent parsing failed: {exc}", "status": "failed"}
 
 
+async def _nuclei_targets_by_agent(agent_ids: list[str]) -> dict[str, list[str]]:
+    """Map each agent_id to its managed IP(s) so nuclei has real targets to scan.
+
+    P1-VULN-GLOBAL (2026-07-31): when the operator picks a managed host via
+    the "by host" selector, the task carries ``agent_id`` not IP. nuclei's
+    ``-u`` flag against ``http://agent-id:*`` only works if the hostname A-
+    record-resolves to the right IP -- in practice agent hostnames often
+    resolve to IPv6 first and the operator's Elasticsearch lives on IPv4,
+    so the scan reports 0 findings despite the service being up. Fix is to
+    look up each agent's recorded ``ip`` (the address supplied at enroll
+    time) and use that as the nuclei target list.
+
+    Returns ``{agent_id: [ip, ...]}``. Agents without a recorded IP map to
+    an empty list; the caller falls back to the original target string so
+    nuclei at least tries DNS resolution.
+    """
+    store = get_vulnscan_store()
+    out: dict[str, list[str]] = {}
+    for agent_id in agent_ids:
+        try:
+            host = await store.get_host(agent_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("nuclei_target_lookup_failed", agent_id=agent_id, error=str(exc))
+            host = None
+        if host and host.ip:
+            out[agent_id] = [host.ip]
+        else:
+            out[agent_id] = []
+    return out
+
+
 async def dispatch(state: dict) -> dict:
     """Create ScanTask in ES, resolve targets to agent_ids, dispatch scan_command via gateway."""
 
@@ -141,6 +219,7 @@ async def dispatch(state: dict) -> dict:
         nuclei_tags=state.get("nuclei_tags", []),
         nuclei_templates=state.get("nuclei_templates", []),
         nuclei_timeout_sec=state.get("nuclei_timeout_sec", 0),
+        nuclei_ports=list(state.get("nuclei_ports") or []),
         status="dispatching",
         created_at=datetime.now(UTC).isoformat(),
         stats={"total": len(agent_ids), "done": 0, "failed": 0},
@@ -185,7 +264,7 @@ async def dispatch(state: dict) -> dict:
     #
     # Nuclei-specific knobs (nuclei_severity / nuclei_tags / nuclei_templates /
     # nuclei_timeout_sec) are only inspected when engine == "nuclei".
-    scan_cmd = {
+    scan_cmd: dict[str, Any] = {
         "v": 1,
         "type": "scan_command",
         "ts": datetime.now(UTC).isoformat(),
@@ -196,69 +275,98 @@ async def dispatch(state: dict) -> dict:
             "modules": modules,
             "resource_limit": state.get("resource_limit", {}),
             "deadline": "",
-            "engine": task.engine,
+            "engine": "matcher" if task.engine == "global" else task.engine,
             "nuclei_targets": task.targets,
             "nuclei_severity": task.nuclei_severity,
             "nuclei_tags": task.nuclei_tags,
             "nuclei_templates": task.nuclei_templates,
             "nuclei_timeout_sec": task.nuclei_timeout_sec,
+            "nuclei_ports": task.nuclei_ports,
         },
     }
-    result = await gateway.broadcast(agent_ids, scan_cmd)
+    # Only matcher/global use a single broadcast -- nuclei needs the
+    # resolved per-agent IP, which the broadcast path can't supply, so
+    # we send those per-agent below. Skipping the broadcast for nuclei
+    # also avoids the duplicate "scanning N ports" we used to see when
+    # nuclei_targets was the raw agent_id and DNS resolved to IPv6.
+    # S-P1-2 (V12): keep matcher (broadcast) and nuclei (per-agent) delivery
+    # counts separate. The old single counter merged both sends, so a failed
+    # nuclei push was hidden behind a successful matcher broadcast and the
+    # UI could not tell which side dropped targets. Totals are summed for
+    # the task stats; the SSE message reports both lanes.
+    lanes: dict[str, dict[str, int]] = {
+        "matcher": {"sent": 0, "failed": 0},
+        "nuclei": {"sent": 0, "failed": 0},
+    }
+    if task.engine in ("matcher", "global"):
+        lanes["matcher"] = await gateway.broadcast(agent_ids, scan_cmd)
+
+    if task.engine in ("nuclei", "global"):
+        target_by_agent = await _nuclei_targets_by_agent(agent_ids)
+        for agent_id in agent_ids:
+            agent_cmd = {
+                **scan_cmd,
+                "payload": {
+                    **scan_cmd["payload"],
+                    "engine": "nuclei",
+                    "nuclei_targets": target_by_agent.get(agent_id) or targets,
+                },
+            }
+            ok = await gateway.send_to_agent(agent_id, agent_cmd)
+            lanes["nuclei"]["sent" if ok else "failed"] += 1
+
+    total_sent = lanes["matcher"]["sent"] + lanes["nuclei"]["sent"]
+    total_failed = lanes["matcher"]["failed"] + lanes["nuclei"]["failed"]
 
     # Update task status
     await store.update_task(
         task_id,
         status="scanning",
-        stats={"total": len(agent_ids), "done": result["sent"], "failed": result["failed"]},
+        stats={"total": len(agent_ids), "done": total_sent, "failed": total_failed},
     )
     # F1.3b (2026-07-21): publish the broadcast result to SSE so the operator
     # gets instant feedback (sent vs failed counts) instead of waiting until
     # the first agent scan_step lands -- which never happens for typos like
     # "host-a" where no agent is listening on agent:cmd:host-a.
+    lane_summary = "; ".join(
+        f"{lane} {c['sent']} sent/{c['failed']} failed"
+        for lane, c in lanes.items()
+        if c["sent"] or c["failed"]
+    )
     await _pub_progress(
         task_id,
         "dispatch",
         "running",
-        f"Broadcast to {len(agent_ids)} target(s): "
-        f"{result['sent']} sent, {result['failed']} not reachable",
+        f"Dispatch to {len(agent_ids)} target(s): {lane_summary or 'no lanes'}; "
+        f"{total_failed} not reachable",
     )
 
-    # Store collection tracking in Redis. Wrap in try/finally so the
-    # connection is closed even when hset/expire raises -- otherwise each
-    # dispatch leaks one redis client (P2-VULN-13).
-    import redis.asyncio as aioredis
-
-    from src.common.config.settings import get_settings
-
-    r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
-    try:
-        await r.hset(
-            f"vulnscan:collect:{task_id}",
-            mapping={
-                "total": str(len(agent_ids)),
-                "received": "0",
-            },
-        )
-        # P2-VULN-15 (2026-07-20): always set the TTL so the counter key
-        # doesn't linger forever when generate_report fails. Previously the
-        # code only expired the key when state["policy"] (a non-existent
-        # field) was truthy -- i.e. essentially never. The fallback below
-        # uses the saved task's ScanPolicy or the module default.
-        ttl = 1800
-        task_obj = state.get("task")
-        if task_obj is not None and getattr(task_obj, "policy", None) is not None:
-            ttl = int(task_obj.policy.timeout_sec or ttl)
-        await r.expire(f"vulnscan:collect:{task_id}", ttl)
-    finally:
-        await r.aclose()
+    # Store collection tracking in Redis (S-P1-1: shared client).
+    r = _get_redis()
+    await r.hset(
+        f"vulnscan:collect:{task_id}",
+        mapping={
+            "total": str(len(agent_ids)),
+            "received": "0",
+        },
+    )
+    # P2-VULN-15 (2026-07-20): always set the TTL so the counter key
+    # doesn't linger forever when generate_report fails. Previously the
+    # code only expired the key when state["policy"] (a non-existent
+    # field) was truthy -- i.e. essentially never. The fallback below
+    # uses the saved task's ScanPolicy or the module default.
+    ttl = 1800
+    task_obj = state.get("task")
+    if task_obj is not None and getattr(task_obj, "policy", None) is not None:
+        ttl = int(task_obj.policy.timeout_sec or ttl)
+    await r.expire(f"vulnscan:collect:{task_id}", ttl)
 
     logger.info("scan_dispatched", task_id=task_id, target_count=len(agent_ids))
     return {
         "task": task,
         "dispatched": True,
         "total_targets": len(agent_ids),
-        "received_results": result["sent"],
+        "received_results": total_sent,
         "status": "scanning",
     }
 
@@ -362,9 +470,31 @@ async def collect(state: dict) -> dict:
     es_task = await store.get_task(task_id)
     failed = es_task.stats.get("failed", 0) if es_task and es_task.stats else 0
 
+    # F1.2 + P1-VULN-GBL2: fail fast when dispatch reported that EVERY target
+    # failed to reach an agent (stats.failed >= total). The old
+    # ``done_count + failed >= total`` shortcut was removed because it fired on
+    # a global scan's first matcher is_final (done=1 + failed=0 >= total=1) and
+    # dropped the slower nuclei results; a pure ``failed >= total`` check
+    # cannot misfire that way -- it only triggers when dispatch recorded a
+    # failure for all targets, so waiting out the 1800s deadline is pointless.
+    if total > 0 and failed >= total:
+        await store.update_task(task_id, status="analyzing")
+        logger.info(
+            "vulnscan_collect_all_targets_failed",
+            task_id=task_id,
+            total=total,
+            failed=failed,
+        )
+        return {"status": "analyzing", "received_results": 0}
+
     done_count = 0
     while True:
-        if await _is_task_cancelled(task_id):
+        # S-P1-9 (V12): confirm the tombstone twice before persisting
+        # "cancelled". _is_task_cancelled is fail-closed, so a redis blip
+        # would otherwise kill a healthy scan mid-collect and orphan the
+        # agent-side results. _confirm_cancellation keeps that fail-closed
+        # guarantee while filtering out transient dependency blips.
+        if await _confirm_cancellation(task_id):
             await store.update_task(
                 task_id,
                 status="cancelled",
@@ -374,12 +504,34 @@ async def collect(state: dict) -> dict:
         results = await store.list_results(task_id=task_id)
         is_final_batches = [r for r in results if r.is_final]
         done_count = len(set(r.agent_id for r in is_final_batches))
+        # Global scans produce 2 is_final batches per agent (matcher +
+        # nuclei). Bump expected so collect waits for the slower engine.
+        # Reading from state["task"] keeps the count tied to whatever the
+        # dispatch node actually wired up -- matcher/nuclei/global.
+        engine = (es_task.engine if es_task else "matcher") or "matcher"
+        expected_per_agent = 2 if engine == "global" else 1
+        final_batches_required = total * expected_per_agent
+        final_received = len(is_final_batches)
         await store.update_task(
             task_id,
             stats={"total": total, "done": done_count, "failed": failed},
         )
 
-        if total > 0 and (done_count >= total or done_count + failed >= total):
+        # P1-VULN-GBL2 (2026-07-31): use AND instead of OR with the
+        # ``done_count + failed >= total`` shortcut. The shortcut was
+        # meant to time out if some agent never reports at all, but it
+        # also fired on the very first agent's is_final -- which for
+        # global is the fast matcher scan (~3s) -- so the aggregate
+        # node ran with only the matcher's findings and the slower
+        # nuclei results were dropped. Require the is_final count to
+        # reach ``final_batches_required`` (1 per matcher scan, 1 per
+        # nuclei scan, 2 per global scan) before transitioning.
+        done_complete = total > 0 and final_received >= final_batches_required
+        # If we're past the deadline, also accept the partial result so
+        # the orchestrator never deadlocks.
+        if not done_complete and asyncio.get_running_loop().time() >= deadline:
+            done_complete = True
+        if done_complete:
             await store.update_task(task_id, status="analyzing")
             return {"status": "analyzing", "received_results": done_count}
 
@@ -390,6 +542,9 @@ async def collect(state: dict) -> dict:
                 done=done_count,
                 total=total,
                 failed=failed,
+                final_received=final_received,
+                final_required=final_batches_required,
+                engine=engine,
             )
             await store.update_task(task_id, status="analyzing")
             return {"status": "analyzing", "received_results": done_count}
@@ -398,32 +553,215 @@ async def collect(state: dict) -> dict:
 
 
 async def aggregate(state: dict) -> dict:
-    """Aggregate findings from all agents, deduplicate, store as VulnFindings."""
+    """Aggregate findings from all agents, deduplicate, reconcile with stored vulns.
+
+    2026-07-31 UX upgrade ("漏洞清单整理 + 自动更新修复时间"):
+    beyond the existing single-task dedup, the collected findings are reconciled
+    against previously stored vulns for the same agents so that
+
+    * one host + one vuln keeps a single record: a re-detection updates
+      detected_at, rolls the previous detection time into ``scan_history`` and
+      re-opens a manually-fixed/accepted vuln;
+    * vulns this scan's covered categories no longer report are automatically
+      marked ``fixed`` with ``first_fixed_at``/``last_fixed_at`` stamped.
+
+    Category coverage comes from the agent's is_final ``scanned_categories``
+    (only modules that actually completed). Legacy agents that omit it are
+    skipped conservatively so a module that failed collection is never
+    misjudged as "fixed". When ``settings.vuln_merge_enabled`` is off this
+    falls back to the legacy plain-save behaviour.
+    """
     task_id = state["task_id"]
     store = get_vulnscan_store()
-    if state.get("status") == "cancelled" or await _is_task_cancelled(task_id):
+    # S-P1-9 (V12): double-check before propagating a cancellation -- a
+    # fail-closed blip here would otherwise flow to generate_report and
+    # persist "cancelled" on a healthy task.
+    if state.get("status") == "cancelled" or await _confirm_cancellation(task_id):
         return {"collected_findings": [], "status": "cancelled"}
 
     # Read all scan results for this task
     results = await store.list_results(task_id=task_id)
 
-    # Collect all findings, deduplicate by (agent_id, cve, name)
-    seen: set[tuple] = set()
-    findings: list[VulnFinding] = []
+    # Dedup across all results (list_results is ts-ascending, so the first
+    # occurrence of a key is the earliest batch; we keep it) while remembering
+    # the batch timestamp for the detected_at fallback below.
+    first_by_key: dict[tuple, tuple[VulnFinding, str]] = {}
     for result in results:
+        ts = result.ts or ""
         for f in result.findings:
             key = (f.agent_id, f.cve or "", f.name)
-            if key not in seen:
-                seen.add(key)
-                findings.append(f)
+            if key not in first_by_key:
+                first_by_key[key] = (f, ts)
+    findings = [pair[0] for pair in first_by_key.values()]
 
-    # Bulk save vulns
-    if findings:
-        await store.save_vulns(findings)
+    from src.common.config.settings import get_settings
 
-    logger.info("aggregated_findings", task_id=task_id, count=len(findings))
+    if not get_settings().vuln_merge_enabled or not results:
+        # Rollback / trivial path: legacy behaviour.
+        if findings:
+            await store.save_vulns(findings)
+        logger.info("aggregated_findings", task_id=task_id, count=len(findings))
+        return {
+            "collected_findings": findings,
+            "status": "analyzing",
+        }
+
+    now_iso = datetime.now(UTC).isoformat()
+
+    # Per-agent set of categories this scan actually covered, from the is_final
+    # scanned_categories. Empty for legacy agents -> auto-fix skipped.
+    coverage: dict[str, set[str]] = defaultdict(set)
+    for result in results:
+        if result.scanned_categories:
+            coverage[result.agent_id] |= set(result.scanned_categories)
+
+    # Pull the current vuln set for this task's agents. Spec-P1-RECON
+    # (V12): list_vulns_all scrolls with search_after so a >10k vuln set
+    # is not silently truncated -- a truncated fetch would re-create
+    # duplicates on every scan and never auto-fix the older findings.
+    existing = await store.list_vulns_all(
+        VulnFilter(agent_ids=[r.agent_id for r in results], limit=1000)
+    )
+
+    # Index existing vulns by identity key, keeping the newest copy per key
+    # (list_vulns sorts detected_at desc) and queueing older copies for delete
+    # -- this self-heals legacy cross-scan duplicates. Also collect every
+    # detection time per key so a deleted duplicate's timestamp still lands in
+    # scan_history instead of being lost.
+    existing_by_key: dict[tuple, VulnFinding] = {}
+    existing_times: dict[tuple, list[str]] = defaultdict(list)
+    dup_ids: set[str] = set()
+    for v in existing:
+        key = (v.agent_id, v.cve or "", v.name)
+        if v.detected_at:
+            existing_times[key].append(v.detected_at)
+        cur = existing_by_key.get(key)
+        if cur is None or (v.detected_at or "") > (cur.detected_at or ""):
+            if cur is not None:
+                dup_ids.add(cur.finding_id)
+            existing_by_key[key] = v
+        else:
+            dup_ids.add(v.finding_id)
+
+    actions: list[dict] = []
+    merged: list[VulnFinding] = []
+    new_keys: set[tuple] = set()
+    for key, (f, ts) in first_by_key.items():
+        new_keys.add(key)
+        # ES detected_at is a date type: empty strings fail indexing, so
+        # fall back to the batch timestamp / now.
+        detected_at = f.detected_at or ts or now_iso
+        f.detected_at = detected_at
+
+        ex = existing_by_key.get(key)
+        if ex is not None:
+            # Same host+vuln already exists: update the stored record in
+            # place (partial doc -- ai_* and fix timestamps are left alone
+            # until llm_analysis overwrites them this task), roll every prior
+            # detection time (the canonical's scan_history + all same-key docs'
+            # detected_at, so a deleted duplicate's timestamp survives) into
+            # scan_history, and re-open the vuln.
+            hist = list(ex.scan_history or [])
+            hist.extend(existing_times.get(key, []))
+            hist = [t for t in hist if t != detected_at]  # current scan not "history"
+            hist = list(dict.fromkeys(hist))  # dedupe
+            hist.sort(key=detected_sort_key)  # ascending
+            # V12 5.7 (2026-08-02): do NOT overwrite task_id with the current
+            # task -- the ORIGINAL owner keeps the record (its monitor page
+            # must still see the vuln). Record the latest confirming scan in
+            # last_seen_task_id; the query layer matches either.
+            actions.append(
+                {
+                    "_op_type": "update",
+                    "_index": INDEX_VULNS,
+                    "_id": ex.finding_id,
+                    "doc": {
+                        "agent_id": f.agent_id,
+                        "hostname": f.hostname,
+                        "category": f.category.value,
+                        "cve": f.cve,
+                        "name": f.name,
+                        "severity": f.severity,
+                        "evidence": f.evidence,
+                        "fix_advice": f.fix_advice,
+                        "detected_at": detected_at,
+                        "status": "open",
+                        "scan_history": hist,
+                        "last_seen_task_id": f.task_id,
+                    },
+                }
+            )
+            # Key: point llm_analysis / generate_report at the record that
+            # actually survived, not a new random UUID.
+            f.finding_id = ex.finding_id
+        else:
+            actions.append(
+                {
+                    "_op_type": "index",
+                    "_index": INDEX_VULNS,
+                    "_id": f.finding_id,
+                    "_source": f.model_dump(),
+                }
+            )
+        merged.append(f)
+
+    # Auto-fix: an open vuln in a covered category that this scan no longer
+    # reported is considered fixed. Only status=open is touched -- manual
+    # fixed/accepted decisions are never silently overridden, and agents
+    # without coverage info are skipped (conservative).
+    auto_fixed: list[str] = []
+    for v in existing:
+        key = (v.agent_id, v.cve or "", v.name)
+        if v.status != "open" or key in new_keys:
+            continue
+        cov = coverage.get(v.agent_id)
+        if not cov or v.category.value not in cov:
+            continue
+        actions.append(
+            {
+                "_op_type": "update",
+                "_index": INDEX_VULNS,
+                "_id": v.finding_id,
+                "doc": {
+                    "status": "fixed",
+                    "first_fixed_at": v.first_fixed_at or now_iso,
+                    "last_fixed_at": now_iso,
+                },
+            }
+        )
+        auto_fixed.append(v.finding_id)
+
+    # Delete same-key legacy duplicates (self-heal).
+    for fid in dup_ids:
+        actions.append({"_op_type": "delete", "_index": INDEX_VULNS, "_id": fid})
+
+    if actions:
+        await store.bulk_update_vulns(actions)
+
+    if auto_fixed:
+        # One summary audit entry per task instead of one per finding, so a
+        # 1000-vuln host does not flood the audit log.
+        await get_audit_logger().log(
+            event_id=task_id,
+            node="vulnscan.subgraph",
+            action="auto_fix",
+            details={
+                "task_id": task_id,
+                "count": len(auto_fixed),
+                "finding_ids": auto_fixed,
+            },
+        )
+
+    logger.info(
+        "aggregated_findings",
+        task_id=task_id,
+        count=len(merged),
+        merged=len(existing_by_key),
+        auto_fixed=len(auto_fixed),
+        deleted_duplicates=len(dup_ids),
+    )
     return {
-        "collected_findings": findings,
+        "collected_findings": merged,
         "status": "analyzing",
     }
 
@@ -450,14 +788,19 @@ async def _write_fallback(
     if now_iso is None:
         now_iso = datetime.now(UTC).isoformat()
     for f in findings:
-        fid = f.get("finding_id", "")
-        fsev = f.get("severity", "info")
+        # Findings may be Pydantic VulnFinding models (aggregate output) or
+        # plain dicts (state.py). P1-VULN-GBL (2026-07-31) swapped .get() for
+        # getattr(), which silently read the default on dicts; _finding_field
+        # handles both shapes.
+        fid = _finding_field(f, "finding_id", "") or ""
+        fsev = _finding_field(f, "severity", "info") or "info"
+        fix = _finding_field(f, "fix_advice", None)
         try:
             await store.update_vuln(
                 fid,
                 ai_severity=fsev,
                 ai_filtered=False,
-                fix_advice=f.get("fix_advice"),
+                fix_advice=fix,
                 ai_processed=False,
                 ai_reason=reason,
                 ai_processed_at=now_iso,
@@ -479,7 +822,9 @@ async def llm_analysis(state: dict) -> dict:
     """
     findings = state.get("collected_findings", [])
     task_id = state["task_id"]
-    if state.get("status") == "cancelled" or await _is_task_cancelled(task_id):
+    # S-P1-9 (V12): double-check before propagating a cancellation (same
+    # rationale as aggregate -- never persist a blip as "cancelled").
+    if state.get("status") == "cancelled" or await _confirm_cancellation(task_id):
         return {"status": "cancelled"}
     if not findings:
         return {"status": "reporting"}
@@ -503,7 +848,7 @@ async def llm_analysis(state: dict) -> dict:
 
     if adapter is None:
         # Fallback path: every finding gets ai_severity=original,
-        # ai_filtered=False, ai_processed=False, ai_reason="LLM 不可用"
+        # ai_filtered=False, ai_processed=False, ai_reason="LLM 不可用
         # so the operator knows AI never touched the row.
         # V10 1.3: delegated to _write_fallback (was 100 percent
         # duplicate of the batch-failed branch).
@@ -577,20 +922,31 @@ async def llm_analysis(state: dict) -> dict:
     analyzed_ids = set()
     now_iso = datetime.now(UTC).isoformat()
     for item in all_analyzed:
-        await store.update_vuln(
-            item["finding_id"],
-            ai_severity=item["ai_severity"],
-            ai_filtered=item["ai_filtered"],
-            fix_advice=item.get("fix_advice"),
-            ai_processed=True,
-            ai_reason=item.get("reason"),
-            ai_processed_at=now_iso,
-        )
-        analyzed_ids.add(item["finding_id"])
+        # 2026-07-31: wrap in try/except -- a doc that the consolidation
+        # migration (or a concurrent reconcile) just deleted would otherwise
+        # 404 and abort the whole analysis write-back. Skipped ids fall into
+        # the failed-batch fallback below.
+        try:
+            await store.update_vuln(
+                item["finding_id"],
+                ai_severity=item["ai_severity"],
+                ai_filtered=item["ai_filtered"],
+                fix_advice=item.get("fix_advice"),
+                ai_processed=True,
+                ai_reason=item.get("reason"),
+                ai_processed_at=now_iso,
+            )
+            analyzed_ids.add(item["finding_id"])
+        except Exception as exc:
+            logger.warning(
+                "llm_update_failed",
+                finding_id=item["finding_id"],
+                error=str(exc) or type(exc).__name__,
+            )
 
     # 2026-07-29 UX upgrade: any finding whose batch failed (LLM error)
     # gets a fallback write so its ai_* fields are still meaningful.
-    failed = [f for f in findings if f.get("finding_id") not in analyzed_ids]
+    failed = [f for f in findings if getattr(f, "finding_id", "") not in analyzed_ids]
     if failed:
         # V10 1.3: delegated to _write_fallback. Dropped the
         # defensive isinstance(f, dict) -- collected_findings is
@@ -604,21 +960,18 @@ def _build_analysis_prompt(findings: list) -> str:
     """Build the LLM analysis prompt for a batch of findings."""
     import json
 
-    # V10 1.3: collected_findings is typed as list[dict] in state.py --
-    # the previous isinstance(f, dict) guards were unreachable code
-    # and have been dropped (V9 4.3 follow-up). ScanModule values come
-    # in as str already (post .model_dump()), so the hasattr checks
-    # below are also dropped.
+    # findings may be Pydantic VulnFinding models or plain dicts (state.py
+    # types collected_findings as list[dict]); _finding_field covers both.
     findings_json = []
     for f in findings:
         findings_json.append(
             {
-                "finding_id": f.get("finding_id", ""),
-                "name": f.get("name", ""),
-                "cve": f.get("cve"),
-                "severity": f.get("severity", "info"),
-                "category": f.get("category", ""),
-                "evidence": f.get("evidence", "")[:300],
+                "finding_id": _finding_field(f, "finding_id", "") or "",
+                "name": _finding_field(f, "name", "") or "",
+                "cve": _finding_field(f, "cve", None),
+                "severity": _finding_field(f, "severity", "info") or "info",
+                "category": str(_finding_field(f, "category", "") or ""),
+                "evidence": (_finding_field(f, "evidence", "") or "")[:300],
             }
         )
 
@@ -643,16 +996,10 @@ Return JSON with "analyzed" array of: finding_id, ai_severity, ai_filtered, reas
 
 async def _pub_progress(task_id: str, step: str, status: str, message: str) -> None:
     """Publish analysis progress to Redis for SSE subscribers."""
-    r = None
     try:
         import json as _json
 
-        import redis.asyncio as aioredis
-
-        from src.common.config.settings import get_settings
-
-        r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
-        await r.publish(
+        await _get_redis().publish(
             f"vulnscan:task:{task_id}",
             _json.dumps(
                 {
@@ -666,12 +1013,41 @@ async def _pub_progress(task_id: str, step: str, status: str, message: str) -> N
         )
     except Exception:
         pass
-    finally:
-        if r is not None:
-            try:
-                await r.aclose()
-            except Exception:
-                pass
+
+
+async def _confirm_cancellation(task_id: str) -> bool:
+    """Re-check a cancellation tombstone before persisting "cancelled".
+
+    ``_is_task_cancelled`` is fail-closed: a transient redis blip reads as
+    "cancelled" so a user-initiated cancellation is never dropped. That is
+    the right default for *short-circuiting* a node, but persisting
+    ``status="cancelled"`` on a healthy running task is destructive -- the
+    agent-side scan keeps executing and its results get orphaned. Re-check
+    after a short delay: only when both checks agree the tombstone exists
+    do we let the caller persist the cancellation.
+    """
+    if not await _is_task_cancelled(task_id):
+        return False
+    await asyncio.sleep(1)
+    if await _is_task_cancelled(task_id):
+        return True
+    # First check said cancelled but the second did not -- most likely a
+    # redis blip, not a real user cancellation. Surface it so operators
+    # can see the near-miss instead of a silently killed healthy scan.
+    get_logger(__name__).warning(
+        "cancellation_check_unconfirmed_treating_as_healthy",
+        task_id=task_id,
+    )
+    await get_audit_logger().log(
+        event_id=task_id,
+        node="vulnscan.subgraph",
+        action="cancellation_check_degraded",
+        details={
+            "task_id": task_id,
+            "detail": "first check said cancelled, second did not; treated as healthy",
+        },
+    )
+    return False
 
 
 async def _is_task_cancelled(task_id: str) -> bool:
@@ -691,13 +1067,10 @@ async def _is_task_cancelled(task_id: str) -> bool:
     waste agent bandwidth."""
     redis = None
     try:
-        import redis.asyncio as aioredis
-
-        from src.common.config.settings import get_settings
         from src.common.logging.logger import get_logger
         from src.orchestration.task_queue.keys import cancel_key
 
-        redis = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+        redis = _get_redis()
         return bool(await redis.exists(cancel_key(task_id)))
     except Exception as exc:
         get_logger(__name__).warning(
@@ -707,21 +1080,15 @@ async def _is_task_cancelled(task_id: str) -> bool:
             task_id=task_id,
         )
         return True  # fail-closed: abort the node rather than run a cancelled task
-    finally:
-        if redis is not None:
-            try:
-                await redis.aclose()
-            except Exception:
-                # Connection teardown failures should not mask the actual
-                # cancellation decision; swallow and move on.
-                pass
 
 
 async def generate_report(state: dict) -> dict:
     """Generate the final ScanReport with AI-generated summary and publish completion."""
     task_id = state["task_id"]
     store = get_vulnscan_store()
-    if state.get("status") == "cancelled" or await _is_task_cancelled(task_id):
+    # S-P1-9 (V12): same double-check as collect -- the fail-closed
+    # cancellation check must not persist "cancelled" on a redis blip.
+    if state.get("status") == "cancelled" or await _confirm_cancellation(task_id):
         await store.update_task(
             task_id,
             status="cancelled",
@@ -761,7 +1128,7 @@ async def generate_report(state: dict) -> dict:
     for v in vulns:
         cat = str(v.category)
         by_category[cat] = by_category.get(cat, 0) + 1
-        # 修复：by_severity 按 ai_severity(优先) 或 severity 统计，原代码漏填致报告
+        # 修复：by_severity 按ai_severity(优先) 或severity 统计，原代码漏填致报告
         # 严重等级分布恒为空。
         sev = str(v.ai_severity or v.severity or "info")
         by_severity[sev] = by_severity.get(sev, 0) + 1
@@ -851,7 +1218,7 @@ After AI filtering: {len(not_filtered)}
 By severity: {by_severity}
 By category: {by_category}
 Top risk: {top_vulns[0].get("name", "N/A") if top_vulns else "None"}
-Top hosts affected: {sorted({v.get("hostname", "") for v in top_vulns if v.get("hostname")})[:5]}"""
+Top hosts affected: {sorted({str(v.get("hostname") or "") for v in top_vulns if v.get("hostname")})[:5]}"""
         summary_result, advice_result = await asyncio.gather(
             adapter.chat_completion(messages=[{"role": "user", "content": summary_prompt}]),
             adapter.chat_completion(messages=[{"role": "user", "content": advice_prompt}]),
@@ -903,23 +1270,11 @@ Top hosts affected: {sorted({v.get("hostname", "") for v in top_vulns if v.get("
         f"Report generated: {len(vulns)} findings, {len(recommendations)} recommendations",
     )
 
-    # Clean up collect counter
-    r = None
+    # Clean up collect counter (S-P1-1: shared client).
     try:
-        import redis.asyncio as aioredis
-
-        from src.common.config.settings import get_settings
-
-        r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
-        await r.delete(f"vulnscan:collect:{task_id}")
+        await _get_redis().delete(f"vulnscan:collect:{task_id}")
     except Exception:
         pass
-    finally:
-        if r is not None:
-            try:
-                await r.aclose()
-            except Exception:
-                pass
 
     logger.info("vulnscan_report_generated", task_id=task_id, total=len(vulns))
     return {"report": report, "status": "completed"}

@@ -1,4 +1,4 @@
-﻿"""Detection router (Phase 3 of monitoring plan).
+"""Detection router (Phase 3 of monitoring plan).
 
 Endpoints:
   POST /api/v1/detect/run          - run Sigma rules against a single event.
@@ -12,10 +12,11 @@ Endpoints:
                                        force a refresh after dropping
                                        custom rules.
 """
+
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from src.api.auth.routes import require_role

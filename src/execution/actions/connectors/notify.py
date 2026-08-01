@@ -1,4 +1,5 @@
-﻿"""NotifyAnalystConnector — send webhook notifications (WeChat/DingTalk)."""
+"""NotifyAnalystConnector — send webhook notifications (WeChat/DingTalk)."""
+
 import httpx
 
 from src.common.config.settings import get_settings
@@ -13,7 +14,8 @@ class NotifyAnalystConnector:
 
     async def execute(self, op: dict, ctx: ActionContext) -> ActionResult:
         import hashlib
-        raw = f"{ctx.event_id}:{op.get('type','')}:{str(op.get('params',{}))}"
+
+        raw = f"{ctx.event_id}:{op.get('type', '')}:{str(op.get('params', {}))}"
         op_id = hashlib.sha256(raw.encode()).hexdigest()[:16]
 
         settings = get_settings()
@@ -36,10 +38,18 @@ class NotifyAnalystConnector:
                 logger.warning("webhook_push_failed", url=webhook[:40], error=str(exc))
 
         if sent_any:
-            return ActionResult(op_id=op_id, op_type=op.get("type", "notify"), status="success",
-                                output="Webhook notification sent")
-        return ActionResult(op_id=op_id, op_type=op.get("type", "notify"), status="skipped",
-                            output="No webhook configured (set wechat_work_webhook or dingtalk_webhook in .env)")
+            return ActionResult(
+                op_id=op_id,
+                op_type=op.get("type", "notify"),
+                status="success",
+                output="Webhook notification sent",
+            )
+        return ActionResult(
+            op_id=op_id,
+            op_type=op.get("type", "notify"),
+            status="skipped",
+            output="No webhook configured (set wechat_work_webhook or dingtalk_webhook in .env)",
+        )
 
     async def rollback(self, op: dict, ctx: ActionContext) -> None:
         logger.info("notify_rollback", event_id=ctx.event_id, op_type=op.get("type"))

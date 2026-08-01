@@ -302,6 +302,526 @@
         ]
       }
     },
+    "/api/v1/events/stream": {
+      "get": {
+        "tags": [
+          "stream"
+        ],
+        "summary": "Events List Stream",
+        "operationId": "events_list_stream_api_v1_events_stream_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/metrics/stream": {
+      "get": {
+        "tags": [
+          "stream"
+        ],
+        "summary": "Metrics Stream",
+        "operationId": "metrics_stream_api_v1_metrics_stream_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{event_id}/stream": {
+      "get": {
+        "tags": [
+          "stream"
+        ],
+        "summary": "Event Stream",
+        "operationId": "event_stream_api_v1_events__event_id__stream_get",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Get Me",
+        "description": "Return the current user's info (incl. created_at / last_login_at).",
+        "operationId": "get_me_api_v1_users_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPublic"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/password": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Change Own Password",
+        "operationId": "change_own_password_api_v1_users_me_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Change Own Password Api V1 Users Me Password Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List Users",
+        "operationId": "list_users_api_v1_users_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "include soft-deleted users",
+              "default": false,
+              "title": "Include Deleted"
+            },
+            "description": "include soft-deleted users"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Create User",
+        "operationId": "create_user_api_v1_users_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{username}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Get User One",
+        "operationId": "get_user_one_api_v1_users__username__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Deleted"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Update User",
+        "operationId": "update_user_api_v1_users__username__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Delete User",
+        "operationId": "delete_user_api_v1_users__username__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          },
+          {
+            "name": "hard",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "actually DELETE the row",
+              "default": false,
+              "title": "Hard"
+            },
+            "description": "actually DELETE the row"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Delete User Api V1 Users  Username  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{username}/restore": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Restore User",
+        "operationId": "restore_user_api_v1_users__username__restore_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/{event_id}": {
       "get": {
         "tags": [
@@ -744,7 +1264,7 @@
           "agents"
         ],
         "summary": "Api Enroll Host",
-        "description": "Register a new agent host using an enrollment token.\n\nP1 (2026-07-17): if the request IP already has a host row (operator\nre-ran the installer), the old row is decommissioned first so the new\nregistration replaces it cleanly. This keeps the host list de-duplicated\nby IP and prevents stale offline rows from accumulating.\n\nP1-6 修复：IP 去重用服务端可信 IP（X-Forwarded-For 或 request.client.host），\n不信任请求体里的 req.ip -- 否则攻击者用合法 enroll token 伪造 ip 即可\ndecommission_host_by_ip(任意ip) 下线任意在产主机。req.ip 仅作为展示用\nHost.ip 字段保留（agent 上报的真实内网 IP，NAT 后服务端看不到）。",
+        "description": "Register a new agent host using an enrollment token.\n\nP1 (2026-07-17): if the request IP already has a host row (operator\nre-ran the installer), the old row is decommissioned first so the new\nregistration replaces it cleanly. This keeps the host list de-duplicated\nby IP and prevents stale offline rows from accumulating.\n\nP1-6 濞ｅ浂鍠栭ˇ鏌ユ晬濞嗙硽 闁告ê顭烽崳鎼佹偨閵婏附绠涢柛鏃撶磿椤忣剟宕ｉ娆庣箚 IP闁挎稑婀?Forwarded-For 闁?request.client.host闁挎稑顧€缁?    濞戞挸绉虫穱濠冪閺勫浚鍤炴慨鐟板€风紞瀣煂瀹€鈧▓?req.ip -- 闁告熬绠戦崹顖炲绩鐠囨彃姣婇柤鏉挎噽閺併倝宕ラ崼鐔恒€?enroll token 濞寸⒈浜埀?ip 闁告鍟胯ぐ?    decommission_host_by_ip(濞寸姷绮崜鐧穚) 濞戞挸顑囬崵搴㈢缂佹ê澹堥柛锔哄妺妤犲洦绋夌紒妯荤皻闁靛棔鎷積q.ip 濞寸姴鎳嶇紞鏃€绋夐崫鍕綌缂佲偓閾忚鏆?    Host.ip 閻庢稒顨嗛灞剧┍濠靛牊娈岄柨娑樻綂gent 濞戞挸锕ユ慨銈夋儍閸曨厽鍩傞悗鍦仜閸炲绱?IP闁挎稑顒T 闁告艾瀛╁﹢鍥礉閿涘嫷浼傞柣顏勵儎缁楀宕氱敮顔剧闁?",
         "operationId": "api_enroll_host_api_v1_agents_enroll_post",
         "requestBody": {
           "content": {
@@ -786,7 +1306,7 @@
           "agents"
         ],
         "summary": "Api Download Binary",
-        "description": "Download the agent binary for ``os``/``arch``.\n\nThe enrollment token is accepted via either the ``token`` query param (legacy,\nkept for backward compatibility with older install scripts) or the\n``Authorization: Bearer <token>`` header. Header-based auth is preferred\nbecause query params leak into proxy / shell logs.",
+        "description": "Download the agent binary for ``os``/``arch``.\n\nAccepts either an enrollment token (install scripts, operator curl) or an\nagent token (self-upgrade flow).  Enrollment tokens are tried first;\nwhen that fails and an ``agent_id`` is present, the token is validated as\nan agent bearer token instead.",
         "operationId": "api_download_binary_api_v1_agents_binary__os___arch__get",
         "parameters": [
           {
@@ -821,6 +1341,22 @@
                 }
               ],
               "title": "Token"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
             }
           },
           {
@@ -955,7 +1491,7 @@
           "agents"
         ],
         "summary": "Api List Hosts",
-        "description": "List enrolled hosts.",
+        "description": "List enrolled hosts.\n\nBy default ``decommissioned`` hosts are hidden -- clicking 闁告帞濞€濞?makes\nthe host disappear from the table. The admin-only 鐎规瓕寮撶粭鍛棯婢剁鐦滈柡?view\npasses ``include_decommissioned=true`` to see the full roster.",
         "operationId": "api_list_hosts_api_v1_agents_get",
         "security": [
           {
@@ -994,6 +1530,18 @@
               ],
               "title": "Group"
             }
+          },
+          {
+            "name": "include_decommissioned",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "True=show soft-deleted hosts too (used by the admin 缂佺媴绱曢幃濠勬喆閸℃绂?; False=hide them so deletion actually removes the row from the list",
+              "default": false,
+              "title": "Include Decommissioned"
+            },
+            "description": "True=show soft-deleted hosts too (used by the admin 缂佺媴绱曢幃濠勬喆閸℃绂?; False=hide them so deletion actually removes the row from the list"
           }
         ],
         "responses": {
@@ -1095,7 +1643,7 @@
           "agents"
         ],
         "summary": "Api Delete Group",
-        "description": "Delete a host group (admin only).\n\nP1-4 修复：组内仍有主机时拒绝删除（返回 409），避免 hosts.group_name\n引用已删组变成 legacy 孤儿。操作员需先迁移或下线组内主机。",
+        "description": "Delete a host group (admin only).\n\nP1-4 濞ｅ浂鍠栭ˇ鏌ユ晬濮樿京鐭嬮柛鎰噸缁盯寮垫径澶婄槣闁哄牏鍎ゅ鍌炲箯閹烘梻鍗滈柛鎺斿█濞呭酣鏁嶉崼锝囩闁?409闁挎稑顧€缁辨繈鏌嗛崹顔煎赋 hosts.group_name\n鐎殿喗娲滈弫銈咁啅閹绘帒鐏╃紓浣稿瑜板骞?legacy 閻庢稏鍊曢崝褰掑Υ閸屾稒鎯欏ù锝嗙矊閹叉娊妫侀埀顒勫礂閸絿璁ｇ紒澶岀帛閸ㄣ劍绋夌€ｎ剙娈犵紓浣稿閸炲瓨绋夌紒妯荤皻闁?",
         "operationId": "api_delete_group_api_v1_agents_groups__name__delete",
         "security": [
           {
@@ -1241,7 +1789,7 @@
           "agents"
         ],
         "summary": "Api Delete Host",
-        "description": "Delete a host (admin only).\n\n需求1.4：purge=True 时物理删除（仅 decommissioned 主机允许），purge=False 时软删除（下线）。",
+        "description": "Delete a host (admin only).\n\n闂傚洠鍋撴慨?.4闁挎稒顒猽rge=True 闁哄啫澧庢晶鍧楁偠閸℃鐏╅梻鍕╁€х槐娆愮?decommissioned 濞戞挾绮┃鈧柛蹇庢祰椤斿繘鏁嶆径娑氱purge=False 闁哄啯鍎奸拏瀣礆閻樼粯鐝熼柨娑樼墔缁楀懐鐥崠锛勭闁?",
         "operationId": "api_delete_host_api_v1_agents__agent_id__delete",
         "security": [
           {
@@ -1264,11 +1812,57 @@
             "required": false,
             "schema": {
               "type": "boolean",
-              "description": "True=物理删除(仅已下线主机允许); False=软删除(下线)",
+              "description": "description",
               "default": false,
               "title": "Purge"
             },
-            "description": "True=物理删除(仅已下线主机允许); False=软删除(下线)"
+            "description": "description"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id}/token-status": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Agent Token Status",
+        "description": "Diagnostic: does PG have an agent_token for this agent, and is it\ncurrently active? Use this when an agent keeps failing the WS handshake\nwith 403 -- the three possible outcomes map 1:1 to the agent_auth_*\nwarnings emitted by enroll.validate_agent_token.\n\nReturns:\n  { status: \"missing\" | \"revoked\" | \"active\",\n    agent_id: ...,\n    token_hash_prefix: \"ab12cd34\" | null,\n    issued_at: ISO string | null,\n    revoked_at: ISO string | null }",
+        "operationId": "api_agent_token_status_api_v1_agents__agent_id__token_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
           }
         ],
         "responses": {
@@ -1299,7 +1893,7 @@
           "agents"
         ],
         "summary": "Api Upgrade Agent",
-        "description": "Trigger an agent_upgrade command via the WS gateway.",
+        "description": "Stage a server-controlled agent_upgrade and dispatch it.\n\nThe signed payload is built from the on-disk Agent binary so the operator\ncan't redirect the Agent to an attacker-controlled URL. We also persist a\nRedis status row that the UI polls and the heartbeat handler uses to mark\nthe upgrade confirmed once the Agent's new version appears in a heartbeat.",
         "operationId": "api_upgrade_agent_api_v1_agents__agent_id__upgrade_post",
         "security": [
           {
@@ -1327,6 +1921,50 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Api Upgrade Status",
+        "description": "Return the latest upgrade record for this host (operator UI).",
+        "operationId": "api_upgrade_status_api_v1_agents__agent_id__upgrade_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1543,7 +2181,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/_TaskListResponse"
+                }
               }
             }
           },
@@ -1568,6 +2208,50 @@
         "summary": "Api Get Task",
         "description": "Return task record from ES. P2 also consults the Redis side-channel\nso callers see ``queued`` / ``running`` before the subgraph has finished\nwriting the canonical record.",
         "operationId": "api_get_task_api_v1_vulnscan_tasks__task_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Delete Task",
+        "description": "删除扫描任务记录及其关联数据（results/vulns/report）。",
+        "operationId": "api_delete_task_api_v1_vulnscan_tasks__task_id__delete",
         "security": [
           {
             "HTTPBearer": []
@@ -1661,6 +2345,7 @@
           "vulnscan"
         ],
         "summary": "Api Cancel Task",
+        "description": "Cancel queued or running work and notify every assigned Agent.",
         "operationId": "api_cancel_task_api_v1_vulnscan_tasks__task_id__cancel_post",
         "security": [
           {
@@ -1776,6 +2461,150 @@
               ],
               "title": "Status"
             }
+          },
+          {
+            "name": "cve",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact CVE id, e.g. CVE-2024-0001",
+              "title": "Cve"
+            },
+            "description": "Exact CVE id, e.g. CVE-2024-0001"
+          },
+          {
+            "name": "cve_keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring on CVE id",
+              "title": "Cve Keyword"
+            },
+            "description": "Case-insensitive substring on CVE id"
+          },
+          {
+            "name": "hostname_keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring on hostname",
+              "title": "Hostname Keyword"
+            },
+            "description": "Case-insensitive substring on hostname"
+          },
+          {
+            "name": "name_keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring on finding name",
+              "title": "Name Keyword"
+            },
+            "description": "Case-insensitive substring on finding name"
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by business group (host.group)",
+              "title": "Group"
+            },
+            "description": "Filter by business group (host.group)"
+          },
+          {
+            "name": "ai_processed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by AI processing state",
+              "title": "Ai Processed"
+            },
+            "description": "Filter by AI processing state"
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO 8601, e.g. 2026-07-01T00:00:00Z",
+              "title": "Date From"
+            },
+            "description": "ISO 8601, e.g. 2026-07-01T00:00:00Z"
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO 8601, e.g. 2026-07-29T23:59:59Z",
+              "title": "Date To"
+            },
+            "description": "ISO 8601, e.g. 2026-07-29T23:59:59Z"
           }
         ],
         "responses": {
@@ -1783,7 +2612,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/_VulnListResponse"
+                }
               }
             }
           },
@@ -1828,7 +2659,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanReport"
+                }
               }
             }
           },
@@ -1909,6 +2742,7 @@
           "vulnscan"
         ],
         "summary": "Api Get Vuln",
+        "description": "Return the finding with the host it belongs to.\n\n2026-07-29 UX upgrade (host meta): the vuln detail drawer needs the\nhost's business group / owner / env / ip / os so the operator can\nsee the asset context without leaving the page. We look up the host\nby ``agent_id`` (preferred) and fall back to ``hostname`` so we\nstill get useful context for findings whose agent has been\ndecommissioned since the scan.\n\nThe host field is added alongside the existing vuln record -- the\nbase shape is unchanged, so old clients that only read the vuln\nfields keep working.",
         "operationId": "api_get_vuln_api_v1_vulnscan_vulns__finding_id__get",
         "security": [
           {
@@ -1931,7 +2765,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/_VulnDetailResponse"
+                }
               }
             }
           },
@@ -2000,6 +2836,33 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/vulnscan/host-stats": {
+      "get": {
+        "tags": [
+          "vulnscan"
+        ],
+        "summary": "Api Host Stats",
+        "description": "Per-group vuln counts and by-severity breakdown.\n\nUsed by the host-onboarding page to render the \"业务分布\" bar chart\nand by the scan-task list to display a host's business group. The\naggregation is a small N+1 (one ES query per group), so the result\nis cached for 30s in-process.",
+        "operationId": "api_host_stats_api_v1_vulnscan_host_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_HostStatsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/v1/vulnscan/queue/stats": {
@@ -2419,6 +3282,398 @@
         }
       }
     },
+    "/api/v1/agents/{agent_id}/actions/{action_name}": {
+      "post": {
+        "tags": [
+          "response"
+        ],
+        "summary": "Dispatch Action",
+        "description": "Dispatch one response action to ``agent_id``.\n\nBody shape:\n    { \"params\": { ... action-specific ... }, \"reason\": \"optional note\" }\n\nThe ``reason`` field is logged but not enforced -- operators sometimes\nwant a fast button without writing a justification.",
+        "operationId": "dispatch_action_api_v1_agents__agent_id__actions__action_name__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "action_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Action Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionDispatchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/actions/{action_id}": {
+      "get": {
+        "tags": [
+          "response"
+        ],
+        "summary": "Get Action Status",
+        "description": "Read the current status of a dispatched action.\n\nReturns ``status=\"unknown\"`` if no record is found (TTL expired, never\nexisted, or wrong id). Callers should treat ``unknown`` as\n\"investigate manually\" rather than retry.",
+        "operationId": "get_action_status_api_v1_agents_actions__action_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "action_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Action Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sigma-rules/summary": {
+      "get": {
+        "tags": [
+          "sigma-rules"
+        ],
+        "summary": "Sigma Summary",
+        "description": "Import summary suitable for the console dashboard tab.\n\nReturns counts and the skipped-reason list. If no import has run\nyet, returns an empty placeholder so the UI can show a \"no rules\nimported\" state without a 404.",
+        "operationId": "sigma_summary_api_v1_sigma_rules_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Sigma Summary Api V1 Sigma Rules Summary Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/sigma-rules": {
+      "get": {
+        "tags": [
+          "sigma-rules"
+        ],
+        "summary": "List Sigma Rules",
+        "description": "Filtered list of imported Sigma rules.\n\nServed straight from the manifest -- no DB, no walk of the rules\ndirectory on every request. If the manifest is missing we 404 so\nthe operator notices the import never ran.",
+        "operationId": "list_sigma_rules_api_v1_sigma_rules_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "process_creation / file_event / ...",
+              "title": "Category"
+            },
+            "description": "process_creation / file_event / ..."
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "critical / high / medium / low / informational",
+              "title": "Level"
+            },
+            "description": "critical / high / medium / low / informational"
+          },
+          {
+            "name": "os",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "linux / macos / windows",
+              "title": "Os"
+            },
+            "description": "linux / macos / windows"
+          },
+          {
+            "name": "detector_supported",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Detector Supported"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "substring match on rule_id or title",
+              "title": "Q"
+            },
+            "description": "substring match on rule_id or title"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response List Sigma Rules Api V1 Sigma Rules Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sigma-rules/import": {
+      "post": {
+        "tags": [
+          "sigma-rules"
+        ],
+        "summary": "Import Sigma Dry Run",
+        "description": "Run the importer against ``body.path`` and return the result.\n\nDoes NOT write the manifest or copy any .yml files. The operator\nis expected to use the CLI for the actual filesystem change so\nthe change is auditable on the host rather than over HTTP.",
+        "operationId": "import_sigma_dry_run_api_v1_sigma_rules_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Import Sigma Dry Run Api V1 Sigma Rules Import Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/monitor": {
+      "get": {
+        "tags": [
+          "monitor"
+        ],
+        "summary": "List Monitor Events",
+        "description": "Return the most recent N monitor snapshots for ``agent_id``.",
+        "operationId": "list_monitor_events_api_v1_agents__agent_id__monitor_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Max snapshots to return (most recent first)",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Max snapshots to return (most recent first)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response List Monitor Events Api V1 Agents  Agent Id  Monitor Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/models": {
       "get": {
         "tags": [
@@ -2674,6 +3929,53 @@
         }
       }
     },
+    "/api/v1/chat": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Api Chat",
+        "description": "Single-shot chat: classify + dispatch + answer.",
+        "operationId": "api_chat_api_v1_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/src__api__routers__chat__ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/vulnscan/conversations": {
       "get": {
         "tags": [
@@ -2887,7 +4189,7 @@
           "scan-chat"
         ],
         "summary": "Api Chat",
-        "description": "多轮对话。把历史 + 用户新消息发给 LLM（可选切换模型），回复追加进会话。",
+        "description": "Multi-turn dialog. Persists user + assistant, returns the updated\nconversation along with the (auto-extracted) ScanIntent if any.",
         "operationId": "api_chat_api_v1_vulnscan_conversations__conv_id__chat_post",
         "security": [
           {
@@ -2910,7 +4212,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ChatRequest"
+                "$ref": "#/components/schemas/src__api__routers__scan_chat__ChatRequest"
               }
             }
           }
@@ -2937,30 +4239,203 @@
         }
       }
     },
-    "/api/v1/events/{event_id}/stream": {
+    "/api/v1/alerts/ingest": {
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Ingest Alert",
+        "description": "Normalize a vendor JSON into our common Alert model and persist.\n\nThe `source` field in the body is the canonical hint, but if a future\nadapter ships raw bytes (e.g. syslog over webhook) we let the normalizer\nfall back to its default mapping.",
+        "operationId": "ingest_alert_api_v1_alerts_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertIngestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/alerts": {
       "get": {
         "tags": [
-          "stream"
+          "alerts"
         ],
-        "summary": "Event Stream",
-        "operationId": "event_stream_api_v1_events__event_id__stream_get",
+        "summary": "List Alerts",
+        "operationId": "list_alerts_api_v1_alerts_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
-            "name": "event_id",
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "critical/high/medium/low/info",
+              "title": "Severity"
+            },
+            "description": "critical/high/medium/low/info"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "new/acknowledged/in_progress/resolved/false_positive",
+              "title": "Status"
+            },
+            "description": "new/acknowledged/in_progress/resolved/false_positive"
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "name": "hostname",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hostname"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response List Alerts Api V1 Alerts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alerts/{alert_id}": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Get Alert",
+        "operationId": "get_alert_api_v1_alerts__alert_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "alert_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Event Id"
-            }
-          },
-          {
-            "name": "token",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Token"
+              "title": "Alert Id"
             }
           }
         ],
@@ -2969,7 +4444,10 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "title": "Response Get Alert Api V1 Alerts  Alert Id  Get"
+                }
               }
             }
           },
@@ -2986,30 +4464,50 @@
         }
       }
     },
-    "/api/v1/metrics/stream": {
-      "get": {
+    "/api/v1/alerts/{alert_id}/status": {
+      "patch": {
         "tags": [
-          "stream"
+          "alerts"
         ],
-        "summary": "Metrics Stream",
-        "operationId": "metrics_stream_api_v1_metrics_stream_get",
+        "summary": "Update Status",
+        "description": "Update operator workflow state (new -> acknowledged -> in_progress -> resolved).",
+        "operationId": "update_status_api_v1_alerts__alert_id__status_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
-            "name": "token",
-            "in": "query",
+            "name": "alert_id",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Token"
+              "title": "Alert Id"
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "title": "Response Update Status Api V1 Alerts  Alert Id  Status Patch"
+                }
               }
             }
           },
@@ -3026,30 +4524,32 @@
         }
       }
     },
-    "/api/v1/events/stream": {
-      "get": {
+    "/api/v1/detect/run": {
+      "post": {
         "tags": [
-          "stream"
+          "detection"
         ],
-        "summary": "Events List Stream",
-        "operationId": "events_list_stream_api_v1_events_stream_get",
-        "parameters": [
-          {
-            "name": "token",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Token"
+        "summary": "Run Detection",
+        "description": "Run all loaded Sigma rules against ``body.event`` and persist hits.\n\nReturns the matched alert_ids. Already-matched (rule_id, event_id)\npairs are deduped by ``build_alert`` (sha256-derived stable id), so\nre-running the same input is safe.",
+        "operationId": "run_detection_api_v1_detect_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetectRunRequest"
+              }
             }
-          }
-        ],
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DetectRunResponse"
+                }
               }
             }
           },
@@ -3063,12 +4563,136 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/detect/rules": {
+      "get": {
+        "tags": [
+          "detection"
+        ],
+        "summary": "List Rules",
+        "operationId": "list_rules_api_v1_detect_rules_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RuleSummary"
+                  },
+                  "type": "array",
+                  "title": "Response List Rules Api V1 Detect Rules Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/detect/rules/load": {
+      "post": {
+        "tags": [
+          "detection"
+        ],
+        "summary": "Reload Builtin Rules",
+        "operationId": "reload_builtin_rules_api_v1_detect_rules_load_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Reload Builtin Rules Api V1 Detect Rules Load Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     }
   },
   "components": {
     "schemas": {
+      "ActionDispatchResponse": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "title": "Action Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "dispatched | succeeded | failed | unknown",
+            "default": "dispatched"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action_id",
+          "action",
+          "agent_id"
+        ],
+        "title": "ActionDispatchResponse"
+      },
+      "ActionStatusResponse": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "title": "Action Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "default": ""
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id",
+            "default": ""
+          },
+          "received_at": {
+            "type": "string",
+            "title": "Received At",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "action_id",
+          "status"
+        ],
+        "title": "ActionStatusResponse"
+      },
       "AgentConfigRequest": {
         "properties": {
           "heartbeat_interval": {
@@ -3110,6 +4734,59 @@
         },
         "type": "object",
         "title": "AgentConfigRequest"
+      },
+      "AlertIngestRequest": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": ""
+          },
+          "payload": {
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload"
+        ],
+        "title": "AlertIngestRequest",
+        "description": "Webhook payload from a third-party EDR. The \"source\" field tells\nthe server which adapter to use for normalization. Vendors that do not\nsupply source metadata may rely on the URL path (see router)."
+      },
+      "AlertIngestResponse": {
+        "properties": {
+          "alert_id": {
+            "type": "string",
+            "title": "Alert Id"
+          },
+          "received_at": {
+            "type": "string",
+            "title": "Received At"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/AlertSeverity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "alert_id",
+          "received_at",
+          "severity"
+        ],
+        "title": "AlertIngestResponse"
+      },
+      "AlertSeverity": {
+        "type": "string",
+        "enum": [
+          "critical",
+          "high",
+          "medium",
+          "low",
+          "info"
+        ],
+        "title": "AlertSeverity",
+        "description": "Standard severity levels across all EDR sources."
       },
       "ApprovalActionResponse": {
         "properties": {
@@ -3203,34 +4880,65 @@
         ],
         "title": "Body_api_import_rules_api_v1_rules_import_post"
       },
-      "ChatRequest": {
+      "ChangePasswordRequest": {
         "properties": {
-          "message": {
+          "old_password": {
             "type": "string",
-            "title": "Message"
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Old Password"
           },
-          "model_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model Id"
-          },
-          "parse_intent": {
-            "type": "boolean",
-            "title": "Parse Intent",
-            "default": false
+          "new_password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 12,
+            "title": "New Password"
           }
         },
         "type": "object",
         "required": [
-          "message"
+          "old_password",
+          "new_password"
         ],
-        "title": "ChatRequest"
+        "title": "ChangePasswordRequest",
+        "description": "POST /api/v1/users/me/password body. Any user."
+      },
+      "ChatResponse": {
+        "properties": {
+          "intent": {
+            "type": "string",
+            "enum": [
+              "scan",
+              "project",
+              "web",
+              "chat"
+            ],
+            "title": "Intent"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "reply": {
+            "type": "string",
+            "title": "Reply"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            },
+            "type": "array",
+            "title": "Sources",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "intent",
+          "confidence",
+          "reply"
+        ],
+        "title": "ChatResponse"
       },
       "CreateConversationRequest": {
         "properties": {
@@ -3253,6 +4961,66 @@
         },
         "type": "object",
         "title": "CreateConversationRequest"
+      },
+      "DetectRunRequest": {
+        "properties": {
+          "event": {
+            "type": "object",
+            "title": "Event",
+            "description": "Raw event payload (any JSON the Sigma rules can match)."
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id",
+            "description": "Optional caller-supplied event id. A uuid4 is generated if missing."
+          }
+        },
+        "type": "object",
+        "required": [
+          "event"
+        ],
+        "title": "DetectRunRequest"
+      },
+      "DetectRunResponse": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "matched": {
+            "type": "integer",
+            "title": "Matched"
+          },
+          "alert_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Alert Ids"
+          },
+          "rule_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rule Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_id",
+          "matched",
+          "alert_ids",
+          "rule_ids"
+        ],
+        "title": "DetectRunResponse"
       },
       "EnrollRequest": {
         "properties": {
@@ -3345,12 +5113,18 @@
           },
           "ttl_hours": {
             "type": "integer",
+            "maximum": 168.0,
+            "minimum": 0.0,
             "title": "Ttl Hours",
+            "description": "Token lifetime in hours; 0 falls back to the default",
             "default": 24
           },
           "uses": {
             "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 1.0,
             "title": "Uses",
+            "description": "Max number of agents that can enroll with this token",
             "default": 1
           }
         },
@@ -3642,12 +5416,20 @@
             "maxLength": 128,
             "minLength": 1,
             "title": "Name",
-            "description": "组名"
+            "description": "Group name"
           },
           "description": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Description",
-            "default": ""
+            "description": "Optional human-readable description"
           }
         },
         "type": "object",
@@ -3708,6 +5490,14 @@
             "type": "string",
             "title": "Rule Version",
             "default": ""
+          },
+          "target_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Groups",
+            "default": []
           },
           "last_heartbeat": {
             "type": "string",
@@ -3776,7 +5566,7 @@
               }
             ],
             "title": "Group",
-            "description": "目标组名，传 null 清空"
+            "description": "Target group name; pass null to clear"
           }
         },
         "type": "object",
@@ -4024,6 +5814,357 @@
         "type": "object",
         "title": "ModelUpdateRequest"
       },
+      "RuleSummary": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "level": {
+            "type": "string",
+            "title": "Level"
+          },
+          "product": {
+            "type": "string",
+            "title": "Product"
+          },
+          "service": {
+            "type": "string",
+            "title": "Service"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "title",
+          "level",
+          "product",
+          "service",
+          "category"
+        ],
+        "title": "RuleSummary"
+      },
+      "ScanModule": {
+        "type": "string",
+        "enum": [
+          "sys_vuln",
+          "baseline"
+        ],
+        "title": "ScanModule"
+      },
+      "ScanPolicy": {
+        "properties": {
+          "modules": {
+            "items": {
+              "$ref": "#/components/schemas/ScanModule"
+            },
+            "type": "array",
+            "title": "Modules",
+            "default": [
+              "sys_vuln",
+              "baseline"
+            ]
+          },
+          "resource_limit": {
+            "type": "object",
+            "title": "Resource Limit",
+            "default": {
+              "cpu_percent": 30,
+              "mem_percent": 30
+            }
+          },
+          "time_window": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Window"
+          },
+          "timeout_sec": {
+            "type": "integer",
+            "title": "Timeout Sec",
+            "default": 1800
+          }
+        },
+        "type": "object",
+        "title": "ScanPolicy"
+      },
+      "ScanReport": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "default": ""
+          },
+          "ai_analysis": {
+            "type": "string",
+            "title": "Ai Analysis",
+            "default": ""
+          },
+          "stats": {
+            "type": "object",
+            "title": "Stats",
+            "default": {}
+          },
+          "top_vulns": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Top Vulns",
+            "default": []
+          },
+          "recommendations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recommendations",
+            "default": []
+          },
+          "generated_at": {
+            "type": "string",
+            "title": "Generated At",
+            "default": ""
+          },
+          "ai_processed": {
+            "type": "boolean",
+            "title": "Ai Processed",
+            "default": false
+          },
+          "ai_model": {
+            "type": "string",
+            "title": "Ai Model",
+            "default": ""
+          },
+          "ai_overall_advice": {
+            "type": "string",
+            "title": "Ai Overall Advice",
+            "default": ""
+          },
+          "ai_processed_at": {
+            "type": "string",
+            "title": "Ai Processed At",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id"
+        ],
+        "title": "ScanReport"
+      },
+      "ScanTask": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "dialog",
+              "manual"
+            ],
+            "title": "Source",
+            "default": "manual"
+          },
+          "intent_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Text"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Targets",
+            "default": []
+          },
+          "target_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Groups",
+            "default": []
+          },
+          "policy": {
+            "$ref": "#/components/schemas/ScanPolicy",
+            "default": {
+              "modules": [
+                "sys_vuln",
+                "baseline"
+              ],
+              "resource_limit": {
+                "cpu_percent": 30,
+                "mem_percent": 30
+              },
+              "timeout_sec": 1800
+            }
+          },
+          "rule_version": {
+            "type": "string",
+            "title": "Rule Version",
+            "default": ""
+          },
+          "engine": {
+            "type": "string",
+            "enum": [
+              "matcher",
+              "nuclei",
+              "global"
+            ],
+            "title": "Engine",
+            "default": "matcher"
+          },
+          "nuclei_severity": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Nuclei Severity",
+            "default": []
+          },
+          "nuclei_tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Nuclei Tags",
+            "default": []
+          },
+          "nuclei_templates": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Nuclei Templates",
+            "default": []
+          },
+          "nuclei_timeout_sec": {
+            "type": "integer",
+            "title": "Nuclei Timeout Sec",
+            "default": 0
+          },
+          "nuclei_ports": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Nuclei Ports",
+            "default": []
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "dispatching",
+              "scanning",
+              "analyzing",
+              "cancelling",
+              "cancelled",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "default": "queued"
+          },
+          "stats": {
+            "type": "object",
+            "title": "Stats",
+            "default": {
+              "total": 0,
+              "done": 0,
+              "failed": 0
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id"
+        ],
+        "title": "ScanTask"
+      },
+      "SourceRef": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "snippet": {
+            "type": "string",
+            "title": "Snippet",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "SourceRef"
+      },
       "SseTokenRequest": {
         "properties": {
           "scope": {
@@ -4236,24 +6377,154 @@
       "UpgradeRequest": {
         "properties": {
           "version": {
-            "type": "string",
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Version",
-            "description": "Target agent binary version, e.g. v0.2.0"
-          },
-          "download_url": {
+            "description": "Optional override; defaults to the currently packaged version"
+          }
+        },
+        "type": "object",
+        "title": "UpgradeRequest"
+      },
+      "UserCreate": {
+        "properties": {
+          "username": {
             "type": "string",
-            "minLength": 1,
-            "title": "Download Url",
-            "description": "HTTPS URL the agent downloads the new binary from"
+            "maxLength": 32,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9_]+$",
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 12,
+            "title": "Password"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "analyst",
+              "viewer",
+              "responder"
+            ],
+            "title": "Role",
+            "default": "viewer"
           }
         },
         "type": "object",
         "required": [
-          "version",
-          "download_url"
+          "username",
+          "password"
         ],
-        "title": "UpgradeRequest"
+        "title": "UserCreate",
+        "description": "POST /api/v1/users body. Admin only."
+      },
+      "UserListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserPublic"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "count"
+        ],
+        "title": "UserListResponse"
+      },
+      "UserPublic": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "analyst",
+              "viewer",
+              "responder"
+            ],
+            "title": "Role"
+          },
+          "disabled": {
+            "type": "boolean",
+            "title": "Disabled",
+            "default": false
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "last_login_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login At"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "role"
+        ],
+        "title": "UserPublic",
+        "description": "API representation of a user (no password)."
       },
       "UserResponse": {
         "properties": {
@@ -4277,6 +6548,55 @@
           "disabled"
         ],
         "title": "UserResponse"
+      },
+      "UserUpdate": {
+        "properties": {
+          "username": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9_]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "analyst",
+                  "viewer",
+                  "responder"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "disabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled"
+          }
+        },
+        "type": "object",
+        "title": "UserUpdate",
+        "description": "PATCH /api/v1/users/{username} body. Admin only."
       },
       "ValidationError": {
         "properties": {
@@ -4310,6 +6630,504 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VulnFinding": {
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "title": "Finding Id"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "hostname": {
+            "type": "string",
+            "title": "Hostname"
+          },
+          "category": {
+            "$ref": "#/components/schemas/ScanModule"
+          },
+          "cve": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cve"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info"
+            ],
+            "title": "Severity"
+          },
+          "ai_severity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Severity"
+          },
+          "ai_filtered": {
+            "type": "boolean",
+            "title": "Ai Filtered",
+            "default": false
+          },
+          "evidence": {
+            "type": "string",
+            "title": "Evidence",
+            "default": ""
+          },
+          "fix_advice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fix Advice"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "fixed",
+              "accepted"
+            ],
+            "title": "Status",
+            "default": "open"
+          },
+          "detected_at": {
+            "type": "string",
+            "title": "Detected At",
+            "default": ""
+          },
+          "scan_history": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "title": "Scan History",
+            "default": []
+          },
+          "ai_processed": {
+            "type": "boolean",
+            "title": "Ai Processed",
+            "default": false
+          },
+          "ai_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Reason"
+          },
+          "ai_fix_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Fix Summary"
+          },
+          "ai_processed_at": {
+            "type": "string",
+            "title": "Ai Processed At",
+            "default": ""
+          },
+          "first_fixed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Fixed At"
+          },
+          "last_fixed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fixed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "finding_id",
+          "task_id",
+          "agent_id",
+          "hostname",
+          "category",
+          "name",
+          "severity"
+        ],
+        "title": "VulnFinding"
+      },
+      "_HostStatsItem": {
+        "properties": {
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "member_count": {
+            "type": "integer",
+            "title": "Member Count"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "by_severity": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "By Severity",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "required": [
+          "group",
+          "member_count",
+          "total"
+        ],
+        "title": "_HostStatsItem"
+      },
+      "_HostStatsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/_HostStatsItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "cached": {
+            "type": "boolean",
+            "title": "Cached",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "_HostStatsResponse"
+      },
+      "_TaskListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScanTask"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "_TaskListResponse"
+      },
+      "_VulnDetailResponse": {
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "title": "Finding Id"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "hostname": {
+            "type": "string",
+            "title": "Hostname"
+          },
+          "category": {
+            "$ref": "#/components/schemas/ScanModule"
+          },
+          "cve": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cve"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info"
+            ],
+            "title": "Severity"
+          },
+          "ai_severity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Severity"
+          },
+          "ai_filtered": {
+            "type": "boolean",
+            "title": "Ai Filtered",
+            "default": false
+          },
+          "evidence": {
+            "type": "string",
+            "title": "Evidence",
+            "default": ""
+          },
+          "fix_advice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fix Advice"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "fixed",
+              "accepted"
+            ],
+            "title": "Status",
+            "default": "open"
+          },
+          "detected_at": {
+            "type": "string",
+            "title": "Detected At",
+            "default": ""
+          },
+          "ai_processed": {
+            "type": "boolean",
+            "title": "Ai Processed",
+            "default": false
+          },
+          "ai_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Reason"
+          },
+          "ai_fix_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Fix Summary"
+          },
+          "ai_processed_at": {
+            "type": "string",
+            "title": "Ai Processed At",
+            "default": ""
+          },
+          "first_fixed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Fixed At"
+          },
+          "last_fixed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fixed At"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          }
+        },
+        "type": "object",
+        "required": [
+          "finding_id",
+          "task_id",
+          "agent_id",
+          "hostname",
+          "category",
+          "name",
+          "severity"
+        ],
+        "title": "_VulnDetailResponse",
+        "description": "GET /vulnscan/vulns/{id} response. The router attaches\nan optional host dict when the agent_id / hostname lookup\nsucceeds; otherwise the field is absent. Modelling the host\nas Optional keeps the OpenAPI schema honest about the union."
+      },
+      "_VulnListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VulnFinding"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "_VulnListResponse"
+      },
+      "src__api__routers__chat__ChatRequest": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "history": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "History",
+            "default": []
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "ChatRequest"
+      },
+      "src__api__routers__scan_chat__ChatRequest": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "parse_intent": {
+            "type": "boolean",
+            "title": "Parse Intent",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "ChatRequest"
       }
     },
     "securitySchemes": {

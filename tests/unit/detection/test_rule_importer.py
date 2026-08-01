@@ -1,15 +1,13 @@
-﻿"""Unit tests for the Sigma rule importer (Phase 6).
+"""Unit tests for the Sigma rule importer (Phase 6).
 
 Uses a small fixture directory under tests/fixtures/sigma_zoo/ that
 intentionally mixes supported and unsupported rules so the importer
 has something real to do.
 """
+
 from __future__ import annotations
 
-import json
 from pathlib import Path
-
-import pytest
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent.parent / "fixtures" / "sigma_zoo"
 
@@ -100,7 +98,7 @@ def test_import_from_missing_path():
 
 
 def test_write_manifest_round_trip(tmp_path: Path):
-    from src.detection.rule_importer import import_from_directory, write_manifest, read_manifest
+    from src.detection.rule_importer import import_from_directory, read_manifest, write_manifest
 
     result = import_from_directory(FIXTURE_DIR)
     out = tmp_path / "manifest.json"
@@ -119,24 +117,28 @@ def test_write_manifest_round_trip(tmp_path: Path):
 def test_mitre_normalization_drops_tactics():
     from src.detection.rule_importer import _mitre_from_tags
 
-    out = _mitre_from_tags([
-        "attack.credential_access",   # tactic -> drop
-        "attack.t1110",                 # technique -> T1110
-        "attack.t1059.004",             # sub-technique -> T1059.004
-        "attack.execution",             # tactic -> drop
-        "not_mitre",                    # unrelated -> drop
-    ])
+    out = _mitre_from_tags(
+        [
+            "attack.credential_access",  # tactic -> drop
+            "attack.t1110",  # technique -> T1110
+            "attack.t1059.004",  # sub-technique -> T1059.004
+            "attack.execution",  # tactic -> drop
+            "not_mitre",  # unrelated -> drop
+        ]
+    )
     assert out == ["T1110", "T1059.004"]
 
 
 def test_mitre_normalization_dedupes():
     from src.detection.rule_importer import _mitre_from_tags
 
-    out = _mitre_from_tags([
-        "attack.t1110",
-        "attack.t1110",  # exact dup
-        "T1110",         # already in canonical form? actually no - it's "attack." prefix
-    ])
+    out = _mitre_from_tags(
+        [
+            "attack.t1110",
+            "attack.t1110",  # exact dup
+            "T1110",  # already in canonical form? actually no - it's "attack." prefix
+        ]
+    )
     assert out == ["T1110"]
 
 

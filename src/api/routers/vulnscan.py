@@ -36,6 +36,21 @@ from src.orchestration.task_queue.keys import (
     status_key,
 )
 
+# S-P1-1 (V12): shared lazy redis client. Short-lived per-call lookups
+# (side-channel fallback, cancel, queue stats/status) used to build and
+# close a connection every time; one reused client is safe for these
+# non-subscription operations. SSE streams keep their own pubsub client
+# (a shared pubsub would cross-talk between concurrent subscribers).
+_redis_client = None
+
+
+def _get_redis():
+    """Return the shared redis client, lazily created on first use."""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    return _redis_client
+
 
 # 2026-07-29: response models for the OpenAPI schema.
 # FastAPI only emits a schema for a route when it sees a Pydantic
@@ -44,6 +59,11 @@ from src.orchestration.task_queue.keys import (
 # gen:types pipeline picks up the new AI / fix-time fields.
 class _TaskListResponse(_PydanticBaseModel):
     items: list[ScanTask]
+    # V12 5.8: server-side pagination metadata (response_model filters
+    # undeclared fields, so these must be declared to reach the frontend).
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
 
 
 class _VulnListResponse(_PydanticBaseModel):
@@ -113,10 +133,10 @@ async def api_create_task(
     targets = body.get("targets", [])
     modules = body.get("modules", ["sys_vuln", "baseline"])
     engine = body.get("engine", "matcher")
-    if engine not in ("matcher", "nuclei"):
+    if engine not in ("matcher", "nuclei", "global"):
         raise HTTPException(
             status_code=422,
-            detail=f"unsupported engine {engine!r}; expected matcher or nuclei",
+            detail=f"unsupported engine {engine!r}; expected matcher, nuclei, or global",
         )
 
     # 2026-07-29 UX upgrade: resolve the targets to their business
@@ -151,14 +171,23 @@ async def api_create_task(
             cached["host_to_group"] = _name_to_group
             cached["ts_target_groups"] = now
         _name_to_group = cached["host_to_group"]
-        target_groups = sorted(
-            {_name_to_group[t] for t in (targets or []) if t in _name_to_group}
-        )
+        target_groups = sorted({_name_to_group[t] for t in (targets or []) if t in _name_to_group})
     except Exception as exc:  # noqa: BLE001
         logger.warning("target_groups_resolve_failed", error=str(exc))
 
-    # Legacy path: still allow sync execution for tests / debugging.
+    # S-P2-11 (V12): the legacy sync path runs the full subgraph inline in
+    # the HTTP request (up to 30min) -- restrict it to admin-only and audit
+    # it, so an analyst cannot tie up a worker thread by accident.
     if sync or body.get("sync"):
+        if current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="sync 执行仅限 admin（调试用）")
+        await get_audit_logger().log(
+            event_id="",
+            node="vulnscan.router",
+            action="vulnscan_sync_exec",
+            actor=current_user.username,
+            details={"targets": targets, "engine": engine},
+        )
         task_id = str(uuid.uuid4())
         await run_vulnscan(
             source=source,
@@ -171,6 +200,7 @@ async def api_create_task(
             nuclei_tags=body.get("nuclei_tags", []),
             nuclei_templates=body.get("nuclei_templates", []),
             nuclei_timeout_sec=int(body.get("nuclei_timeout_sec", 0) or 0),
+            nuclei_ports=body.get("nuclei_ports", []),
             target_groups=target_groups,
         )
         return {
@@ -192,6 +222,7 @@ async def api_create_task(
         nuclei_tags=body.get("nuclei_tags", []),
         nuclei_templates=body.get("nuclei_templates", []),
         nuclei_timeout_sec=int(body.get("nuclei_timeout_sec", 0) or 0),
+        nuclei_ports=body.get("nuclei_ports", []),
         target_groups=target_groups,
         actor=current_user.username,
     )
@@ -206,14 +237,95 @@ async def api_create_task(
     return {"task_id": envelope.task_id, "status": "queued", "engine": engine}
 
 
+class _BatchDeleteRequest(_PydanticBaseModel):
+    task_ids: list[str]
+
+
+@router.post("/tasks/batch-delete")
+async def api_batch_delete_tasks(
+    req: _BatchDeleteRequest,
+    current_user=Depends(require_role("admin", "analyst")),
+):
+    """批量删除扫描任务记录及其关联数据（results/vulns/report）。
+
+    对每个 task_id 独立处理：不存在记入 not_found，异常记入 failed，不阻断
+    其余删除。返回 {deleted, not_found, failed}。
+    """
+    if not req.task_ids:
+        raise HTTPException(status_code=422, detail="task_ids 不能为空")
+    store = get_vulnscan_store()
+    deleted = 0
+    not_found: list[str] = []
+    failed: list[str] = []
+    for tid in req.task_ids:
+        try:
+            if not await store.get_task(tid):
+                not_found.append(tid)
+                continue
+            await store.delete_task(tid)
+            deleted += 1
+        except Exception as exc:
+            logger.warning("batch_delete_task_failed", task_id=tid, error=str(exc))
+            failed.append(tid)
+    await get_audit_logger().log(
+        event_id="vulnscan",
+        node="vulnscan.router",
+        action="batch_delete_tasks",
+        actor=current_user.username,
+        details={
+            "deleted": deleted,
+            "not_found": len(not_found),
+            "failed": len(failed),
+            "requested": len(req.task_ids),
+        },
+    )
+    return {"deleted": deleted, "not_found": not_found, "failed": failed}
+
+
 @router.get("/tasks", response_model=_TaskListResponse)
 async def api_list_tasks(
     status: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     current_user=Depends(require_role("admin", "analyst")),
 ):
     store = get_vulnscan_store()
-    tasks = await store.list_tasks(status=status)
-    return {"items": [t.model_dump() for t in tasks]}
+    # V12 5.8 (2026-08-02): the endpoint used to call list_tasks with no
+    # limit, silently truncating the task list at the store's default 50 --
+    # the frontend paginated a 3-page subset of the real task set. Now we
+    # page server-side and return the true total.
+    tasks = await store.list_tasks(status=status, limit=page_size, offset=(page - 1) * page_size)
+    total = await store.count_tasks(status=status)
+    return {
+        "items": [t.model_dump() for t in tasks],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+@router.get("/tasks/{task_id}/findings")
+async def api_task_findings(
+    task_id: str,
+    current_user=Depends(require_role("admin", "analyst", "viewer")),
+):
+    """Return THIS task's raw scan findings from the results index.
+
+    V12 5.7 (2026-08-02, 问题1 修复): the monitor page used to call
+    ``/vulnscan/results?task_id=`` which -- despite the name -- queried the
+    vulns index. The reconcile merge no longer overwrites ``task_id``, but
+    a task whose findings were merged into an OLDER record still won't show
+    them via the vulns index. The results index is the authoritative
+    per-task record of what THIS scan found, so the monitor page reads from
+    it directly. Findings are flattened across batches, ts-ascending.
+    """
+    store = get_vulnscan_store()
+    results = await store.list_results(task_id)
+    findings: list[dict] = []
+    for r in results:
+        for f in r.findings:
+            findings.append(f.model_dump())
+    return {"items": findings, "total": len(findings)}
 
 
 @router.get("/tasks/{task_id}")
@@ -230,11 +342,7 @@ async def api_get_task(
         # Fall back to the side-channel; covers the brief window between
         # enqueue and the subgraph\'s first ES write.
         try:
-            r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
-            try:
-                payload = await r.get(status_key(task_id))
-            finally:
-                await r.aclose()
+            payload = await _get_redis().get(status_key(task_id))
             if payload:
                 data = json.loads(payload)
                 return {
@@ -320,81 +428,78 @@ async def api_cancel_task(task_id: str, current_user=Depends(require_role("admin
     """Cancel queued or running work and notify every assigned Agent."""
     store = get_vulnscan_store()
     task = await store.get_task(task_id)
-    redis = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    redis = _get_redis()
     queue_state: dict = {}
     sent = 0
     failed = 0
     now = datetime.now(UTC).isoformat()
 
-    try:
-        if task is None:
-            raw = await redis.get(status_key(task_id))
-            if raw:
-                queue_state = json.loads(raw)
-            else:
-                raise HTTPException(status_code=404, detail="Task not found")
+    if task is None:
+        raw = await redis.get(status_key(task_id))
+        if raw:
+            queue_state = json.loads(raw)
+        else:
+            raise HTTPException(status_code=404, detail="Task not found")
 
-        current_status = task.status if task is not None else queue_state.get("status", "queued")
-        if current_status == "cancelled":
-            return {"status": "cancelled", "sent": 0, "failed": 0}
-        if current_status in ("completed", "failed"):
-            raise HTTPException(status_code=409, detail=f"Task is already {current_status}")
+    current_status = task.status if task is not None else queue_state.get("status", "queued")
+    if current_status == "cancelled":
+        return {"status": "cancelled", "sent": 0, "failed": 0}
+    if current_status in ("completed", "failed"):
+        raise HTTPException(status_code=409, detail=f"Task is already {current_status}")
 
-        await redis.set(
-            cancel_key(task_id),
-            json.dumps({"actor": current_user.username, "cancelled_at": now}),
-            ex=CANCEL_TTL_SEC,
-        )
+    await redis.set(
+        cancel_key(task_id),
+        json.dumps({"actor": current_user.username, "cancelled_at": now}),
+        ex=CANCEL_TTL_SEC,
+    )
 
-        if task is not None:
-            await store.update_task(task_id, status="cancelling")
-            agent_ids = list(dict.fromkeys(task.targets))
-            if agent_ids:
-                from src.agents.ws_gateway import get_agent_gateway
+    if task is not None:
+        await store.update_task(task_id, status="cancelling")
+        agent_ids = list(dict.fromkeys(task.targets))
+        if agent_ids:
+            from src.agents.ws_gateway import get_agent_gateway
 
-                result = await get_agent_gateway().broadcast(
-                    agent_ids,
-                    {
-                        "v": 1,
-                        "type": "scan_cancel",
-                        "ts": now,
-                        "payload": {"task_id": task_id},
-                    },
-                )
-                sent = int(result.get("sent", 0))
-                failed = int(result.get("failed", 0))
-            await store.update_task(
-                task_id,
-                status="cancelled",
-                error=f"Cancelled by {current_user.username}",
-                finished_at=now,
-            )
-
-        side_channel = {
-            **queue_state,
-            "status": "cancelled",
-            "cancelled_at": now,
-            "actor": current_user.username,
-        }
-        await redis.set(
-            status_key(task_id),
-            json.dumps(side_channel, ensure_ascii=False),
-            ex=STATUS_TTL_SEC,
-        )
-        await redis.publish(
-            f"vulnscan:task:{task_id}",
-            json.dumps(
+            result = await get_agent_gateway().broadcast(
+                agent_ids,
                 {
-                    "type": "task_done",
-                    "task_id": task_id,
-                    "status": "cancelled",
-                    "message": "Scan cancelled by operator",
+                    "v": 1,
+                    "type": "scan_cancel",
+                    "ts": now,
+                    "payload": {"task_id": task_id},
                 },
-                ensure_ascii=False,
-            ),
+            )
+            sent = int(result.get("sent", 0))
+            failed = int(result.get("failed", 0))
+        await store.update_task(
+            task_id,
+            status="cancelled",
+            error=f"Cancelled by {current_user.username}",
+            finished_at=now,
         )
-    finally:
-        await redis.aclose()
+
+    side_channel = {
+        **queue_state,
+        "status": "cancelled",
+        "cancelled_at": now,
+        "actor": current_user.username,
+    }
+    await redis.set(
+        status_key(task_id),
+        json.dumps(side_channel, ensure_ascii=False),
+        ex=STATUS_TTL_SEC,
+    )
+    await redis.publish(
+        f"vulnscan:task:{task_id}",
+        json.dumps(
+            {
+                "type": "task_done",
+                "task_id": task_id,
+                "status": "cancelled",
+                "message": "Scan cancelled by operator",
+            },
+            ensure_ascii=False,
+        ),
+    )
 
     await get_audit_logger().log(
         event_id=task_id,
@@ -467,23 +572,27 @@ async def api_list_results(
     # V10 阶段 1.1: build one VulnFilter dataclass from query params.
     # Generous limit for the group view so realistic groups are not
     # truncated; full pagination is a separate follow-up.
-    findings = await store.list_vulns(
-        VulnFilter(
-            task_id=task_id,
-            hostname=hostname,
-            hostnames=hostname_terms,
-            severity=severity,
-            status=status,
-            cve=cve,
-            cve_keyword=cve_keyword,
-            hostname_keyword=hostname_keyword,
-            name_keyword=name_keyword,
-            ai_processed=ai_processed,
-            date_from=date_from,
-            date_to=date_to,
-            limit=2000 if group else 200,
+    try:
+        findings = await store.list_vulns(
+            VulnFilter(
+                task_id=task_id,
+                hostname=hostname,
+                hostnames=hostname_terms,
+                severity=severity,
+                status=status,
+                cve=cve,
+                cve_keyword=cve_keyword,
+                hostname_keyword=hostname_keyword,
+                name_keyword=name_keyword,
+                ai_processed=ai_processed,
+                date_from=date_from,
+                date_to=date_to,
+                limit=2000 if group else 200,
+            )
         )
-    )
+    except ValueError as exc:
+        # V12 阶段 5.5: overlong keyword -> 422, not ES 400 -> our 500.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"items": [f.model_dump() for f in findings]}
 
 
@@ -759,12 +868,14 @@ async def api_host_stats(current_user=Depends(require_role("admin", "analyst", "
             "by_severity": {},
         }
     for v in all_vulns:
-        g = host_to_group.get(v.hostname or "")
-        if g is None or g not in groups_by_name:
+        group_name = host_to_group.get(v.hostname or "")
+        if group_name is None or group_name not in groups_by_name:
             continue
         sev = v.ai_severity or v.severity or "info"
-        groups_by_name[g]["total"] += 1
-        groups_by_name[g]["by_severity"][sev] = groups_by_name[g]["by_severity"].get(sev, 0) + 1
+        groups_by_name[group_name]["total"] += 1
+        groups_by_name[group_name]["by_severity"][sev] = (
+            groups_by_name[group_name]["by_severity"].get(sev, 0) + 1
+        )
 
     out = [{"group": name, **stats} for name, stats in groups_by_name.items()]
 
@@ -779,12 +890,9 @@ async def api_host_stats(current_user=Depends(require_role("admin", "analyst", "
 @router.get("/queue/stats")
 async def api_queue_stats(current_user=Depends(require_role("admin", "analyst"))):
     """Return queue depth and pending counts. Diagnostic only."""
-    r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
-    try:
-        depth = await stream_depth(r)
-        pending = await pending_count(r)
-    finally:
-        await r.aclose()
+    r = _get_redis()
+    depth = await stream_depth(r)
+    pending = await pending_count(r)
     return {"depth": depth, "pending": pending}
 
 
@@ -792,13 +900,9 @@ async def api_queue_stats(current_user=Depends(require_role("admin", "analyst"))
 async def api_queue_status(task_id: str, current_user=Depends(require_role("admin", "analyst"))):
     """Read the short-lived side-channel status. Useful when the canonical
     ES record hasn\'t been written yet."""
-    r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
-    try:
-        import json
+    import json
 
-        raw = await r.get(f"vulnscan:queue:status:{task_id}")
-    finally:
-        await r.aclose()
+    raw = await _get_redis().get(f"vulnscan:queue:status:{task_id}")
     if not raw:
         raise HTTPException(status_code=404, detail="No queue status for task")
     return json.loads(raw)

@@ -5,6 +5,7 @@ Detection: single selection block + condition: selection.
 Operators: gte / lte / gt / lt / eq / neq / contains / startswith.
 Field paths: dotted notation (data.srcip).
 """
+
 import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -82,7 +83,7 @@ class SigmaRule:
     detection_fields: list = field(default_factory=list)
     selection: list = field(default_factory=list)
     tags: list = field(default_factory=list)
-    source_path: str = field(default=None)
+    source_path: str | None = field(default=None)
 
     def __repr__(self):
         return "SigmaRule(id=" + repr(self.rule_id) + ", level=" + repr(self.level) + ")"
@@ -122,10 +123,14 @@ def _compare(actual, op, expected):
     if op in (Operator.GT, Operator.GTE, Operator.LT, Operator.LTE):
         a, b = _coerce(actual), _coerce(expected)
         try:
-            if op is Operator.GT: return a > b
-            if op is Operator.GTE: return a >= b
-            if op is Operator.LT: return a < b
-            if op is Operator.LTE: return a <= b
+            if op is Operator.GT:
+                return a > b
+            if op is Operator.GTE:
+                return a >= b
+            if op is Operator.LT:
+                return a < b
+            if op is Operator.LTE:
+                return a <= b
         except TypeError:
             return False
     # Sigma spec: contains/startswith are case-insensitive string matchers.
@@ -189,21 +194,20 @@ def parse_sigma_dict(data, source_path=None):
     condition = detection.get("condition") or "selection"
     if condition != "selection" and not condition.startswith("1 of "):
         raise ValueError(
-            "unsupported Sigma condition: " + repr(condition) + " (MVP supports only selection and 1 of selection_)"
+            "unsupported Sigma condition: "
+            + repr(condition)
+            + " (MVP supports only selection and 1 of selection_)"
         )
     if condition.startswith("1 of "):
-        prefix = condition[len("1 of "):].strip()
+        prefix = condition[len("1 of ") :].strip()
         keys = [k for k in selection.keys() if k.startswith(prefix)]
         if not keys:
             raise ValueError("1-of condition " + repr(condition) + " matches no selections")
         pred_lists = [
-            [FieldPredicate.from_yaml(k2, v2) for k2, v2 in selection[k].items()]
-            for k in keys
+            [FieldPredicate.from_yaml(k2, v2) for k2, v2 in selection[k].items()] for k in keys
         ]
     else:
-        pred_lists = [
-            [FieldPredicate.from_yaml(k, v) for k, v in selection.items()]
-        ]
+        pred_lists = [[FieldPredicate.from_yaml(k, v) for k, v in selection.items()]]
     fields = data.get("fields") or []
     if isinstance(fields, str):
         fields = [fields]

@@ -1,4 +1,4 @@
-﻿"""hitl_handler.py — HITL approval workflow backed by Redis ApprovalStore."""
+"""hitl_handler.py — HITL approval workflow backed by Redis ApprovalStore."""
 
 import uuid
 from typing import Any
@@ -28,7 +28,9 @@ _REQUIRED_APPROVERS: dict[str, int] = {
 # ── Backward-compatible wrappers over ApprovalStore ──────────
 
 
-async def _add_pending_approval(approval_id: str, event_id: str, level: str, n_required: int = 1) -> None:
+async def _add_pending_approval(
+    approval_id: str, event_id: str, level: str, n_required: int = 1
+) -> None:
     store = get_approval_store()
     await store.create(approval_id, event_id, level, n_required)
 
@@ -108,7 +110,11 @@ async def hitl_approval_node(state: ResponderSubState) -> dict[str, Any]:
     logger.info("hitl_pending", approval_id=approval_id, event_id=state["event_id"], level=level)
 
     result = await store.wait_result(approval_id, timeout_sec)
-    status = "approved" if result == "approved" else ("rejected" if result in ("rejected", "timeout") else result)
+    status = (
+        "approved"
+        if result == "approved"
+        else ("rejected" if result in ("rejected", "timeout") else result)
+    )
     return {"approval_id": approval_id, "approval_status": status}
 
 
@@ -121,6 +127,7 @@ async def execute_response_node(state: ResponderSubState) -> dict[str, Any]:
     playbook = state.get("playbook_draft") or {}
 
     from src.execution.actions import ActionContext, ActionDispatcher
+
     settings = get_settings()
     ctx = ActionContext(
         event_id=state["event_id"],
@@ -133,6 +140,7 @@ async def execute_response_node(state: ResponderSubState) -> dict[str, Any]:
 
     try:
         from src.common.audit.audit_logger import get_audit_logger
+
         await get_audit_logger().log(
             event_id=state["event_id"],
             node="responder_execute",
@@ -148,7 +156,9 @@ async def execute_response_node(state: ResponderSubState) -> dict[str, Any]:
 
     return {
         "execution_result": {
-            "status": "completed" if all(r["status"] in ("success", "dry_run") for r in results) else "partial",
+            "status": "completed"
+            if all(r["status"] in ("success", "dry_run") for r in results)
+            else "partial",
             "executed_operations": results,
             "approval_id": state.get("approval_id"),
         }
@@ -161,6 +171,7 @@ async def reject_response_node(state: ResponderSubState) -> dict[str, Any]:
 
     try:
         from src.common.audit.audit_logger import get_audit_logger
+
         await get_audit_logger().log(
             event_id=state["event_id"],
             node="responder_reject",

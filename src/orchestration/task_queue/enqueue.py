@@ -12,7 +12,7 @@ import socket
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import redis.asyncio as aioredis
 
@@ -46,12 +46,17 @@ class TaskEnvelope:
     targets: list[str] = field(default_factory=list)
     modules: list[str] = field(default_factory=lambda: ["sys_vuln", "baseline"])
     engine: str = "matcher"
+    nuclei_ports: list[int] = field(default_factory=list)
     nuclei_severity: list[str] = field(default_factory=list)
     nuclei_tags: list[str] = field(default_factory=list)
     nuclei_templates: list[str] = field(default_factory=list)
     nuclei_timeout_sec: int = 0
     actor: str = ""
     submitted_at: str = ""
+    # 2026-07-29 UX upgrade: business groups for the targets, computed
+    # by the API router at enqueue time and persisted with the task so
+    # /tasks list can render the column without joining hosts.
+    target_groups: list[str] = field(default_factory=list)
     submitted_by: str = ""  # hostname of the API worker that enqueued
 
     def to_json(self) -> str:
@@ -84,11 +89,16 @@ async def enqueue_task(
     modules: list[str] | None = None,
     engine: str = "matcher",
     nuclei_severity: list[str] | None = None,
+    nuclei_ports: list[int] | None = None,
     nuclei_tags: list[str] | None = None,
     nuclei_templates: list[str] | None = None,
     nuclei_timeout_sec: int = 0,
     actor: str = "",
     task_id: str | None = None,
+    # 2026-07-29 UX upgrade: business groups for the targets, computed
+    # at enqueue time and persisted on the ScanTask so /tasks list
+    # can render the column without a host join.
+    target_groups: list[str] | None = None,
 ) -> TaskEnvelope:
     """Push a task envelope onto the Redis Stream and return it.
 
@@ -113,6 +123,8 @@ async def enqueue_task(
         actor=actor,
         submitted_at=datetime.now(UTC).isoformat(),
         submitted_by=socket.gethostname(),
+        nuclei_ports=nuclei_ports or [],
+        target_groups=list(target_groups or []),
     )
 
     settings = get_settings()
@@ -129,7 +141,9 @@ async def enqueue_task(
         # runaway producer (or a paused worker that keeps accumulating) does
         # not OOM Redis. The approximate trim (~) is O(1) and good enough
         # for back-pressure on a long-lived stream.
-        await redis.xadd(STREAM_TASKS, payload, maxlen=10_000, approximate=True)
+        # cast: dict is invariant in its key/value types, but redis accepts any
+        # str/int key and str/int/float/bytes value -- widen for mypy only.
+        await redis.xadd(STREAM_TASKS, cast(dict, payload), maxlen=10_000, approximate=True)
         # Side-channel status. Best-effort: if Redis is down, the user
         # still gets the task_id and the worker will recover via ES.
         try:

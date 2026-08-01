@@ -11,12 +11,22 @@ from src.orchestration.subgraphs.responder.playbook_matcher import playbook_matc
 async def test_rule_match_returns_yaml_playbook(monkeypatch):
     from src.orchestration.subgraphs.responder import playbook_matcher as pm
 
-    monkeypatch.setattr(pm, "_load_playbooks", lambda: [{
-        "playbook_id": "test_pb",
-        "description": "test playbook",
-        "trigger": {"verdict": "true_positive", "confidence_min": 0.8, "event_tags": ["vulnerability"]},
-        "operations": [{"type": "notify", "level": "L1", "params": {}}],
-    }])
+    monkeypatch.setattr(
+        pm,
+        "_load_playbooks",
+        lambda: [
+            {
+                "playbook_id": "test_pb",
+                "description": "test playbook",
+                "trigger": {
+                    "verdict": "true_positive",
+                    "confidence_min": 0.8,
+                    "event_tags": ["vulnerability"],
+                },
+                "operations": [{"type": "notify", "level": "L1", "params": {}}],
+            }
+        ],
+    )
     state = {
         "verdict": "true_positive",
         "confidence": 0.9,

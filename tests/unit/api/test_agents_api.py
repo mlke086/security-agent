@@ -402,8 +402,13 @@ class TestInstall:
             "install.sh should call install_nuclei() (P0 step 6)")
         assert "/opt/secagent/bin/nuclei" in script, (
             "nuclei binary should land at /opt/secagent/bin/nuclei")
-        assert "projectdiscovery/nuclei" in script, (
-            "nuclei should be downloaded from the official GitHub release")
+        # nuclei is pulled from the Nacos-configured internal mirror, not
+        # GitHub -- since 2026-07-31 the mirror also serves the templates zip.
+        from src.common.config.settings import get_settings
+
+        mirror = get_settings().nuclei_download_base_url.rstrip("/")
+        assert mirror in script, (
+            "nuclei should be downloaded from the configured internal mirror")
         # Best-effort: failure paths must NOT contain 'exit 1' that would
         # abort the whole install.
         assert "install_nuclei || true" in script

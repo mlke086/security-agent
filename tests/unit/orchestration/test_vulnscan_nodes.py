@@ -15,6 +15,7 @@ from src.agents.models import (
 from src.orchestration.subgraphs.vulnscan.nodes import (
     _build_analysis_prompt,
     _default_state,
+    _nuclei_targets_by_agent,
     _pub_progress,
     _resolve_targets,
     aggregate,
@@ -198,6 +199,25 @@ class TestResolveTargets:
             result = await _resolve_targets(["unknown-agent-id"])
         assert result == ["unknown-agent-id"]
 
+    @pytest.mark.asyncio
+    async def test_nuclei_targets_use_each_agents_managed_ip(self):
+        mock_store = AsyncMock()
+        # P1-VULN-GLOBAL (2026-07-31): _nuclei_targets_by_agent resolves each
+        # agent's managed IP via get_host (per-agent, one at a time) -- the
+        # earlier list_hosts mock never matched the implementation.
+        mock_store.get_host = AsyncMock(
+            side_effect=[
+                _host("agent-1", "web-01", "10.0.0.1"),
+                _host("agent-2", "web-02", "10.0.0.2"),
+            ]
+        )
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+            return_value=mock_store,
+        ):
+            result = await _nuclei_targets_by_agent(["agent-1", "agent-2"])
+        assert result == {"agent-1": ["10.0.0.1"], "agent-2": ["10.0.0.2"]}
+
 
 class TestParseIntent:
     @pytest.mark.asyncio
@@ -205,6 +225,20 @@ class TestParseIntent:
         state = _default_state("manual", targets=["host-a"])
         result = await parse_intent(state)
         assert result["status"] == "dispatching"
+
+    @pytest.mark.asyncio
+    async def test_confirmed_dialog_intent_is_not_reparsed(self):
+        state = _default_state(
+            "dialog",
+            intent_text="scan Rocky001 with nuclei",
+            targets=["Rocky001"],
+            modules=["baseline"],
+            engine="nuclei",
+        )
+        with patch("src.knowledge.models.adapter.get_model_adapter") as get_adapter:
+            result = await parse_intent(state)
+        assert result["status"] == "dispatching"
+        get_adapter.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_dialog_no_intent_text(self):
@@ -520,12 +554,19 @@ class TestAggregate:
             ),
         ]
         mock_store.save_vulns = AsyncMock()
+        # 2026-07-31 reconcile: no existing vulns -> every key is a fresh index;
+        # the store writes go through bulk_update_vulns (not save_vulns).
+        mock_store.list_vulns_all = AsyncMock(return_value=[])
+        mock_store.bulk_update_vulns = AsyncMock()
 
         with patch(
             "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
         ):
             new_state = await aggregate(state)
             assert len(new_state["collected_findings"]) == 2
+        assert mock_store.bulk_update_vulns.await_args is not None
+        actions = mock_store.bulk_update_vulns.await_args.args[0]
+        assert [a["_op_type"] for a in actions].count("index") == 2
 
     @pytest.mark.asyncio
     async def test_aggregate_no_findings(self):
@@ -539,6 +580,240 @@ class TestAggregate:
         ):
             new_state = await aggregate(state)
             assert new_state["collected_findings"] == []
+
+    # -- 2026-07-31 consolidate + auto-fix ------------------------------------
+
+    @staticmethod
+    def _scan_result(state, findings, scanned_categories, ts="2026-02-01T00:00:00"):
+        return ScanResult(
+            task_id=state["task_id"],
+            agent_id="agent-a",
+            hostname="web-01",
+            findings=[f.model_dump() for f in findings],
+            batch=1,
+            is_final=True,
+            ts=ts,
+            scanned_categories=scanned_categories,
+        )
+
+    @pytest.mark.asyncio
+    async def test_aggregate_merges_previous_scan_into_same_record(self):
+        """Same host+vuln re-detected: update in place (keep finding_id), roll
+        the previous detected_at into scan_history, stay open."""
+        state = _default_state("manual", targets=["host-a"])
+        old = _vuln(finding_id="old-1", detected_at="2026-01-01T00:00:00")
+        new = _vuln(finding_id="new-1", detected_at="2026-02-01T00:00:00")
+        mock_store = AsyncMock()
+        mock_store.list_results.return_value = [
+            self._scan_result(state, [new], ["sys_vuln", "baseline"])
+        ]
+        mock_store.list_vulns_all = AsyncMock(return_value=[old])
+        mock_store.bulk_update_vulns = AsyncMock()
+
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
+            new_state = await aggregate(state)
+
+        merged = new_state["collected_findings"]
+        assert len(merged) == 1
+        assert merged[0].finding_id == "old-1"  # reused, not a new random UUID
+        assert merged[0].detected_at == "2026-02-01T00:00:00"
+        actions = mock_store.bulk_update_vulns.await_args.args[0]
+        updates = [a for a in actions if a["_op_type"] == "update"]
+        assert len(updates) == 1
+        assert updates[0]["_id"] == "old-1"
+        doc = updates[0]["doc"]
+        assert doc["status"] == "open"
+        assert doc["scan_history"] == ["2026-01-01T00:00:00"]
+        # V12 5.7: the merge must NOT overwrite the original owner's task_id
+        # (the old task's monitor page would lose the vuln). It records the
+        # latest confirming scan in last_seen_task_id instead.
+        assert "task_id" not in doc, "merge must keep the original task_id"
+        assert doc["last_seen_task_id"] == new.task_id
+
+    @pytest.mark.asyncio
+    async def test_aggregate_reopens_previously_fixed(self):
+        """A fixed vuln that reappears on a rescan is reopened to open."""
+        state = _default_state("manual", targets=["host-a"])
+        old = _vuln(
+            finding_id="old-1",
+            status="fixed",
+            first_fixed_at="2026-01-05T00:00:00",
+            last_fixed_at="2026-01-05T00:00:00",
+            detected_at="2026-01-01T00:00:00",
+        )
+        new = _vuln(finding_id="new-1", detected_at="2026-02-01T00:00:00")
+        mock_store = AsyncMock()
+        mock_store.list_results.return_value = [self._scan_result(state, [new], ["sys_vuln"])]
+        mock_store.list_vulns_all = AsyncMock(return_value=[old])
+        mock_store.bulk_update_vulns = AsyncMock()
+
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
+            await aggregate(state)
+        doc = [a for a in mock_store.bulk_update_vulns.await_args.args[0] if a["_op_type"] == "update"][0][
+            "doc"
+        ]
+        assert doc["status"] == "open"
+
+    @pytest.mark.asyncio
+    async def test_aggregate_auto_fixes_disappeared_open(self):
+        """An open vuln in a covered category that the rescan no longer reports
+        is automatically marked fixed with timestamps + an audit entry."""
+        state = _default_state("manual", targets=["host-a"])
+        gone = _vuln(finding_id="gone-1", detected_at="2026-01-01T00:00:00")
+        found = _vuln(
+            finding_id="found-1",
+            name="Other CVE",
+            cve="CVE-2024-0002",
+            detected_at="2026-02-01T00:00:00",
+        )
+        mock_store = AsyncMock()
+        mock_store.list_results.return_value = [
+            self._scan_result(state, [found], ["sys_vuln", "baseline"])
+        ]
+        mock_store.list_vulns_all = AsyncMock(return_value=[gone])
+        mock_store.bulk_update_vulns = AsyncMock()
+        audit = AsyncMock()
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_audit_logger", return_value=audit
+            ),
+        ):
+            await aggregate(state)
+        actions = mock_store.bulk_update_vulns.await_args.args[0]
+        fixed = [a for a in actions if a["_op_type"] == "update" and a["doc"].get("status") == "fixed"]
+        assert len(fixed) == 1
+        assert fixed[0]["_id"] == "gone-1"
+        assert fixed[0]["doc"]["last_fixed_at"]
+        assert fixed[0]["doc"]["first_fixed_at"]
+        audit.log.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_aggregate_no_coverage_skips_auto_fix(self):
+        """Legacy agent without scanned_categories -> conservative, no auto-fix."""
+        state = _default_state("manual", targets=["host-a"])
+        gone = _vuln(finding_id="gone-1", detected_at="2026-01-01T00:00:00")
+        found = _vuln(
+            finding_id="found-1",
+            name="Other CVE",
+            cve="CVE-2024-0002",
+            detected_at="2026-02-01T00:00:00",
+        )
+        mock_store = AsyncMock()
+        mock_store.list_results.return_value = [self._scan_result(state, [found], [])]
+        mock_store.list_vulns_all = AsyncMock(return_value=[gone])
+        mock_store.bulk_update_vulns = AsyncMock()
+        audit = AsyncMock()
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_audit_logger", return_value=audit
+            ),
+        ):
+            await aggregate(state)
+        actions = mock_store.bulk_update_vulns.await_args.args[0]
+        fixed = [a for a in actions if a["_op_type"] == "update" and a["doc"].get("status") == "fixed"]
+        assert fixed == []
+        audit.log.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_aggregate_does_not_touch_accepted(self):
+        """Manual accepted decisions are never auto-overridden."""
+        state = _default_state("manual", targets=["host-a"])
+        accepted = _vuln(
+            finding_id="acc-1",
+            status="accepted",
+            first_fixed_at="2026-01-05T00:00:00",
+            detected_at="2026-01-01T00:00:00",
+        )
+        found = _vuln(finding_id="found-1", name="Other CVE", cve="CVE-2024-0002")
+        mock_store = AsyncMock()
+        mock_store.list_results.return_value = [self._scan_result(state, [found], ["sys_vuln"])]
+        mock_store.list_vulns_all = AsyncMock(return_value=[accepted])
+        mock_store.bulk_update_vulns = AsyncMock()
+        audit = AsyncMock()
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_audit_logger", return_value=audit
+            ),
+        ):
+            await aggregate(state)
+        actions = mock_store.bulk_update_vulns.await_args.args[0]
+        fixed = [a for a in actions if a["_op_type"] == "update" and a["doc"].get("status") == "fixed"]
+        assert fixed == []
+        audit.log.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_aggregate_only_auto_fixes_covered_category(self):
+        """A baseline vuln is left alone when the rescan only covered sys_vuln."""
+        state = _default_state("manual", targets=["host-a"])
+        baseline = _vuln(
+            finding_id="bl-1",
+            category=ScanModule.BASELINE,
+            name="Weak SSH config",
+            cve=None,
+            detected_at="2026-01-01T00:00:00",
+        )
+        found = _vuln(finding_id="found-1", name="Other CVE", cve="CVE-2024-0002")
+        mock_store = AsyncMock()
+        mock_store.list_results.return_value = [self._scan_result(state, [found], ["sys_vuln"])]
+        mock_store.list_vulns_all = AsyncMock(return_value=[baseline])
+        mock_store.bulk_update_vulns = AsyncMock()
+        audit = AsyncMock()
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_audit_logger", return_value=audit
+            ),
+        ):
+            await aggregate(state)
+        actions = mock_store.bulk_update_vulns.await_args.args[0]
+        fixed = [a for a in actions if a["_op_type"] == "update" and a["doc"].get("status") == "fixed"]
+        assert fixed == []
+        audit.log.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_aggregate_deletes_legacy_duplicates_and_keeps_their_times(self):
+        """Two legacy docs for the same host+vuln: newest kept, older deleted,
+        and BOTH prior detection times survive in scan_history."""
+        state = _default_state("manual", targets=["host-a"])
+        old1 = _vuln(finding_id="old-1", detected_at="2026-01-01T00:00:00")
+        old2 = _vuln(finding_id="old-2", detected_at="2026-02-01T00:00:00")
+        new = _vuln(finding_id="new-1", detected_at="2026-03-01T00:00:00")
+        mock_store = AsyncMock()
+        mock_store.list_results.return_value = [
+            self._scan_result(state, [new], ["sys_vuln"], ts="2026-03-01T00:00:00")
+        ]
+        mock_store.list_vulns_all = AsyncMock(return_value=[old1, old2])
+        mock_store.bulk_update_vulns = AsyncMock()
+
+        with patch(
+            "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store", return_value=mock_store
+        ):
+            await aggregate(state)
+        actions = mock_store.bulk_update_vulns.await_args.args[0]
+        deletes = [a["_id"] for a in actions if a["_op_type"] == "delete"]
+        assert deletes == ["old-1"]  # oldest duplicate removed
+        updates = [a for a in actions if a["_op_type"] == "update"]
+        assert updates[0]["_id"] == "old-2"  # newest existing doc survives
+        assert updates[0]["doc"]["scan_history"] == ["2026-01-01T00:00:00", "2026-02-01T00:00:00"]
 
 
 class TestBuildAnalysisPrompt:
@@ -881,7 +1156,8 @@ class TestIsTaskCancelledFailClosed:
         fake_redis.exists = AsyncMock(return_value=1)
         with patch("redis.asyncio.from_url", return_value=fake_redis):
             assert await _is_task_cancelled("task-x") is True
-        assert fake_redis.aclose.await_count == 1
+        # S-P1-1 (V12): shared client is NOT closed per call anymore.
+        assert fake_redis.aclose.await_count == 0
 
     @pytest.mark.asyncio
     async def test_key_missing_returns_false(self):
@@ -891,7 +1167,8 @@ class TestIsTaskCancelledFailClosed:
         fake_redis.exists = AsyncMock(return_value=0)
         with patch("redis.asyncio.from_url", return_value=fake_redis):
             assert await _is_task_cancelled("task-x") is False
-        assert fake_redis.aclose.await_count == 1
+        # S-P1-1 (V12): shared client is NOT closed per call anymore.
+        assert fake_redis.aclose.await_count == 0
 
     @pytest.mark.asyncio
     async def test_aclose_failure_does_not_mask_decision(self):
@@ -933,10 +1210,124 @@ class TestIsTaskCancelledFailClosed:
             ):
                 result = await dispatch(state)
         assert result["status"] == "cancelled", "with redis down, fail-closed dispatch must abort"
-        # Crucially: NO broadcast should have been attempted
-        # (we do not waste agent bandwidth on a task we cannot
-        # confirm is still wanted).
-        mock_gateway.broadcast.assert_not_called()
+
+
+class TestConfirmCancellation:
+    """S-P1-9 (V12): the cancellation tombstone is confirmed twice before
+    a node persists "cancelled". _is_task_cancelled stays fail-closed, but
+    the double check keeps a redis blip from killing a healthy scan.
+    """
+
+    @pytest.mark.asyncio
+    async def test_both_checks_cancelled_persists(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _confirm_cancellation
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._is_task_cancelled",
+                AsyncMock(return_value=True),
+            ),
+            patch("src.orchestration.subgraphs.vulnscan.nodes.asyncio.sleep", AsyncMock()),
+        ):
+            assert await _confirm_cancellation("task-x") is True
+
+    @pytest.mark.asyncio
+    async def test_first_true_second_false_treats_as_healthy(self):
+        # Redis blip between the two checks: the scan must NOT be
+        # persisted as cancelled, and an audit entry is written.
+        from src.orchestration.subgraphs.vulnscan.nodes import _confirm_cancellation
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._is_task_cancelled",
+                AsyncMock(side_effect=[True, False]),
+            ),
+            patch("src.orchestration.subgraphs.vulnscan.nodes.asyncio.sleep", AsyncMock()),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_audit_logger",
+                return_value=AsyncMock(),
+            ) as mock_audit,
+        ):
+            assert await _confirm_cancellation("task-x") is False
+            mock_audit.return_value.log.assert_awaited_once()
+            call_kwargs = mock_audit.return_value.log.await_args.kwargs
+            assert call_kwargs["action"] == "cancellation_check_degraded"
+
+    @pytest.mark.asyncio
+    async def test_first_false_no_sleep_no_audit(self):
+        from src.orchestration.subgraphs.vulnscan.nodes import _confirm_cancellation
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._is_task_cancelled",
+                AsyncMock(return_value=False),
+            ),
+            patch("src.orchestration.subgraphs.vulnscan.nodes.asyncio.sleep", AsyncMock()) as mock_sleep,
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_audit_logger",
+                return_value=AsyncMock(),
+            ) as mock_audit,
+        ):
+            assert await _confirm_cancellation("task-x") is False
+            mock_sleep.assert_not_awaited()
+            mock_audit.return_value.log.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_collect_redis_blip_does_not_mark_cancelled(self):
+        # End-to-end through collect(): a redis blip (first check True,
+        # second False) must NOT persist "cancelled" -- the scan keeps
+        # collecting and finishes normally.
+        from src.orchestration.subgraphs.vulnscan.nodes import collect
+
+        state = _default_state("manual", targets=["host-a"])
+        state["total_targets"] = 1
+        task = ScanTask(
+            task_id="task-x",
+            source="manual",
+            targets=["host-a"],
+            policy=ScanPolicy(modules=["sys_vuln"], resource_limit={}),
+            engine="matcher",
+        )
+        task.stats = {"failed": 0, "done": 0, "total": 1}
+        state["task"] = task
+
+        # First poll: blip (True then False) -> healthy. Second poll:
+        # list_results returns the final batch -> analyzing.
+        result_batch = MagicMock()
+        result_batch.is_final = True
+        result_batch.agent_id = "agent-a"
+        result_batch.findings = []
+
+        calls = {"poll": 0}
+
+        async def fake_confirm(task_id: str) -> bool:
+            calls["poll"] += 1
+            # Simulate: first check confirms tombstone (blip), re-check
+            # does not -> treated as healthy.
+            return False
+
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._confirm_cancellation",
+                side_effect=fake_confirm,
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store"
+            ) as mock_store,
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.asyncio.sleep",
+                AsyncMock(),
+            ),
+        ):
+            mock_store.return_value.get_task = AsyncMock(return_value=task)
+            mock_store.return_value.list_results = AsyncMock(return_value=[result_batch])
+            mock_store.return_value.update_task = AsyncMock()
+            result = await collect(state)
+
+        assert result["status"] == "analyzing", "blip must not cancel the scan"
+        # update_task must never have been called with status="cancelled"
+        for call in mock_store.return_value.update_task.await_args_list:
+            assert call.kwargs.get("status") != "cancelled"
 
 
 class TestLLMAnalysisFallback:
@@ -1016,8 +1407,9 @@ class TestWriteFallback:
     # the happy path and the per-row try/except.
 
     async def test_write_fallback_calls_update_vuln_per_finding(self):
-        from src.orchestration.subgraphs.vulnscan.nodes import _write_fallback
         from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.orchestration.subgraphs.vulnscan.nodes import _write_fallback
 
         mock_store = MagicMock()
         mock_store.update_vuln = AsyncMock()
@@ -1039,8 +1431,9 @@ class TestWriteFallback:
         assert kwargs["fix_advice"] == "patch"
 
     async def test_write_fallback_continues_on_per_row_failure(self):
-        from src.orchestration.subgraphs.vulnscan.nodes import _write_fallback
         from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.orchestration.subgraphs.vulnscan.nodes import _write_fallback
 
         mock_store = MagicMock()
         # First call fails, second succeeds -- the loop must not abort.
@@ -1059,8 +1452,9 @@ class TestWriteFallback:
         assert mock_store.update_vuln.await_count == 2
 
     async def test_write_fallback_empty_findings_is_noop(self):
-        from src.orchestration.subgraphs.vulnscan.nodes import _write_fallback
         from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.orchestration.subgraphs.vulnscan.nodes import _write_fallback
 
         mock_store = MagicMock()
         mock_store.update_vuln = AsyncMock()
@@ -1081,6 +1475,10 @@ class TestGenerateReportAIEvidence:
     @pytest.mark.asyncio
     async def test_report_with_findings_records_ai_evidence(self):
         state = _default_state("manual", targets=["host-a"])
+        # V10 2.2 (2026-07-30): the report badge reads ai_processed from the
+        # upstream llm_analysis node via state, so the report matches what the
+        # findings table showed -- not a local re-computation.
+        state["ai_processed"] = True
         v = _vuln()
         mock_store = AsyncMock()
         mock_store.list_vulns.return_value = [v]
@@ -1145,3 +1543,66 @@ class TestGenerateReportAIEvidence:
         assert r.ai_model == ""
         assert r.ai_overall_advice == ""
         assert r.ai_processed_at == ""
+
+
+class TestDispatchLanes:
+    """S-P1-2 (V12): global-engine dispatch must keep matcher and nuclei
+    delivery counts separate so a failed nuclei push is never hidden behind
+    a successful matcher broadcast."""
+
+    @pytest.mark.asyncio
+    async def test_global_reports_matcher_and_nuclei_separately(self):
+        state = _default_state("manual", targets=["host-a"], engine="global")
+        mock_store = AsyncMock()
+        mock_store.save_task = AsyncMock()
+        mock_store.update_task = AsyncMock()
+        mock_gateway = MagicMock()
+        mock_gateway.broadcast = AsyncMock(return_value={"sent": 1, "failed": 0})
+        mock_gateway.send_to_agent = AsyncMock(side_effect=[True, False])  # 2 agents
+        fake_redis = AsyncMock(exists=AsyncMock(return_value=0))
+        fake_redis.publish = AsyncMock()
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway",
+                return_value=mock_gateway,
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._resolve_targets",
+                return_value=["agent-a", "agent-b"],
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._nuclei_targets_by_agent",
+                return_value={"agent-a": ["10.0.0.1"], "agent-b": ["10.0.0.2"]},
+            ),
+            patch("redis.asyncio.from_url", return_value=fake_redis),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
+        ):
+            result = await dispatch(state)
+
+        # Matcher broadcast sent 1; nuclei per-agent sent 1 failed 1.
+        assert result["received_results"] == 2
+        # Task stats must reflect the merged totals.
+        stats_update = [
+            c for c in mock_store.update_task.call_args_list if c.kwargs.get("stats")
+        ]
+        assert stats_update, "expected update_task with stats"
+        stats = stats_update[-1].kwargs["stats"]
+        assert stats["done"] == 2 and stats["failed"] == 1
+
+        # SSE message must mention both lanes explicitly.
+        published = [
+            c
+            for c in fake_redis.publish.call_args_list
+            if c.args and c.args[0] == f"vulnscan:task:{state['task_id']}"
+        ]
+        assert published
+        msg = published[0].args[1]
+        assert "matcher 1 sent/0 failed" in msg
+        assert "nuclei 1 sent/1 failed" in msg

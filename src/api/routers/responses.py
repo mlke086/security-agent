@@ -1,4 +1,4 @@
-﻿"""Response action router (Phase 4 of monitoring plan).
+"""Response action router (Phase 4 of monitoring plan).
 
 Endpoints:
   POST /api/v1/agents/{agent_id}/actions/{action_name}
@@ -15,19 +15,17 @@ Endpoints:
 
 RBAC: viewer is denied everywhere; ``responder`` and ``admin`` can dispatch.
 """
+
 from __future__ import annotations
 
 import json
-import os
 import time
-from typing import Any
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from pydantic import BaseModel, Field
 
 from src.agents.response_actions import (
-    ACTION_ACK_MSG_TYPE,
     SUPPORTED_ACTIONS,
     build_action_message,
     parse_agent_id_from_action,
@@ -53,7 +51,9 @@ class ActionDispatchResponse(BaseModel):
     action_id: str
     action: str
     agent_id: str
-    status: str = Field(default="dispatched", description="dispatched | succeeded | failed | unknown")
+    status: str = Field(
+        default="dispatched", description="dispatched | succeeded | failed | unknown"
+    )
 
 
 class ActionStatusResponse(BaseModel):
@@ -65,6 +65,7 @@ class ActionStatusResponse(BaseModel):
 
 
 # ---------- helpers ---------------------------------------------------------
+
 
 def _redis() -> aioredis.Redis:
     """One-shot Redis client. Cheap to construct; the gateway does the same."""
@@ -94,6 +95,7 @@ async def _publish_ack_subscriber(ws_gateway) -> None:
 
 # ---------- routes ----------------------------------------------------------
 
+
 @router.post(
     "/{agent_id}/actions/{action_name}",
     response_model=ActionDispatchResponse,
@@ -101,8 +103,8 @@ async def _publish_ack_subscriber(ws_gateway) -> None:
 async def dispatch_action(
     agent_id: str = Path(..., min_length=1, max_length=128),
     action_name: str = Path(..., min_length=1, max_length=64),
-    body: dict = ...,
-    request: Request = ...,
+    body: dict = ...,  # type: ignore[assignment]  # FastAPI required-body idiom
+    request: Request = ...,  # type: ignore[assignment]  # injected, required
     current_user=Depends(require_role("admin", "responder")),
 ) -> ActionDispatchResponse:
     """Dispatch one response action to ``agent_id``.
@@ -131,9 +133,7 @@ async def dispatch_action(
         raise HTTPException(status_code=400, detail=why)
 
     actor = getattr(current_user, "username", "system")
-    msg = build_action_message(
-        agent_id=agent_id, action=action_name, params=params, actor=actor
-    )
+    msg = build_action_message(agent_id=agent_id, action=action_name, params=params, actor=actor)
     action_id = msg["payload"]["action_id"]
 
     # P2-AUDIT-1: every dispatched action lands in the audit log before we
@@ -194,6 +194,7 @@ async def dispatch_action(
         # Fall back to the singleton getter; the gateway is loop-aware so
         # this is safe under FastAPI's per-request lifespan.
         from src.agents.ws_gateway import get_agent_gateway
+
         gateway = get_agent_gateway()
     sent = await gateway.send_to_agent(agent_id, msg)
 
@@ -216,7 +217,9 @@ async def dispatch_action(
         delivered=sent,
     )
     return ActionDispatchResponse(
-        action_id=action_id, action=action_name, agent_id=agent_id,
+        action_id=action_id,
+        action=action_name,
+        agent_id=agent_id,
         status="dispatched",
     )
 

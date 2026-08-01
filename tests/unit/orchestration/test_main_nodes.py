@@ -27,7 +27,10 @@ async def test_entry_node():
 
 @pytest.mark.asyncio
 async def test_orchestrator_honeypot_rule():
-    state = {"raw_event": {"sanitized_text": "Honeypot captured whoami from 1.2.3.4"}, "event_id": "e1"}
+    state = {
+        "raw_event": {"sanitized_text": "Honeypot captured whoami from 1.2.3.4"},
+        "event_id": "e1",
+    }
     result = await orchestrator_node(state)
     assert result["priority"] == "high"
     assert "honeypot" in result["event_tags"]
@@ -52,7 +55,10 @@ async def test_orchestrator_llm_path(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_aggregator_node():
-    state = {"event_id": "e1", "subgraph_result": {"final_verdict": "true_positive", "confidence_score": 0.9}}
+    state = {
+        "event_id": "e1",
+        "subgraph_result": {"final_verdict": "true_positive", "confidence_score": 0.9},
+    }
     result = await aggregator_node(state)
     assert result["final_verdict"] == "true_positive"
     assert result["confidence_score"] == 0.9

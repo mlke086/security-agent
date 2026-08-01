@@ -1,4 +1,4 @@
-/**AlertInboxPage - EDR alert triage (Phase 2 of monitoring plan).
+﻿/**AlertInboxPage - EDR alert triage (Phase 2 of monitoring plan).
 
 Layout:
   - Toolbar: severity + source + status filters, search by hostname,
@@ -13,6 +13,8 @@ The list polls every 15s; status changes are visible to other
 operators within one tick.
 */
 import { useEffect, useMemo, useState, useCallback } from "react"
+import { formatBeijing } from "../utils/time"
+import { showError } from "../utils/showError"
 import {
   Card, Table, Tag, Space, Button, Select, Input, Drawer, Descriptions,
   Row, Col, message, Tooltip, Empty, Statistic, Tabs, Typography,
@@ -110,7 +112,7 @@ export default function AlertInboxPage() {
       }
       setCounts(c)
     } catch (err) {
-      message.error("failed to load alerts: " + ((err as any)?.response?.data?.detail || (err as Error).message))
+      showError(err, "加载告警失败")
     } finally {
       setLoading(false)
     }
@@ -131,7 +133,7 @@ export default function AlertInboxPage() {
     setDrawerLoading(true)
     getAlert(drawerAlertId)
       .then((a) => { if (alive) { setDrawerAlert(a); setActiveTab("overview") } })
-      .catch((err) => { if (alive) message.error("alert load failed: " + (err as Error).message) })
+      .catch((err) => { if (alive) showError(err, "加载告警失败") })
       .finally(() => { if (alive) setDrawerLoading(false) })
     return () => { alive = false }
   }, [drawerAlertId])
@@ -146,7 +148,7 @@ export default function AlertInboxPage() {
         setDrawerAlert((cur) => cur ? { ...cur, status: newStatus } : cur)
       }
     } catch (err) {
-      message.error("status update failed: " + ((err as any)?.response?.data?.detail || (err as Error).message))
+      showError(err, "状态更新失败")
     }
   }
 
@@ -165,7 +167,7 @@ export default function AlertInboxPage() {
       message.success(`test alert ingested as ${res.alert_id}`)
       await fetchList()
     } catch (err) {
-      message.error("ingest failed: " + ((err as any)?.response?.data?.detail || (err as Error).message))
+      showError(err, "注入失败")
     }
   }
 
@@ -261,7 +263,7 @@ export default function AlertInboxPage() {
       render: (s: string) => (
         <Tooltip title={s}>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            {s ? new Date(s).toLocaleString() : "—"}
+            {s ? formatBeijing(s) : "—"}
           </Text>
         </Tooltip>
       ),

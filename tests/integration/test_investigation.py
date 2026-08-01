@@ -24,7 +24,12 @@ from src.api.main import app  # noqa: E402
 
 client = TestClient(app)
 
-TERMINAL_STATUSES = {"completed", "pending_approval", "ignored", "error"}
+# "rejected" is a legitimate terminal outcome: a true-positive verdict routes
+# to the responder's human-in-the-loop step, and in a test env the approval
+# times out (HITL_TIMEOUT_SEC=5) and resolves to "rejected" -- the pipeline
+# still logs pipeline_complete. Without it this test races on when the GET
+# lands relative to the approval timeout.
+TERMINAL_STATUSES = {"completed", "pending_approval", "ignored", "error", "rejected"}
 
 _VULN_SKIP = pytest.mark.skip(
     reason="vuln_hunter end-to-end requires sandbox image (后续计划V2 S2)"
@@ -84,9 +89,7 @@ def _token(role: str = "analyst") -> str:
         "viewer": "viewer123",
         "responder": "responder123",
     }
-    resp = client.post(
-        "/api/v1/auth/login", json={"username": role, "password": passwords[role]}
-    )
+    resp = client.post("/api/v1/auth/login", json={"username": role, "password": passwords[role]})
     assert resp.status_code == 200, f"login failed for {role}: {resp.text}"
     return resp.json()["access_token"]
 
@@ -105,6 +108,7 @@ class TestInvestigationIntegration:
 
     def test_graph_compilation(self):
         from src.orchestration.main_graph.graph import get_compiled_graph
+
         graph = get_compiled_graph()
         assert graph is not None
         nodes = list(graph.nodes.keys())
@@ -113,15 +117,18 @@ class TestInvestigationIntegration:
 
     def test_investigation_subgraph_compiles(self):
         from src.orchestration.subgraphs.investigation.graph import build_investigation_subgraph
+
         assert build_investigation_subgraph() is not None
 
     def test_vuln_hunter_subgraph_compiles(self):
         from src.orchestration.subgraphs.vuln_hunter.graph import build_vuln_hunter_subgraph
+
         assert build_vuln_hunter_subgraph() is not None
 
     @pytest.mark.skip(reason="langgraph 0.2.28 has no 'interrupt'; upgrade needed (Sprint 3)")
     def test_responder_subgraph_compiles(self):
         from src.orchestration.subgraphs.responder.graph import build_responder_subgraph
+
         assert build_responder_subgraph() is not None
 
     @pytest.mark.parametrize("case", _TEST_EVENTS, ids=lambda c: c["name"])
@@ -130,9 +137,7 @@ class TestInvestigationIntegration:
         if case.get("skip"):
             pytest.skip(reason="routes to vuln_check; sandbox image not built")
         token = _token("analyst")
-        resp = client.post(
-            "/api/v1/events?sync=true", json=case["event"], headers=_headers(token)
-        )
+        resp = client.post("/api/v1/events?sync=true", json=case["event"], headers=_headers(token))
         assert resp.status_code == 200, f"{case['name']} failed: {resp.text}"
         data = resp.json()
         assert "event_id" in data, f"{case['name']}: no event_id in {data}"
@@ -155,7 +160,9 @@ class TestInvestigationIntegration:
             assert resp.status_code == 200, f"{case['name']}: {resp.text}"
             eid = resp.json()["event_id"]
             detail = client.get(f"/api/v1/events/{eid}", headers=_headers(token)).json()
-            assert detail.get("status") in TERMINAL_STATUSES, f"{case['name']}: {detail.get('status')}"
+            assert detail.get("status") in TERMINAL_STATUSES, (
+                f"{case['name']}: {detail.get('status')}"
+            )
 
     def test_submit_requires_auth(self):
         """Posting without a token must be rejected (RBAC)."""
@@ -188,6 +195,7 @@ class TestInvestigationIntegration:
     def test_tool_registry(self):
         """Verify all tools are registered and callable."""
         from src.knowledge.tools import get_tool, list_tools
+
         tools = list_tools()
         assert len(tools) >= 3
         for name in ["virustotal", "otx", "notify_wechat", "notify_dingtalk"]:

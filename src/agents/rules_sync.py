@@ -134,8 +134,16 @@ BASELINE_RULES: list[dict[str, Any]] = [
 ]
 
 
+# V12 阶段 5.6 (2026-08-02): rules fan-out used to build a new redis client
+# per call and never close it (4 sites) -- same leak family as manager.py.
+_redis_client = None
+
+
 def _redis():
-    return aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+    return _redis_client
 
 
 def _sign_pack(pack_data: str) -> str:
@@ -815,3 +823,103 @@ async def sync_rules_to_all_agents() -> dict:
             synced += 1
     logger.info("sync_rules_to_all_agents_done", total=len(online_ids), synced=synced)
     return {"synced": synced, "total": len(online_ids), "agents": results}
+
+
+# ----------------------------------------------------------------------- Nuclei templates sync
+#
+# Separate from the matcher rule pack: nuclei-templates is the projectdiscovery
+# template bundle the nuclei CLI reads from /opt/secagent/templates (runner.go
+# passes -t <that dir>). It lives on the internal download station, not on the
+# console, so the server pushes a signed nuclei_templates_update command whose
+# download_url points at the internal nginx mirror; the agent downloads the zip
+# and extracts it into the templates dir (clearing the old bundle first so
+# version bumps do not accumulate). Triggered manually from the rules page
+# 「同步 Nuclei 模板」button -- it is NOT part of the heartbeat auto-diff loop
+# (the matcher rule pack is); nuclei templates are large and change rarely.
+
+
+def _nuclei_templates_url() -> str:
+    """Build the internal-mirror URL for the configured nuclei-templates version.
+
+    Returns "" when base URL or version is unconfigured so callers can no-op.
+    """
+    s = get_settings()
+    base = (s.nuclei_download_base_url or "").strip().rstrip("/")
+    ver = (s.nuclei_templates_version or "").strip()
+    if not base or not ver:
+        return ""
+    return f"{base}/nuclei-templates-{ver}.zip"
+
+
+async def force_nuclei_templates_update(agent_id: str) -> bool:
+    """Push a signed nuclei_templates_update command to one agent.
+
+    Returns True if the gateway accepted the delivery (online or queued),
+    False if the URL is unconfigured or the agent is offline + unqueueable.
+    """
+    download_url = _nuclei_templates_url()
+    if not download_url:
+        logger.error("nuclei_templates_sync_no_config", agent_id=agent_id)
+        return False
+    version = get_settings().nuclei_templates_version
+    from src.agents.ws_gateway import get_agent_gateway
+
+    gateway = get_agent_gateway()
+    msg = {
+        "v": 1,
+        "type": "nuclei_templates_update",
+        "ts": datetime.now(UTC).isoformat(),
+        "payload": {
+            "version": version,
+            "download_url": download_url,
+        },
+    }
+    # send_to_agent signs the command (nuclei_templates_update is in
+    # SENSITIVE_TYPES) and delivers via WS or queues a pending_cmd.
+    ok = await gateway.send_to_agent(agent_id, msg)
+    logger.info(
+        "nuclei_templates_update_sent",
+        agent_id=agent_id,
+        version=version,
+        sent=ok,
+    )
+    return ok
+
+
+async def sync_nuclei_templates_to_all_agents() -> dict:
+    """需求：对所有在线 agent 下发 nuclei-templates 更新。
+
+    镜像 sync_rules_to_all_agents：从 Redis 枚举在线 agent，逐个推送。
+    返回 {synced, total, version, agents: [{agent_id, sent}]}。
+    """
+    download_url = _nuclei_templates_url()
+    version = get_settings().nuclei_templates_version
+    if not download_url:
+        return {
+            "synced": 0,
+            "total": 0,
+            "version": version,
+            "agents": [],
+            "error": "nuclei_templates_not_configured",
+        }
+
+    r = _redis()
+    online_ids: list[str] = []
+    async for key in r.scan_iter(match="agent:online:*", count=200):
+        if isinstance(key, bytes):
+            key = key.decode()
+        online_ids.append(key.replace("agent:online:", ""))
+    results = []
+    synced = 0
+    for agent_id in online_ids:
+        sent = await force_nuclei_templates_update(agent_id)
+        results.append({"agent_id": agent_id, "sent": sent})
+        if sent:
+            synced += 1
+    logger.info(
+        "sync_nuclei_templates_done",
+        total=len(online_ids),
+        synced=synced,
+        version=version,
+    )
+    return {"synced": synced, "total": len(online_ids), "version": version, "agents": results}

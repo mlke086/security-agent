@@ -1,4 +1,5 @@
-﻿"""Unit tests for the TaskEnvelope dataclass (no Redis required)."""
+"""Unit tests for the TaskEnvelope dataclass (no Redis required)."""
+
 from __future__ import annotations
 
 import json
@@ -56,9 +57,7 @@ def test_envelope_from_bytes():
 
 def test_envelope_from_dict_drops_unknown_keys():
     """A future schema bump must not crash older workers."""
-    e = TaskEnvelope.from_dict(
-        {"task_id": "t-4", "source": "manual", "future_field": "ignored"}
-    )
+    e = TaskEnvelope.from_dict({"task_id": "t-4", "source": "manual", "future_field": "ignored"})
     assert e.task_id == "t-4"
     assert e.source == "manual"
     # No exception, unknown field silently dropped

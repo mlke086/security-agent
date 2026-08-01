@@ -42,12 +42,14 @@ class _FakeConsumer:
 def _reset_pipeline_sem():
     """Reset the module-level concurrency semaphore between tests."""
     import src.preprocessing.consumer as consumer_mod
+
     consumer_mod._pipeline_sem = None
     yield
     consumer_mod._pipeline_sem = None
 
 
 # ── _process ────────────────────────────────────────────────
+
 
 def test_process_structure_and_source():
     c = AlertConsumer()
@@ -73,6 +75,7 @@ def test_process_excludes_private_ip():
 
 # ── _emit ───────────────────────────────────────────────────
 
+
 async def test_emit_invokes_run_pipeline(monkeypatch):
     c = AlertConsumer()
     fake_run = AsyncMock()
@@ -83,6 +86,7 @@ async def test_emit_invokes_run_pipeline(monkeypatch):
 
 
 # ── _send_dlq ───────────────────────────────────────────────
+
 
 async def test_send_dlq_posts_to_dlq():
     c = AlertConsumer()
@@ -98,6 +102,7 @@ async def test_send_dlq_posts_to_dlq():
 
 
 # ── run() error splitting ───────────────────────────────────
+
 
 async def test_run_parse_failure_sends_dlq_and_commits(monkeypatch):
     """A message that fails to parse must go to the DLQ and be committed."""

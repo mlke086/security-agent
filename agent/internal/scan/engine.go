@@ -33,6 +33,10 @@ type ScanEngine struct {
 	Monitor   *resource.Monitor
 	Protector *protection.Monitor // optional self-protection (P1 of docs/架构改造设计md)
 	mu        sync.Mutex
+	// V13 P2-17: parent context for scans. Deriving from this (instead of
+	// context.Background()) means agent_shutdown cancels in-flight scans
+	// too, not just the WS connection.
+	rootCtx context.Context
 
 	// Callback for sending progress updates
 	OnStep func(taskID, step, status, message string)
@@ -52,12 +56,18 @@ type ScanEngine struct {
 }
 
 // NewScanEngine creates a new ScanEngine. nuclei is created lazily (only
-// if its binary is present) so hosts without nuclei still work.
-func NewScanEngine() *ScanEngine {
+// if its binary is present) so hosts without nuclei still work. The root
+// context is the parent for all scans (V13 P2-17); nil falls back to
+// context.Background() for tests.
+func NewScanEngine(rootCtx context.Context) *ScanEngine {
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
 	e := &ScanEngine{
 		collector: NewCollector(),
 		matcher:   NewMatcher(),
 		cancels:   make(map[string]context.CancelFunc),
+		rootCtx:   rootCtx,
 	}
 	if r := nuclei.NewCLIRunner(); r.Available() {
 		e.nuclei = r
@@ -162,7 +172,9 @@ func (e *ScanEngine) Execute(cmd ScanCommand, hostname string) {
 	// P1-GO-06 (2026-07-19): wrap the whole scan in a cancellable context so
 	// the server can abort it mid-run via a scan_cancel command. The cancel
 	// funcs are kept in e.cancels so CancelScan(taskID) can find them.
-	ctx, cancel := context.WithCancel(context.Background())
+	// V13 P2-17: derive from the engine root ctx, so agent_shutdown also
+	// aborts in-flight scans instead of letting them run to completion.
+	ctx, cancel := context.WithCancel(e.rootCtx)
 	e.cancelMu.Lock()
 	if e.cancels == nil {
 		e.cancels = make(map[string]context.CancelFunc)

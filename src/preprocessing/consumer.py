@@ -13,9 +13,6 @@ from src.preprocessing.sanitization.engine import SanitizationEngine
 
 logger = get_logger(__name__)
 
-# Pipeline concurrency semaphore (module-level, shared across consumer runs)
-_pipeline_sem: asyncio.Semaphore | None = None
-
 
 class AlertConsumer:
     """Async Kafka consumer: sanitize → extract IOCs → emit structured JSON."""
@@ -62,7 +59,9 @@ class AlertConsumer:
         async for msg in self._consumer:
             stable_event_id: str | None = None
             try:
-                stable_event_id = self._stable_event_id(msg.value)
+                stable_event_id = self._stable_event_id(
+                    msg.value, source=self._settings.kafka_topic_raw_alerts
+                )
             except Exception:
                 stable_event_id = None
             try:
@@ -98,19 +97,21 @@ class AlertConsumer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _stable_event_id(raw: str) -> str:
+    def _stable_event_id(raw: str, source: str = "kafka") -> str:
         """Deterministic event_id from the raw Kafka payload.
 
         If the payload is JSON with an ``id`` / ``event_id`` / ``alert_id`` field we
-        use it directly (most alert sources include a unique id). Otherwise we
-        sha256 the sanitized payload so re-deliveries hash to the same id.
+        use it prefixed with the source -- otherwise two sources that happen to
+        share the same id (e.g. auto-increment ids) would collide on the events
+        table primary key and wedge the consumer (V13 P0-1). Otherwise we sha256
+        the sanitized payload so re-deliveries hash to the same id.
         """
         try:
             obj = json.loads(raw)
             for key in ("id", "event_id", "alert_id", "uuid"):
                 val = obj.get(key)
                 if isinstance(val, str) and val:
-                    return val
+                    return f"{source}:{val}"
         except Exception:
             pass
         import hashlib
@@ -134,20 +135,43 @@ class AlertConsumer:
         }
 
     async def _emit(self, event: dict) -> None:
-        """Submit event to the LangGraph pipeline with concurrency control."""
-        global _pipeline_sem
-        if _pipeline_sem is None:
-            _pipeline_sem = asyncio.Semaphore(get_settings().pipeline_concurrency)
+        """阶段 4-2 拆分:将事件推入 Redis Stream ``events:tasks``,由 scan-engine 消费。
 
-        from src.orchestration.runner import run_pipeline
+        原实现直接调 ``src.orchestration.runner.run_pipeline``(包含 LangGraph 子图),
+        会让 preprocessing 镜像必须 COPY orchestration/ 全包(包括 langgraph + execution/)。
+        改为 Redis Stream 入队后:
 
-        async with _pipeline_sem:
-            await run_pipeline(
-                event["event_id"],
-                event["sanitized_text"],
-                event["iocs"],
-                event.get("source", "kafka"),
-            )
+        - preprocessing 镜像只依赖 aiokafka + redis(无 langgraph),体积 ~80MB
+        - scan-engine 镜像负责 LangGraph 流水线执行(单服务单职责)
+        - 并发控制由 scan-engine TaskWorker 的 concurrency 配置决定
+
+        入队失败抛异常,由 caller (run) 决定不 commit offset,触发 Kafka 重投递。
+        """
+        # 阶段 4-2:独立裁剪版 task_queue 包,只依赖 redis(PEP 562 lazy 化后
+        # gateway 携带同包时不拖 langgraph)。preprocessing 镜像 COPY 此包即可。
+        from src.preprocessing.vulnscan_queue.enqueue import (
+            EVENT_STREAM,
+            enqueue_event,
+        )
+
+        # 事件 ID 由调用方在 _process 时生成(sha256/raw id)
+        event_id = event["event_id"]
+        # enqueue_event 内部用 Redis Stream XADD + 简洁 payload
+        await enqueue_event(
+            event_id=event_id,
+            payload={
+                "event_id": event_id,
+                "sanitized_text": event.get("sanitized_text", ""),
+                "iocs": event.get("iocs", {}),
+                "source": event.get("source", "kafka"),
+                "ts": event.get("timestamp", datetime.now(UTC).isoformat()),
+            },
+        )
+        logger.info(
+            "preprocessing_event_emitted",
+            event_id=event_id,
+            stream=EVENT_STREAM,
+        )
 
     async def _send_dlq(self, raw: str, error: str) -> bool:
         """Push the poison-pill alert onto the DLQ topic. Returns True if the

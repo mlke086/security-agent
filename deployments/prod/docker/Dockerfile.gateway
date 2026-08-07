@@ -1,0 +1,25 @@
+# 阶段 5:gateway 服务 Dockerfile
+# base + 无额外 pip(全靠 base.txt)
+# uvicorn --host 127.0.0.1 --port 8000(host 网络防绕过鉴权)
+FROM secagent-base:0.1.0
+
+# COPY gateway 所需子包(裁剪版,详 docs/拆分-闭包审计结果.md):
+# - src/api/(main + auth + gateway_proxy + store + store_es + events_bus + routers/)
+# - src/agents/(ws_gateway + manager + enroll + signing + store + models + scheduler 等)
+# - src/common/(config + db + logging + audit)
+# - src/detection/(sigma)
+# - src/preprocessing/edr_adapter/(实测无 aiokafka)
+# - src/orchestration/(task_queue 经 PEP 562 lazy,不拖 langgraph)
+#   + subgraphs/responder/(hitl_handler + approval_store + state)
+COPY src/ /app/src/
+WORKDIR /app
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# 阶段 5 收尾:挂载 entrypoint(API_SECRET_KEY + PG + Nacos fail-fast)
+COPY deployments/prod/docker/entrypoint-gateway.sh /usr/local/bin/entrypoint-gateway.sh
+RUN chmod +x /usr/local/bin/entrypoint-gateway.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-gateway.sh"]
+CMD ["uvicorn", "src.api.main:app", "--host", "127.0.0.1", "--port", "8000", "--proxy-headers"]

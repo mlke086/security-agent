@@ -1,11 +1,12 @@
 """Unit tests for agent manager: heartbeat, register, offline, CRUD."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.agents.manager import (
     decommission_host,
+    delete_host_permanently,
     get_host,
     heartbeat,
     list_hosts,
@@ -184,3 +185,57 @@ class TestDecommission:
             await decommission_host("agent-1")
             mock_store.update_host.assert_called_with("agent-1", status="decommissioned")
             mock_redis.delete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_decommission_revokes_token(self):
+        """V13 P1-8: decommission must revoke the persisted agent_token so a
+        replaced host cannot reconnect under its old credentials."""
+        mock_redis = AsyncMock()
+        mock_redis.delete = AsyncMock()
+        mock_store = AsyncMock()
+        mock_store.update_host = AsyncMock()
+
+        with (
+            patch("src.agents.manager._redis", return_value=mock_redis),
+            patch("src.agents.manager.get_vulnscan_store", return_value=mock_store),
+            patch("src.agents.revoke.revoke_agent", AsyncMock()) as mock_revoke,
+        ):
+            await decommission_host("agent-1")
+        mock_revoke.assert_awaited_once_with("agent-1")
+
+    @pytest.mark.asyncio
+    async def test_decommission_revoke_failure_does_not_break_flow(self):
+        """A PG blip during revocation must not fail the decommission."""
+        mock_redis = AsyncMock()
+        mock_redis.delete = AsyncMock()
+        mock_store = AsyncMock()
+        mock_store.update_host = AsyncMock()
+
+        with (
+            patch("src.agents.manager._redis", return_value=mock_redis),
+            patch("src.agents.manager.get_vulnscan_store", return_value=mock_store),
+            patch(
+                "src.agents.revoke.revoke_agent",
+                AsyncMock(side_effect=RuntimeError("pg down")),
+            ),
+        ):
+            await decommission_host("agent-1")  # must NOT raise
+        mock_store.update_host.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_purge_revokes_token(self):
+        """V13 P1-7: a permanent delete must revoke the token too."""
+        mock_redis = AsyncMock()
+        mock_redis.delete = AsyncMock()
+        mock_store = AsyncMock()
+        mock_store.delete_host = AsyncMock()
+        mock_store.get_host = AsyncMock(return_value=MagicMock(status="decommissioned"))
+
+        with (
+            patch("src.agents.manager._redis", return_value=mock_redis),
+            patch("src.agents.manager.get_vulnscan_store", return_value=mock_store),
+            patch("src.agents.revoke.revoke_agent", AsyncMock()) as mock_revoke,
+        ):
+            ok = await delete_host_permanently("agent-1")
+        assert ok is True
+        mock_revoke.assert_awaited_once_with("agent-1")

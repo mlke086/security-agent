@@ -16,13 +16,14 @@ from src.orchestration.subgraphs.vulnscan.state import VulnScanState
 _vulnscan_subgraph = StateGraph(VulnScanState)
 # LangGraph's stub types add_node generically over the State type; our node
 # functions take/return plain dicts (partial-state transitions), which the
-# runtime accepts but mypy's stub rejects -- ignore the type-var complaint.
-_vulnscan_subgraph.add_node("parse_intent", parse_intent)  # type: ignore[type-var]
-_vulnscan_subgraph.add_node("dispatch", dispatch)  # type: ignore[type-var]
-_vulnscan_subgraph.add_node("collect", collect)  # type: ignore[type-var]
-_vulnscan_subgraph.add_node("aggregate", aggregate)  # type: ignore[type-var]
-_vulnscan_subgraph.add_node("llm_analysis", llm_analysis)  # type: ignore[type-var]
-_vulnscan_subgraph.add_node("generate_report", generate_report)  # type: ignore[type-var]
+# runtime accepts but mypy's stub rejects. The stubs no longer flag this
+# (V13 P2-3): the per-line ignore comments became unused and were removed.
+_vulnscan_subgraph.add_node("parse_intent", parse_intent)
+_vulnscan_subgraph.add_node("dispatch", dispatch)
+_vulnscan_subgraph.add_node("collect", collect)
+_vulnscan_subgraph.add_node("aggregate", aggregate)
+_vulnscan_subgraph.add_node("llm_analysis", llm_analysis)
+_vulnscan_subgraph.add_node("generate_report", generate_report)
 _vulnscan_subgraph.set_entry_point("parse_intent")
 _vulnscan_subgraph.add_edge("parse_intent", "dispatch")
 _vulnscan_subgraph.add_edge("dispatch", "collect")

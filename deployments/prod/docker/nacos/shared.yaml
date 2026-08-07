@@ -1,0 +1,29 @@
+# 阶段 5 nacos 拆分:shared dataId(全部服务)
+# 字段从原 deployments/prod/docker/nacos-config.yaml 按方案 5.2 表格 1:1 抽出。
+# 仅保留所有服务共享的连接串与日志配置;store 索引/表名保持硬编码(方案 P1-2)。
+#
+# V13 (2026-08-07): 中间件地址全部置 null, 运行时由 env 提供。
+# nacos_loader.apply_nacos_overrides 对 null 值跳过, 不会覆盖 .env。
+# PG 凭据在 PROTECTED_OVERRIDE_KEYS, 本 yaml 即使写了也跳;此处保持 null。
+
+redis_url: null
+es_hosts: null
+es_index_audit: "security-agent-audit"
+es_index_events: "security-agent-events"
+
+pg_host: null
+pg_port: null
+pg_database: null
+pg_user: null
+pg_password: null
+pg_pool_size: null
+
+kafka_bootstrap_servers: null
+kafka_topic_raw_alerts: "raw-alerts"
+kafka_topic_dlq: "dead-letter-queue"
+kafka_consumer_group: "security-agent-group"
+
+log_level: "INFO"
+
+# 凭据类不进 Nacos(鸡生蛋),走 env + PROTECTED_OVERRIDE_KEYS:
+# API_SECRET_KEY / AGENT_SIGNING_KEY / *_PASSWORD / *_API_KEY

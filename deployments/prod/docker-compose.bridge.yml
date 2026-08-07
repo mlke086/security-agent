@@ -1,0 +1,185 @@
+# 阶段 5 双轨:docker-compose.bridge.yml
+# 用途:开发机 192.168.80.101(中间件机) + 本机 IDE,bridge 网络,
+#       服务名 DNS 解析可用,容器内可直接用 ai:8001 / graphrag:8002。
+#
+# 与 host 版差异:
+#   1. network_mode: bridge(默认)替代 host
+#   2. AI_BASE_URL / GRAPHRAG_BASE_URL 改用容器名(ai:8001、graphrag:8002)
+#   3. 中间件地址改 192.168.80.101(开发机)
+#   4. 端口映射:8000:8000、8001:8001、8002:8002(便于 host IDE 调试)
+#
+# 启动:docker compose -f docker-compose.bridge.yml up -d
+# 停止:docker compose -f docker-compose.bridge.yml down
+#
+# 注意:本文件不引入新镜像定义,复用 docker-compose.yml 的 services,
+# docker compose CLI 不支持跨文件 service include,所以本文件是独立完整定义。
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.gateway
+    image: secagent-gateway:0.1.0
+    container_name: secagent-gateway
+    restart: unless-stopped
+    # 不用 network_mode: host,用默认 bridge + 端口映射
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-gateway.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+      # bridge:用容器名(bridge 网络自带 DNS)
+      AI_BASE_URL: "http://ai:8001"
+      GRAPHRAG_BASE_URL: "http://graphrag:8002"
+      # 阶段 5 收尾:删 AI_PROXY_ENABLED(反代是唯一路径)
+      # 中间件地址:开发机 192.168.80.101
+      PG_HOST: "192.168.80.101"
+      REDIS_URL: "redis://192.168.80.101:6379/0"
+      ES_HOSTS: "http://192.168.80.101:9200"
+      NACOS_SERVER: "http://192.168.80.101:8848"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      ai:
+        condition: service_healthy
+      graphrag:
+        condition: service_healthy
+
+  ai:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.ai
+    image: secagent-ai:0.1.0
+    container_name: secagent-ai
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-ai.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8001/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  scan-engine:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.scan-engine
+    image: secagent-scan-engine:0.1.0
+    container_name: secagent-scan-engine
+    restart: unless-stopped
+    # scan-engine 无 HTTP,bridge 不需端口映射
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-scan-engine.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+      # bridge:用容器名
+      GRAPHRAG_BASE_URL: "http://graphrag:8002"
+      REDIS_URL: "redis://192.168.80.101:6379/0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'src.scan_engine.main' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      graphrag:
+        condition: service_healthy
+
+  asset-scan:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.asset-scan
+    image: secagent-asset-scan:0.1.0
+    container_name: secagent-asset-scan
+    restart: unless-stopped
+    # asset-scan 无 HTTP,bridge 不需端口映射
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-asset-scan.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+      REDIS_URL: "redis://192.168.80.101:6379/0"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'src.asset_scan.main' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  graphrag:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.graphrag
+    image: secagent-graphrag:0.1.0
+    container_name: secagent-graphrag
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-graphrag.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+      EMBEDDING_MODEL_PATH: "/opt/models/bge-large-zh-v1.5"
+      # bridge:本服务在容器内,模型路径不变
+    volumes:
+      - /opt/models/bge-large-zh-v1.5:/opt/models/bge-large-zh-v1.5:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8002/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  celery:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.celery
+    image: secagent-celery:0.1.0
+    container_name: secagent-celery
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-celery.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+      REDIS_URL: "redis://192.168.80.101:6379/0"
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A src.common.celery_app inspect ping -d celery@$(hostname) >/dev/null"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    image: secagent-frontend:0.1.0
+    container_name: secagent-frontend
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    # bridge 网络:容器名解析;secagent-gateway 是 gateway 的容器名
+    extra_hosts:
+      - "secagent-api:secagent-gateway"  # nginx.conf upstream 仍指 secagent-api:8000
+    depends_on:
+      - gateway

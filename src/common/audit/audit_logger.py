@@ -60,8 +60,12 @@ class AuditLogger:
                 query={
                     "bool": {
                         "should": [
-                            {"term": {"actor": username}},
-                            {"term": {"details.target": username}},
+                            # V13 P2-7: .keyword exact match -- `term` on a
+                            # text-analyzed field splits usernames containing
+                            # "-" / "_" and undercounts, silently disabling
+                            # the hard-delete blocker.
+                            {"term": {"actor.keyword": username}},
+                            {"term": {"details.target.keyword": username}},
                         ]
                     }
                 },

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import io
 import re
+import time
 import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -123,19 +124,67 @@ async def _release_sync_lock() -> None:
 # --------------------------------------------------------------------- ES manifest
 
 
+_INDEX_PREFIX = "nuclei-templates-v"
+
+
+async def _alias_backing(es) -> str | None:
+    """The backing index the ``nuclei-templates`` alias currently points
+    at, or None when the alias does not exist yet (first sync)."""
+    try:
+        resp = await es.indices.get_alias(name=INDEX_NUCLEI_TEMPLATES)
+        for name in resp:
+            return name
+    except Exception:
+        return None
+    return None
+
+
 async def rebuild_manifest(items: list[TemplateMeta]) -> int:
-    """重建 ES 索引：删旧 -> 批量索引全部（含 content）。返回索引条数。"""
+    """原子重建 ES 索引（V13 P1-9）——alias-swap 双索引切换。
+
+    流程：写新 backing 索引 -> 原子 update_aliases 切换 -> 删旧索引。
+    相比旧的「删索引 -> bulk」：任何时刻 alias 都指向一个完整可搜索
+    的索引，中途失败/崩溃不会留下空索引（同步期间并发搜索无空窗），
+    失败时旧索引继续服务，半成品新索引被清理。
+    """
     if not items:
         return 0
     es = _es()
+    new_name = f"{_INDEX_PREFIX}{int(time.time())}"
     try:
-        await es.indices.delete(index=INDEX_NUCLEI_TEMPLATES, ignore_unavailable=True)
-    except Exception:
-        pass
+        await es.indices.create(index=new_name)
+    except Exception as exc:
+        raise RuntimeError(f"create backing index {new_name}: {exc}") from exc
     actions = [
-        {"_index": INDEX_NUCLEI_TEMPLATES, "_id": it.path, "_source": it.doc()} for it in items
+        {"_index": new_name, "_id": it.path, "_source": it.doc()} for it in items
     ]
-    await async_bulk(es, actions, refresh="wait_for")
+    try:
+        await async_bulk(es, actions, refresh="wait_for")
+    except Exception:
+        # Bulk failed: drop the half-written index, leave the old alias
+        # (and its backing index) serving as-is.
+        try:
+            await es.indices.delete(index=new_name, ignore_unavailable=True)
+        except Exception:
+            pass
+        raise
+    old_backing = await _alias_backing(es)
+    alias_actions = []
+    if old_backing and old_backing != new_name:
+        alias_actions.append(
+            {"remove": {"index": old_backing, "alias": INDEX_NUCLEI_TEMPLATES}}
+        )
+    alias_actions.append({"add": {"index": new_name, "alias": INDEX_NUCLEI_TEMPLATES}})
+    try:
+        await es.indices.update_aliases(actions=alias_actions)
+    except Exception:
+        try:
+            await es.indices.delete(index=new_name, ignore_unavailable=True)
+        except Exception:
+            pass
+        raise
+    if old_backing and old_backing != new_name:
+        await es.indices.delete(index=old_backing, ignore_unavailable=True)
     return len(items)
 
 

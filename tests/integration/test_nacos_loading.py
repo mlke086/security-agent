@@ -129,11 +129,15 @@ def test_none_values_skipped():
     assert "ES_HOSTS" not in summary["applied"]
 
 
-def test_unknown_keys_still_written_and_flagged():
-    """Bug guard: typo in nacos-config.yaml does not crash; it warns."""
+def test_unknown_keys_flagged_but_not_injected():
+    """V13 P2-12: a typo in nacos-config.yaml is reported via
+    `unrecognized` but must NOT be injected into the global env -- an
+    unknown key could otherwise override process-affecting variables
+    (HTTP_PROXY / NO_PROXY) that trust_env=True clients pick up."""
+    os.environ.pop("KAFKAA_BROKER", None)
     summary = apply_nacos_overrides({"KAFKAA_BROKER": "10.0.0.7"})  # typo: extra A
-    assert os.environ.get("KAFKAA_BROKER") == "10.0.0.7"
     assert "KAFKAA_BROKER" in summary["unrecognized"]
+    assert os.environ.get("KAFKAA_BROKER") is None
 
 
 def test_fingerprint_stable_for_same_content():

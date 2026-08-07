@@ -52,3 +52,57 @@ class TestNormalizeRegistry:
         # Syslog fallback. The result is still a valid Alert.
         alert = normalize(dict(msg="hi"), AlertSource.UNKNOWN)
         assert alert.severity in list(AlertSeverity)
+
+
+class TestSyslogIocs:
+    """V13 P1-2: syslog IP IOC extraction (the old pattern used a plain
+    string literal where "\\b" is the backspace character, so IPs were
+    never extracted)."""
+
+    def _adapter(self, msg: str):
+        from src.preprocessing.edr_adapter.syslog import SyslogAdapter
+
+        return SyslogAdapter(dict(msg=msg, hostname="h"))
+
+    def test_extracts_ip_from_plain_message(self):
+        alert = self._adapter("sshd failed password for root from 203.0.113.7 port 22").to_alert()
+        assert "203.0.113.7" in alert.iocs.ips
+
+    def test_extracts_multiple_ips_and_dedupes(self):
+        alert = self._adapter(
+            "connection from 203.0.113.7 and 198.51.100.9 and 203.0.113.7"
+        ).to_alert()
+        assert sorted(alert.iocs.ips) == ["198.51.100.9", "203.0.113.7"]
+
+    def test_no_ip_no_iocs(self):
+        alert = self._adapter("sshd: no such user").to_alert()
+        assert alert.iocs.ips == []
+
+
+class TestVendorLevelDefense:
+    """V13 P2-1: non-numeric vendor levels must fall back to defaults
+    instead of raising (which would DLQ the whole alert)."""
+
+    def test_wazuh_string_level_falls_back(self):
+        from src.preprocessing.edr_adapter.wazuh import WazuhAdapter
+
+        alert = WazuhAdapter(dict(id="x", rule=dict(level="high", description="x"))).to_alert()
+        assert alert.severity == AlertSeverity.LOW  # default 5 maps to LOW
+
+    def test_wazuh_none_level_falls_back(self):
+        from src.preprocessing.edr_adapter.wazuh import WazuhAdapter
+
+        alert = WazuhAdapter(dict(id="x", rule=dict(level=None, description="x"))).to_alert()
+        assert alert.severity == AlertSeverity.LOW
+
+    def test_elkeid_string_level_falls_back(self):
+        from src.preprocessing.edr_adapter.elkeid import ElkeidAdapter
+
+        alert = ElkeidAdapter(dict(alert_id="a", data=dict(level="high"))).to_alert()
+        assert alert.severity == AlertSeverity.MEDIUM  # default 3
+
+    def test_numeric_levels_still_map(self):
+        from src.preprocessing.edr_adapter.elkeid import ElkeidAdapter
+
+        alert = ElkeidAdapter(dict(alert_id="a", data=dict(level=5))).to_alert()
+        assert alert.severity == AlertSeverity.CRITICAL

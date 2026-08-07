@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"time"
 )
 
 // SensitiveTypes lists command types that MUST be signed.
@@ -23,6 +24,12 @@ var SensitiveTypes = map[string]bool{
 	"scan_cancel":             true,
 	"config_update":           true,
 	"agent_shutdown":          true,
+	// V13 G0-1: response_action was missing here, so the agent accepted
+	// kill_process / quarantine_file commands with NO signature check at
+	// all -- a MitM on the (default plain ws://) channel could terminate
+	// arbitrary processes. The server-side signing.py always signed this
+	// type, so requiring the signature does not break legitimate commands.
+	"response_action": true,
 }
 
 // PublicKey is the server's Ed25519 public key (hex-encoded).
@@ -42,6 +49,14 @@ func SetPublicKey(hexKey string) error {
 	return nil
 }
 
+// maxTSSkew is how far a signed message's ts may deviate from the agent
+// clock before it is rejected as a replay. The signing server always
+// stamps UTC RFC3339 (signing.py sign_message), so a message outside
+// this window was either captured-and-replayed or clocks are badly
+// skewed (V13 P2-14). 15 minutes is generous for NTP-synced hosts while
+// still bounding replayability.
+const maxTSSkew = 15 * time.Minute
+
 // Verify checks the Ed25519 signature on an incoming message.
 // Returns nil if verification passes or the message type does not require signing.
 // Returns an error if verification fails.
@@ -51,6 +66,18 @@ func Verify(msgType string, ts string, payload json.RawMessage, sigB64 string) e
 	}
 	if sigB64 == "" {
 		return fmt.Errorf("missing signature for sensitive command %s", msgType)
+	}
+
+	// V13 P2-14: freshness window. The signing server always stamps ts,
+	// so an unparsable/absent ts is itself suspicious; a signed message
+	// older than maxTSSkew (or from the future) is rejected as a replay.
+	tsTime, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return fmt.Errorf("missing/invalid ts for sensitive command %s: %w", msgType, err)
+	}
+	skew := time.Since(tsTime)
+	if skew < -maxTSSkew || skew > maxTSSkew {
+		return fmt.Errorf("ts outside freshness window for %s (skew %v)", msgType, skew)
 	}
 
 	// Guard against an unconfigured server public key. If PublicKey is empty

@@ -27,6 +27,22 @@ from src.common.logging.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+class InvalidConversationIdError(ValueError):
+    """Raised when a conversation id is not a valid UUID.
+
+    Routers map this to HTTP 400. The raw uuid.UUID ValueError previously
+    surfaced as an unhandled 500 (V13 P2-9).
+    """
+
+
+def validate_conv_id(conv_id: str) -> uuid.UUID:
+    """Parse and validate a conversation id (V13 P2-9)."""
+    try:
+        return uuid.UUID(conv_id)
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise InvalidConversationIdError(repr(conv_id)) from exc
+
 # ---- Auto-title (V12 5.10) -----------------------------------------------
 # Moved here from scan_chat.py so BOTH the legacy scan-chat route and the
 # unified /api/v1/chat route can spawn title generation. V9 unified the
@@ -192,7 +208,7 @@ async def list_conversations(limit: int = 50) -> list[dict[str, Any]]:
 async def get_conversation(conv_id: str) -> dict[str, Any] | None:
     async with await _pg_conn() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM scan_conversations WHERE id=$1", uuid.UUID(conv_id)
+            "SELECT * FROM scan_conversations WHERE id=$1", validate_conv_id(conv_id)
         )
     return _row_to_dict(row) if row else None
 
@@ -250,7 +266,7 @@ async def append_message(
                SET messages = messages || $1::jsonb, updated_at = NOW()
                WHERE id = $2 RETURNING *""",
             json.dumps([msg]),
-            uuid.UUID(conv_id),
+            validate_conv_id(conv_id),
         )
     if not row:
         return None, None
@@ -281,7 +297,7 @@ async def patch_message(
 
     async with await _pg_conn() as conn:
         row = await conn.fetchrow(
-            "SELECT messages FROM scan_conversations WHERE id=$1", uuid.UUID(conv_id)
+            "SELECT messages FROM scan_conversations WHERE id=$1", validate_conv_id(conv_id)
         )
     if not row:
         return None
@@ -307,7 +323,7 @@ async def patch_message(
                SET messages = $1::jsonb, updated_at = NOW()
                WHERE id = $2 RETURNING *""",
             json.dumps(msgs, ensure_ascii=False),
-            uuid.UUID(conv_id),
+            validate_conv_id(conv_id),
         )
     return _row_to_dict(row) if row else None
 
@@ -315,7 +331,7 @@ async def patch_message(
 async def update_conversation(conv_id: str, **fields) -> dict[str, Any] | None:
     allowed = {"title", "model_id"}
     sets: list[str] = ["updated_at=NOW()"]
-    params: list = [uuid.UUID(conv_id)]
+    params: list = [validate_conv_id(conv_id)]
     idx = 1
     for k, v in fields.items():
         if k in allowed and v is not None:
@@ -325,7 +341,7 @@ async def update_conversation(conv_id: str, **fields) -> dict[str, Any] | None:
     async with await _pg_conn() as conn:
         await conn.execute(f"UPDATE scan_conversations SET {', '.join(sets)} WHERE id=$1", *params)
         row = await conn.fetchrow(
-            "SELECT * FROM scan_conversations WHERE id=$1", uuid.UUID(conv_id)
+            "SELECT * FROM scan_conversations WHERE id=$1", validate_conv_id(conv_id)
         )
     return _row_to_dict(row) if row else None
 
@@ -333,6 +349,6 @@ async def update_conversation(conv_id: str, **fields) -> dict[str, Any] | None:
 async def delete_conversation(conv_id: str) -> bool:
     async with await _pg_conn() as conn:
         result = await conn.execute(
-            "DELETE FROM scan_conversations WHERE id=$1", uuid.UUID(conv_id)
+            "DELETE FROM scan_conversations WHERE id=$1", validate_conv_id(conv_id)
         )
     return result.endswith(" 1") or result == "DELETE 1"

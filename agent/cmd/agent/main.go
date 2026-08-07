@@ -15,10 +15,12 @@ import (
 	"github.com/security-agent/agent/internal/config"
 	"github.com/security-agent/agent/internal/crypto"
 	"github.com/security-agent/agent/internal/enroll"
+	"github.com/security-agent/agent/internal/metrics"
 	"github.com/security-agent/agent/internal/monitor"
 	"github.com/security-agent/agent/internal/protection"
 	"github.com/security-agent/agent/internal/queue"
 	"github.com/security-agent/agent/internal/response"
+	"github.com/security-agent/agent/internal/resource"
 	"github.com/security-agent/agent/internal/scan"
 	"github.com/security-agent/agent/internal/scan/nuclei"
 	"github.com/security-agent/agent/internal/updater"
@@ -37,11 +39,10 @@ func main() {
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		log.Printf("[agent] config not found at %s, starting enrollment flow", cfgPath)
-		cfg, _ = config.Load(cfgPath)
-		if cfg == nil {
-			cfg = &config.Config{HeartbeatSec: 60}
-		}
+		// V13 P2-19: the second Load call's result was discarded -- load
+		// once, and fall back to defaults when the file is missing/corrupt.
+		log.Printf("[agent] config load failed at %s (%v), using defaults", cfgPath, err)
+		cfg = &config.Config{HeartbeatSec: 60}
 	}
 
 	// P0-GO-1: honor server_public_key from config.json so first-run agents
@@ -110,14 +111,24 @@ func main() {
 		cancel()
 	}()
 
-	// Create scan engine
-	engine := scan.NewScanEngine()
+	// Create scan engine. V13 P2-17: pass the root context so agent_shutdown
+	// cancels in-flight scans too (not just the WS connection).
+	engine := scan.NewScanEngine(ctx)
 	// P1 (2026-07-18): attach a self-protection monitor. Set nil
 	// to disable. When non-nil the engine bails out of a scan
 	// before running matcher/nuclei and publishes the reason to the
 	// console via the periodic heartbeat (StatusReason slot).
 	protector := protection.NewMonitor(protection.DefaultThresholds(), runtime.NumCPU())
 	engine.Protector = protector
+
+	// V13 P1-13: wire the resource-limit monitor into the scan engine so
+	// server-pushed resource_limit (config_update) actually throttles scans.
+	// Previously engine.Monitor stayed nil and IsThrottling never fired;
+	// the 10s sampling window matches the 5s throttle pause in the engine.
+	resMonitor := resource.NewMonitor(resource.Limit{})
+	resMonitor.Start(10 * time.Second)
+	defer resMonitor.Stop()
+	engine.Monitor = resMonitor
 
 	// P1-GO-07 (2026-07-19): open the offline queue BEFORE creating the
 	// comm client so scan_result / scan_step messages dropped while the WS
@@ -268,10 +279,12 @@ func main() {
 				// G-P1-2 (V12): do NOT send a second (failure) ack after the
 				// success ack above -- the server would overwrite the
 				// "restarting" state with "failed" and never self-heal.
-				// The old binary is untouched (HandleUpgrade staged it), the
-				// next heartbeat still reports the old version, and the
+				// V13 P1-10: HandleUpgrade had already swapped the NEW binary
+				// onto disk (old one at execPath+".old"); ApplyStagedAndRestart
+				// restores the old binary when the restart cannot be started.
+				// The next heartbeat still reports the old version and the
 				// server's version-mismatch logic re-pushes the upgrade.
-				log.Printf("[agent] restart failed: %v (no second ack; heartbeat mismatch will re-push)", err)
+				log.Printf("[agent] restart failed: %v (old binary restored; no second ack; heartbeat mismatch will re-push)", err)
 			}
 		}(req)
 	}
@@ -318,11 +331,17 @@ func main() {
 		log.Printf("[agent] nuclei templates v%s installed", req.Version)
 	}
 
-	// Gap-4: config_update -> heartbeat interval + resource limit
+	// Gap-4: config_update -> heartbeat interval + resource limit + metrics 配置
+	// 需求①: metricsReporter 在下方 hostMonitor 之后创建并 Run；这里先声明
+	// 供闭包引用（执行时非 nil 才应用），避免在闭包定义处强依赖初始化顺序。
+	var metricsReporter *metrics.Reporter
 	client.OnConfigUpdate = func(payload json.RawMessage) {
 		var cfgUpdate struct {
 			HeartbeatInterval int `json:"heartbeat_interval"`
-			ResourceLimit     struct {
+			// 需求①: host_metrics 上报间隔（秒）与磁盘采样挂载点。
+			MetricsIntervalSec int      `json:"metrics_interval_sec"`
+			MetricsMounts      []string `json:"metrics_mounts"`
+			ResourceLimit      struct {
 				CPUPercent int `json:"cpu_percent"`
 				MemPercent int `json:"mem_percent"`
 			} `json:"resource_limit"`
@@ -339,10 +358,30 @@ func main() {
 			// at connect time with the old interval).
 			client.ApplyHeartbeatInterval(cfgUpdate.HeartbeatInterval)
 		}
-		log.Printf("[agent] config updated: heartbeat=%ds, cpu=%d%%, mem=%d%%",
+		// V13 P1-13: apply the resource limit to the live monitor so the
+		// engine's IsThrottling check (between scan modules) starts
+		// respecting the operator's limits immediately.
+		resMonitor.UpdateLimit(resource.Limit{
+			CPUPercent: cfgUpdate.ResourceLimit.CPUPercent,
+			MemPercent: cfgUpdate.ResourceLimit.MemPercent,
+		})
+		// 需求①: hot-apply metrics interval / disk mount without restarting
+		// the reporter loop.
+		if cfgUpdate.MetricsIntervalSec > 0 {
+			cfg.MetricsIntervalSec = cfgUpdate.MetricsIntervalSec
+			if metricsReporter != nil {
+				metricsReporter.UpdateInterval(cfgUpdate.MetricsIntervalSec)
+			}
+		}
+		if len(cfgUpdate.MetricsMounts) > 0 {
+			cfg.MetricsMounts = cfgUpdate.MetricsMounts
+			resMonitor.UpdateMount(cfgUpdate.MetricsMounts[0])
+		}
+		log.Printf("[agent] config updated: heartbeat=%ds, cpu=%d%%, mem=%d%%, metrics_interval=%ds",
 			cfg.HeartbeatSec,
 			cfgUpdate.ResourceLimit.CPUPercent,
 			cfgUpdate.ResourceLimit.MemPercent,
+			cfg.MetricsIntervalSec,
 		)
 		client.SendUpdateAck("config", "", true, "")
 	}
@@ -377,6 +416,14 @@ func main() {
 	hostMonitor := monitor.New(monitor.RealLister{}, clientMonitorSink(client), monitorInterval, 0)
 	hostMonitor.Start(ctx)
 	defer hostMonitor.Stop()
+
+	// 需求①: 主机性能指标上报。独立于心跳与进程监控：每
+	// cfg.MetricsIntervalSec（默认 15s）经 resource.Monitor.Sample() 采集
+	// cpu/mem/disk/net/load，走 host_metrics 非排队通道（断线即丢，
+	// 不入离线队列）。生命周期随 rootCtx —— 取消即停。
+	metricsReporter = metrics.NewReporter(resMonitor, client, cfg.MetricsIntervalSec)
+	metricsReporter.Run(ctx)
+	defer metricsReporter.Stop()
 
 	log.Println("[agent] engine wired, connecting to server...")
 

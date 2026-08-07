@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { Drawer, Descriptions, Tag, Space, Skeleton, Empty, Button, Select, message } from "antd"
 import { ReloadOutlined } from "@ant-design/icons"
 import { getVuln, patchVulnStatus, type VulnFinding } from "../api/client"
@@ -52,14 +52,26 @@ export default function VulnDetailDrawer({ findingId, onClose, onUpdated }: Prop
     return () => { alive = false }
   }, [findingId])
 
+  // V13 P2-24: shared request-sequence guard for the manual refresh paths
+  // (onChangeStatus refetch + 刷新 button) so a slow response cannot
+  // overwrite a newer detail view after the user switched findingId.
+  const fetchSeq = useRef(0)
+
+  const refreshVuln = async (id: string) => {
+    const seq = ++fetchSeq.current
+    try {
+      const v = await getVuln(id)
+      if (seq === fetchSeq.current) setVuln(v as VulnWithHost)
+    } catch { /* handled by callers */ }
+  }
+
   const onChangeStatus = async (newStatus: VulnFinding["status"]) => {
     if (!vuln) return
     setUpdating(true)
     try {
       await patchVulnStatus(vuln.finding_id, newStatus)
       message.success("状态已更新")
-      const v = await getVuln(vuln.finding_id)
-      setVuln(v as VulnWithHost)
+      await refreshVuln(vuln.finding_id)
       onUpdated?.()
     } catch (e: any) {
       message.error(e?.response?.data?.detail || "更新失败")
@@ -74,9 +86,10 @@ export default function VulnDetailDrawer({ findingId, onClose, onUpdated }: Prop
       open={open}
       onClose={onClose}
       width={560}
+      destroyOnClose
       extra={
         <Button icon={<ReloadOutlined />} size="small" loading={loading}
-          onClick={() => findingId && getVuln(findingId).then((v) => setVuln(v as VulnWithHost)).catch(() => message.error("刷新失败"))}>
+          onClick={() => { if (findingId) { refreshVuln(findingId).catch(() => message.error("刷新失败")) } }}>
           刷新
         </Button>
       }

@@ -178,6 +178,47 @@ def test_dockerfile_frontend_runtime_does_not_leak_proxy_env():
     )
 
 
+# --------------------------------------------------------------------------- credential guards (V13 D0-1)
+
+
+def test_no_plaintext_credentials_in_repo():
+    """V13 D0-1 regression guard: real credentials must never live in the
+    repo, no matter where they were copied from. Any of these patterns in
+    the tracked config/source files fails the build.
+
+    Real values found during V13 review (all since rotated / placeholder'd):
+      - nacos-config.yaml: DeepSeek API key, AGENT_SIGNING_KEY, PG/Redis/Neo4j passwords
+      - settings.py defaults: pg_password / neo4j_password / redis password
+      - .env.example: real passwords + NVD_API_KEY
+      - k8s/secret.yaml: NEO4J_PASSWORD
+    """
+    files = [
+        REPO_ROOT / "deployments" / "prod" / "docker" / "nacos-config.yaml",
+        REPO_ROOT / ".env.example",
+        REPO_ROOT / "deployments" / "prod" / ".env.example",
+        REPO_ROOT / "deployments" / "k8s" / "secret.yaml",
+        REPO_ROOT / "src" / "common" / "config" / "settings.py",
+    ]
+    # Patterns that a real credential would match. Keep the list tight so
+    # legitimate code (variable names, docs) does not trip it.
+    patterns = [
+        re.compile(r"sk-[A-Za-z0-9]{16,}"),          # OpenAI-style API keys
+        re.compile(r"AGENT_SIGNING_KEY\s*[=:]\s*[0-9a-f]{64}\b"),  # Ed25519 hex
+        re.compile(r"(?:pg_password|PG_PASSWORD|NEO4J_PASSWORD|REDIS_PASSWORD)\s*[=:]\s*[\"']?[A-Za-z0-9_@#$%^&*+-]{8,}"),
+        re.compile(r"NVD_API_KEY\s*[=:]\s*[A-Za-z0-9_-]{16,}"),
+    ]
+    for f in files:
+        if not f.exists():
+            continue
+        text = f.read_text(encoding="utf-8")
+        for pat in patterns:
+            m = pat.search(text)
+            assert not m, (
+                f"credential-looking value in {f.name}: {m.group(0)[:40]!r}. "
+                "Rotate the secret and replace with a placeholder."
+            )
+
+
 if __name__ == "__main__":
     import sys
 

@@ -19,7 +19,13 @@ class WazuhAdapter(EDRAdapter):
         return str(rule.get("description", ""))
 
     def _severity(self):
-        level = int(self.raw.get("rule", {}).get("level", 5))
+        # V13 P2-1: third-party level values are untrusted -- a non-numeric
+        # level (e.g. a vendor string like "high") must fall back to the
+        # default instead of raising and DLQ'ing the whole alert.
+        try:
+            level = int(self.raw.get("rule", {}).get("level", 5))
+        except (TypeError, ValueError):
+            level = 5
         if level >= 12:
             return AlertSeverity.CRITICAL
         if level >= 10:

@@ -33,14 +33,18 @@ $OS = "windows"
 # Download CA certificate
 Write-Host "[secagent] Downloading CA certificate..."
 try {
-    Invoke-WebRequest -Uri "$ConsoleUrl/api/v1/agents/ca?token=$Token" -OutFile "$CONFIG_DIR\ca.pem" -ErrorAction SilentlyContinue
+    $CaHeaders = @{ Authorization = "Bearer $Token" }
+    Invoke-WebRequest -Uri "$ConsoleUrl/api/v1/agents/ca" -Headers $CaHeaders -OutFile "$CONFIG_DIR\ca.pem" -ErrorAction SilentlyContinue
 } catch {
     Write-Host "[secagent] Warning: no CA certificate" -ForegroundColor Yellow
 }
 
 # Download agent binary
 Write-Host "[secagent] Downloading agent binary for $OS/$ARCH..."
-Invoke-WebRequest -Uri "$ConsoleUrl/api/v1/agents/binary/$OS/$ARCH?token=$Token" -OutFile "$INSTALL_DIR\agent.exe"
+# V13 P1-12: token in the Authorization header, not the URL query (a query
+# token lands in process listings / logs / proxy records).
+$Headers = @{ Authorization = "Bearer $Token" }
+Invoke-WebRequest -Uri "$ConsoleUrl/api/v1/agents/binary/$OS/$ARCH" -Headers $Headers -OutFile "$INSTALL_DIR\agent.exe"
 
 # Write config
 $config = @{

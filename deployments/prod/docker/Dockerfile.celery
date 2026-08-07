@@ -1,0 +1,25 @@
+# 阶段 4-2:celery 服务(独立小镜像,~200MB)。
+#
+# 职责:HITL 审批超时兜底(approval_timeout_task)。
+# 运行:celery -A src.common.celery_app worker --loglevel=info -Q security-agent-tasks
+#
+# 不含 langgraph/sentence-transformers/pymilvus/neo4j/docker/aiokafka。
+FROM secagent-base:0.1.0
+
+# celery 独享依赖(锁定)
+COPY requirements/celery.txt /tmp/requirements-celery.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-celery.txt \
+    && rm /tmp/requirements-celery.txt
+
+# COPY 所需源码(裁剪):
+# - src/common/(celery_app + config + db + logging + audit)
+# - src/orchestration/subgraphs/responder/(approval_store 依赖 + state + hitl_handler 被 celery_app 引用)
+# - src/api/store.py(approval_store 经由 PG 写入;不引 langgraph)
+COPY src/ /app/src/
+WORKDIR /app
+
+# entrypoint 与日志关键字约定(阶段 5 健康检查):
+# - 日志关键字 celery_ready:celery worker started
+# - 进程存活:pgrep -f celery_app
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["celery", "-A", "src.common.celery_app", "worker", "--loglevel=info", "-Q", "security-agent-tasks"]

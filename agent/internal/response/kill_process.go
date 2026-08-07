@@ -10,6 +10,14 @@ import (
 	"strings"
 )
 
+// killMinProtectedPID / killMaxPID bound the attackable range. PIDs below
+// 10 are kernel/init/systemd critical processes; the documented wire
+// contract is 1..4194304 but nothing enforced the upper bound (V13 P2-18).
+const (
+	killMinProtectedPID = 10 // PIDs 1..10 are never killable
+	killMaxPID          = 4194304
+)
+
 // KillProcess sends a POSIX signal to ``params.pid``.
 //
 // Wire format (matches src/agents/response_actions.py KillProcessPayload):
@@ -17,8 +25,9 @@ import (
 //
 // Safety:
 //   - Refuses to target the Agent's own PID (os.Getpid).
-//   - Refuses PID 0 and negatives (defence-in-depth; the server should
-//     already reject these but we do not trust it).
+//   - Refuses PID 0, negatives, the kernel/system range 1..10 (init,
+//     systemd, kthreadd) and anything above 4194304 (defence-in-depth;
+//     the server should already reject these but we do not trust it).
 //   - On Windows, falls back to ``taskkill /F /PID <pid>`` because the
 //     syscall package's ``Process.Kill`` only works on the current PID on
 //     Windows. taskkill ships with every desktop/server SKU we target.
@@ -30,8 +39,12 @@ func KillProcess(params json.RawMessage) Result {
 	if err := json.Unmarshal(params, &p); err != nil {
 		return Result{Ok: false, Detail: "invalid params: " + err.Error()}
 	}
-	if p.Pid <= 0 {
-		return Result{Ok: false, Detail: fmt.Sprintf("pid must be > 0, got %d", p.Pid)}
+	if p.Pid <= killMinProtectedPID {
+		return Result{Ok: false, Detail: fmt.Sprintf(
+			"pid %d is in the protected kernel/system range 1-%d", p.Pid, killMinProtectedPID)}
+	}
+	if p.Pid > killMaxPID {
+		return Result{Ok: false, Detail: fmt.Sprintf("pid %d exceeds max %d", p.Pid, killMaxPID)}
 	}
 	if p.Pid == os.Getpid() {
 		return Result{Ok: false, Detail: "refusing to target agent's own pid"}

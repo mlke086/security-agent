@@ -74,12 +74,25 @@ func TestKillProcess_RejectsBadPID(t *testing.T) {
 	cases := []map[string]any{
 		{"pid": 0, "signal": "SIGKILL"},
 		{"pid": -1, "signal": "SIGKILL"},
+		// V13 P2-18: kernel/system range and out-of-contract PIDs are
+		// refused even when a valid signature delivered the command.
+		{"pid": 1, "signal": "SIGKILL"},
+		{"pid": 5, "signal": "SIGKILL"},
+		{"pid": 10, "signal": "SIGKILL"},
+		{"pid": 99999999, "signal": "SIGKILL"},
 	}
 	for i, c := range cases {
 		res := KillProcess(mustJSON(c))
 		if res.Ok {
 			t.Errorf("case %d: expected failure, got %+v", i, res)
 		}
+	}
+}
+
+func TestKillProcess_ProtectedRangeDetail(t *testing.T) {
+	res := KillProcess(mustJSON(map[string]any{"pid": 1, "signal": "SIGKILL"}))
+	if !strings.Contains(res.Detail, "protected") {
+		t.Errorf("expected detail to mention the protected range, got %q", res.Detail)
 	}
 }
 

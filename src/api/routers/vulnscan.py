@@ -9,7 +9,6 @@ API when the subgraph got slow. The actual execution now happens in the
 """
 
 import json
-import uuid
 from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
@@ -17,13 +16,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel as _PydanticBaseModel
 
-from src.agents.models import ScanIntent, ScanReport, ScanTask, VulnFilter, VulnFinding
+from src.agents.models import ScanReport, ScanTask, VulnFilter, VulnFinding
 from src.agents.store import get_vulnscan_store
 from src.api.auth.routes import require_role
 from src.common.audit.audit_logger import get_audit_logger
+
+# 阶段 5 收尾 P0-3:channel 名共享常量
+from src.common.channels import vulnscan_task_channel
 from src.common.config.settings import get_settings
 from src.common.logging.logger import get_logger
-from src.orchestration.subgraphs.vulnscan.graph import run_vulnscan
+
+# 阶段 2-3:run_vulnscan 已迁至 scan-engine 服务;
+# gateway 不再持有 langgraph 子图(方案 A)。该顶层 import 已删除,
+# sync 调试分支由 admin 改调 scan-engine /internal/vulnscan/sync(阶段 2 末尾补)。
 from src.orchestration.task_queue import (
     enqueue_task,
     pending_count,
@@ -92,43 +97,67 @@ class _HostStatsResponse(_PydanticBaseModel):
     cached: bool = False
 
 
+class _HostVulnSummaryItem(_PydanticBaseModel):
+    """一行 = 一台有漏洞记录的主机（需求③ 主机清单顶层视图）。
+
+    severity_counts 按原始 severity 统计（非 ai_severity）；前端用
+    四个 Tag（严重/高危/中危/低危）渲染，0 也显示。
+    """
+
+    agent_id: str
+    hostname: str = ""
+    ip: str = ""
+    os: str = ""
+    group: str = ""
+    severity_counts: dict[str, int] = {}
+    total: int = 0
+    open_count: int = 0
+    fixed_count: int = 0
+    last_scan_at: str = ""
+
+
+class _HostVulnSummaryResponse(_PydanticBaseModel):
+    items: list[_HostVulnSummaryItem]
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+    cached: bool = False
+
+
 router = APIRouter(prefix="/api/v1/vulnscan", tags=["vulnscan"])
 logger = get_logger(__name__)
 
 
-@router.post("/tasks/parse")
-async def api_parse_intent(
-    body: dict,
-    current_user=Depends(require_role("admin", "analyst")),
-):
-    from src.knowledge.models.adapter import get_model_adapter
-
-    adapter = get_model_adapter()
-    intent_text = body.get("intent_text", "")
-    result = await adapter.chat_completion(
-        messages=[{"role": "user", "content": f"Parse: {intent_text}"}],
-        schema=ScanIntent,
-    )
-    return result
 
 
 @router.post("/tasks")
 async def api_create_task(
     body: dict,
-    sync: bool = Query(False, description="Synchronous path; bypass queue"),
     current_user=Depends(require_role("admin", "analyst")),
 ):
     """Enqueue a vulnscan task. Returns ``{task_id, status: "queued"}`` immediately.
 
     P2: the actual subgraph execution runs in a background ``TaskWorker``
     subscribed to the Redis Stream. Multiple uvicorn workers spread the
-    load automatically through the consumer group. The legacy in-process
-    path is kept behind ``?sync=1`` for tests / debugging.
+    load automatically through the consumer group.
+
+    阶段 2-3 (方案 A):legacy ``?sync=1`` 调试分支已删除——run_vulnscan 需 langgraph,
+    保留会让 gateway 镜像必含 langgraph。admin 若需同步执行,改调
+    scan-engine /internal/vulnscan/sync(阶段 5 收尾时由运维侧补)。
+    这里 ``body.get("sync")`` 仍兼容(静默忽略),不破坏旧 client 调用契约。
     """
     # P0 (2026-07-18): the "engine" field picks the agent-side scanner.
     #   "matcher" -> own rule-based CVE matcher (legacy, default)
     #   "nuclei"  -> os/exec wrapper around projectdiscovery/nuclei CLI
     source = body.get("source", "manual")
+    if source not in ("dialog", "manual"):
+        # 阶段 5 收尾 P-func-1:source 字段是 Literal["dialog","manual"] 在
+        # ScanTask Pydantic model 中声明。Router 层未校验,导致非法 source 入队后
+        # scan-engine 消费时 ES 写失败,task 直接 failed。补 422 拒绝。
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported source {source!r}; expected 'dialog' or 'manual'",
+        )
     intent_text = body.get("intent_text")
     targets = body.get("targets", [])
     modules = body.get("modules", ["sys_vuln", "baseline"])
@@ -137,6 +166,22 @@ async def api_create_task(
         raise HTTPException(
             status_code=422,
             detail=f"unsupported engine {engine!r}; expected matcher, nuclei, or global",
+        )
+    # V13 P2-5: guard the values that travel all the way into the agent's
+    # command line / scan plan. Unbounded or out-of-range values previously
+    # passed through to the agent untouched.
+    if not isinstance(targets, list) or not targets:
+        raise HTTPException(status_code=422, detail="targets 不能为空")
+    if len(targets) > 500:
+        raise HTTPException(status_code=422, detail="targets 最多 500 个")
+    ports = body.get("nuclei_ports", [])
+    if not isinstance(ports, list) or len(ports) > 100:
+        raise HTTPException(status_code=422, detail="nuclei_ports 最多 100 个")
+    bad_ports = [p for p in ports if not isinstance(p, int) or not (1 <= p <= 65535)]
+    if bad_ports:
+        raise HTTPException(
+            status_code=422,
+            detail=f"nuclei_ports 必须在 1-65535 之间: {bad_ports[:5]}",
         )
 
     # 2026-07-29 UX upgrade: resolve the targets to their business
@@ -175,43 +220,8 @@ async def api_create_task(
     except Exception as exc:  # noqa: BLE001
         logger.warning("target_groups_resolve_failed", error=str(exc))
 
-    # S-P2-11 (V12): the legacy sync path runs the full subgraph inline in
-    # the HTTP request (up to 30min) -- restrict it to admin-only and audit
-    # it, so an analyst cannot tie up a worker thread by accident.
-    if sync or body.get("sync"):
-        if current_user.role != "admin":
-            raise HTTPException(status_code=403, detail="sync 执行仅限 admin（调试用）")
-        await get_audit_logger().log(
-            event_id="",
-            node="vulnscan.router",
-            action="vulnscan_sync_exec",
-            actor=current_user.username,
-            details={"targets": targets, "engine": engine},
-        )
-        task_id = str(uuid.uuid4())
-        await run_vulnscan(
-            source=source,
-            intent_text=intent_text,
-            targets=targets,
-            modules=modules,
-            task_id=task_id,
-            engine=engine,
-            nuclei_severity=body.get("nuclei_severity", []),
-            nuclei_tags=body.get("nuclei_tags", []),
-            nuclei_templates=body.get("nuclei_templates", []),
-            nuclei_timeout_sec=int(body.get("nuclei_timeout_sec", 0) or 0),
-            nuclei_ports=body.get("nuclei_ports", []),
-            target_groups=target_groups,
-        )
-        return {
-            "task_id": task_id,
-            "status": "completed",
-            "engine": engine,
-            "sync": True,
-            "target_groups": target_groups,
-        }
-
     # P2 async path: enqueue to Redis Stream, return immediately.
+    # 阶段 2-3 (方案 A):legacy sync 分支删除,见 api_create_task 文档。
     envelope = await enqueue_task(
         source=source,
         targets=targets,
@@ -241,6 +251,13 @@ class _BatchDeleteRequest(_PydanticBaseModel):
     task_ids: list[str]
 
 
+# V13 P2-4: a serial per-task loop with an unbounded list can exceed the
+# gateway's 60s timeout (N=1000 -> 30-60s+), forcing client retries that
+# re-delete already-deleted rows. Cap the batch; larger cleanups should go
+# through a paged workflow.
+_MAX_BATCH_DELETE = 200
+
+
 @router.post("/tasks/batch-delete")
 async def api_batch_delete_tasks(
     req: _BatchDeleteRequest,
@@ -253,6 +270,11 @@ async def api_batch_delete_tasks(
     """
     if not req.task_ids:
         raise HTTPException(status_code=422, detail="task_ids 不能为空")
+    if len(req.task_ids) > _MAX_BATCH_DELETE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"task_ids 最多 {_MAX_BATCH_DELETE} 条，请分批删除",
+        )
     store = get_vulnscan_store()
     deleted = 0
     not_found: list[str] = []
@@ -371,7 +393,7 @@ async def api_task_stream(task_id: str, token: str = Query(...)):
     async def sse_gen():
         r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
         pubsub = r.pubsub()
-        await pubsub.subscribe(f"vulnscan:task:{task_id}")
+        await pubsub.subscribe(vulnscan_task_channel(task_id))
         # Phase-3 UX fix (2026-07-28 e2e sweep): push a status_change
         # event on ANY transition, not just terminal. Without this, when
         # the agent finishes the scan phase and the subgraph moves the
@@ -412,7 +434,7 @@ async def api_task_stream(task_id: str, token: str = Query(...)):
         except Exception:
             pass
         finally:
-            await pubsub.unsubscribe(f"vulnscan:task:{task_id}")
+            await pubsub.unsubscribe(vulnscan_task_channel(task_id))
             await pubsub.close()
             await r.aclose()
 
@@ -489,7 +511,7 @@ async def api_cancel_task(task_id: str, current_user=Depends(require_role("admin
         ex=STATUS_TTL_SEC,
     )
     await redis.publish(
-        f"vulnscan:task:{task_id}",
+        vulnscan_task_channel(task_id),
         json.dumps(
             {
                 "type": "task_done",
@@ -882,6 +904,118 @@ async def api_host_stats(current_user=Depends(require_role("admin", "analyst", "
     _HOST_STATS_CACHE["ts"] = now
     _HOST_STATS_CACHE["items"] = out
     return {"items": out, "cached": False}
+
+
+# -- host vuln summary (需求③: 主机维度漏洞清单, 2026-08-06) ------------------
+
+# In-process cache keyed by the filter tuple (30s). VulnListPage polls on
+# refresh; identical filter combos hit the cache instead of hammering ES.
+# Simple size cap: clear all when full (per-combo TTL would be overkill).
+_HOST_VULN_SUMMARY_CACHE: dict = {}
+_HOST_VULN_SUMMARY_TTL_SEC = 30.0
+_HOST_VULN_SUMMARY_MAX_ENTRIES = 64
+
+
+@router.get("/host-vuln-summary", response_model=_HostVulnSummaryResponse)
+async def api_host_vuln_summary(
+    group: str | None = None,
+    hostname_keyword: str | None = None,
+    severity: str | None = None,
+    status: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    current_user=Depends(require_role("admin", "analyst", "viewer")),
+):
+    """按主机聚合的漏洞清单（需求③ 顶层视图）。
+
+    与 /host-stats 的区别：/host-stats 按业务组聚合（组维度，供
+    HostOnboardPage 业务分布图）；本端点按 **agent_id 分桶**（主机维度，
+    供 VulnListPage 主机清单视图）。每行一台有漏洞记录的主机：
+    漏洞情况按原始 severity 统计、最近扫描时间 = max(detected_at)，
+    点"漏洞明细"由前端以 listVulns({agent_id}) 钻取。
+
+    v1 只列有漏洞记录的主机（"漏洞清单"语义）；0 漏洞主机不出现。
+    聚合 terms size 上限 500（>500 主机需 composite 翻页，v2 增强）。
+    """
+    import time as _time
+
+    if hostname_keyword is not None and len(hostname_keyword) > 200:
+        raise HTTPException(status_code=422, detail="hostname_keyword exceeds 200 chars")
+
+    cache_key = (group, hostname_keyword, severity, status, page, page_size)
+    now_mono = _time.monotonic()
+    hit = _HOST_VULN_SUMMARY_CACHE.get(cache_key)
+    if hit and now_mono - hit[0] < _HOST_VULN_SUMMARY_TTL_SEC:
+        return {
+            "items": hit[1],
+            "total": hit[2],
+            "page": page,
+            "page_size": page_size,
+            "cached": True,
+        }
+
+    store = get_vulnscan_store()
+
+    # PG hosts: with a group filter the same fetch doubles as the JOIN map;
+    # without one we load all hosts (mirrors /host-stats limit=2000 pattern).
+    try:
+        host_map_hosts = await store.list_hosts(
+            group=group, limit=2000, exclude_decommissioned=True
+        )
+    except Exception as exc:
+        logger.warning("host_vuln_summary_list_hosts_failed", error=str(exc))
+        host_map_hosts = []
+    agent_to_host = {h.agent_id: h for h in host_map_hosts}
+    group_agent_ids = [h.agent_id for h in host_map_hosts if h.agent_id]
+
+    try:
+        buckets = await store.host_vuln_summary_buckets(
+            group_agent_ids=group_agent_ids,
+            hostname_keyword=hostname_keyword,
+            severity=severity,
+            status=status,
+            host_limit=500,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("host_vuln_summary_es_agg_failed", error=str(exc))
+        raise HTTPException(status_code=502, detail="vuln aggregation failed") from exc
+
+    rows: list[dict] = []
+    for b in buckets:
+        host = agent_to_host.get(b["agent_id"])
+        rows.append(
+            {
+                "agent_id": b["agent_id"],
+                "hostname": host.hostname if host else "",
+                "ip": host.ip if host else "",
+                "os": host.os if host else "",
+                "group": host.group if host else "",
+                "severity_counts": b["severity_counts"],
+                "total": b["total"],
+                "open_count": b["status_counts"].get("open", 0),
+                "fixed_count": b["status_counts"].get("fixed", 0),
+                "last_scan_at": b["last_scan_at"],
+            }
+        )
+
+    # Most vulns first, then agent_id for a stable page order; page in memory.
+    rows.sort(key=lambda r: (-r["total"], r["agent_id"]))
+    total = len(rows)
+    start = (page - 1) * page_size
+    page_rows = rows[start : start + page_size]
+
+    if len(_HOST_VULN_SUMMARY_CACHE) >= _HOST_VULN_SUMMARY_MAX_ENTRIES:
+        _HOST_VULN_SUMMARY_CACHE.clear()
+    _HOST_VULN_SUMMARY_CACHE[cache_key] = (now_mono, page_rows, total)
+    return {
+        "items": page_rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "cached": False,
+    }
 
 
 # -- queue ops (P2) -----------------------------------------------------------

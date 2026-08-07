@@ -145,12 +145,28 @@ class ApprovalStore:
         return {"status": status, "count": int(count)}
 
     async def resolve(self, approval_id: str, status: str) -> None:
+        """Resolve approval to a terminal status (approved/rejected/timeout).
+
+        阶段 4-1:幂等化——已终态时直接 no-op,避免 celery 兜底覆盖 scan-engine
+        的正常 resolve。race condition:scan-engine 先 resolve('approved'),
+        celery 后到 resolve('timeout') 应被忽略(否则用户已批准的请求被误报超时)。
+        """
         pool = await self._pg()
-        await pool.execute(
-            "UPDATE approvals SET status = $1, resolved_at = NOW() WHERE approval_id = $2",
+        # 已终态检查:UPDATE 仅在 status='pending' 时生效
+        result = await pool.execute(
+            "UPDATE approvals SET status = $1, resolved_at = NOW() "
+            "WHERE approval_id = $2 AND status = 'pending'",
             status,
             approval_id,
         )
+        # asyncpg 返回 'UPDATE N' 字符串,N=0 表示无行被更新(已终态)
+        if not result or result.endswith(" 0"):
+            logger.debug(
+                "approval_resolve_noop_terminal",
+                approval_id=approval_id,
+                requested=status,
+            )
+            return
         await self._redis.publish(f"approval:notify:{approval_id}", status)
         logger.info("approval_resolved", approval_id=approval_id, status=status)
 

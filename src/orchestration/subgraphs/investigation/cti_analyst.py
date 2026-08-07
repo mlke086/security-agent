@@ -1,5 +1,13 @@
-"""CTI analyst node — external intel queries + GraphRAG local retrieval + LLM analysis."""
+"""CTI analyst node — external intel queries + GraphRAG HTTP retrieval + LLM analysis.
 
+阶段 1 拆分迁移:不再直连 src.knowledge.graphrag.* 与 src.orchestration.memory。
+改通过 src.graphrag.main.GraphRAGClient httpx 调 graphrag 服务:
+- /engine/search  综合检索(自动 embed + milvus + neo4j + RRF)
+- /memory/add    存证据(替代 MemoryManager.store_evidence)
+
+graphrag_base_url 来自 Settings.graphrag_base_url(阶段 0-1 新增字段)。
+失败时与原实现一致吞错返回 '' / 静默不存,不影响 LLM 流程。
+"""
 from typing import Any, Literal
 
 import httpx
@@ -7,8 +15,8 @@ from pydantic import BaseModel
 
 from src.common.config.settings import get_settings
 from src.common.logging.logger import get_logger
+from src.graphrag.main import GraphRAGClient
 from src.knowledge.models.adapter import get_model_adapter
-from src.orchestration.memory import get_memory_manager
 from src.orchestration.subgraphs.investigation.state import InvestigationSubState
 
 logger = get_logger(__name__)
@@ -38,45 +46,19 @@ async def _query_virustotal(ioc: str, api_key: str) -> dict:
 
 
 async def _query_graphrag(ioc_values: list[str]) -> str:
-    """Query GraphRAG for local threat intelligence, returns formatted context string.
+    """调 graphrag 服务 /engine/search,返回 formatted context string。
 
-    P1-KNOW-1: previously this raised bare ``except Exception`` and never called
-    ``engine.close()`` on the failure path, leaking one Neo4j driver per call.
-    Now we always close (try / finally) and only suppress the error after the
-    resources are released.
+    失败时返回 '' 并吞错(原行为保留)。
     """
-    from src.knowledge.graphrag.engine import GraphRAGEngine
-    from src.knowledge.graphrag.vector.embedding import embed
-
-    engine = GraphRAGEngine()
+    client = GraphRAGClient()
     try:
-        mock_embedding = embed(" ".join(ioc_values))
-        result = await engine.search(query_vector=mock_embedding, ioc_values=ioc_values, top_k=5)
-        parts = []
-        if result.get("vector_hits"):
-            parts.append(
-                "Vector matches:\n"
-                + "\n".join(
-                    f"  [{h['source']}] {h['content'][:200]}" for h in result["vector_hits"]
-                )
-            )
-        if result.get("graph_relations"):
-            parts.append(
-                "Graph relations:\n"
-                + "\n".join(
-                    f"  [{r.get('node_type', '?')}] {r.get('name', '')} {r.get('cve_id', '')}"
-                    for r in result["graph_relations"][:10]
-                )
-            )
-        return "\n\n".join(parts) if parts else ""
+        result = await client.engine_search(ioc_values=ioc_values, top_k=5)
+        return result.get("context", "") or ""
     except Exception as exc:
         logger.debug("graphrag_unavailable", error=str(exc))
         return ""
     finally:
-        try:
-            await engine.close()
-        except Exception:
-            pass
+        await client.close()
 
 
 async def cti_analyst_node(state: InvestigationSubState) -> dict[str, Any]:
@@ -95,7 +77,7 @@ async def cti_analyst_node(state: InvestigationSubState) -> dict[str, Any]:
     evidence = [str(r) for r in vt_results if isinstance(r, dict) and r]
     graph_relations = state.get("graph_relations", [])
 
-    # Local GraphRAG retrieval
+    # Local GraphRAG retrieval (走 graphrag HTTP)
     graphrag_context = await _query_graphrag(all_ioc_values)
 
     prompt = (
@@ -130,17 +112,42 @@ async def cti_analyst_node(state: InvestigationSubState) -> dict[str, Any]:
         )
 
     log_entry = f"CTI: risk={intel_card.risk_level} apt={intel_card.related_apt}"
-    try:
-        mm = get_memory_manager()
-        await mm.store_evidence(
-            event_id=state.get("event_id", "unknown"),
-            node="cti_analyst",
-            content=f"Risk: {intel_card.risk_level}",
-            metadata=intel_card.model_dump(),
-        )
-    except Exception as mem_err:
-        logger.warning("memory_store_failed", error=str(mem_err))
+    # 阶段 1:memory.add 改走 graphrag HTTP。
+    # 阶段 5 收尾:抽 `_store_memory` 函数作为 monkeypatch 钩子,
+    # 单测 test_investigation.py 可在 cti 模块上 mock 此函数而不需依赖 graphrag 服务。
+    await _store_memory(
+        event_id=state.get("event_id", "unknown"),
+        node="cti_analyst",
+        content=f"Risk: {intel_card.risk_level}",
+        metadata=intel_card.model_dump(),
+    )
     return {
         "raw_intel": intel_card.model_dump(),
         "investigation_log": state.get("investigation_log", []) + [log_entry],
     }
+
+
+async def _store_memory(
+    event_id: str,
+    node: str,
+    content: str,
+    metadata: dict | None = None,
+) -> None:
+    """阶段 5 收尾:cti 节点调用 graphrag /memory/add 的可 mock 钩子。
+
+    单元测试可在 src.orchestration.subgraphs.investigation.cti_analyst 模块上
+    monkeypatch 此函数,避免依赖真实 graphrag 服务。
+    """
+    try:
+        client = GraphRAGClient()
+        try:
+            await client.memory_add(
+                event_id=event_id,
+                node=node,
+                content=content,
+                metadata=metadata,
+            )
+        finally:
+            await client.close()
+    except Exception as mem_err:
+        logger.warning("memory_store_failed", error=str(mem_err))

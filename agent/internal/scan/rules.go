@@ -61,13 +61,31 @@ func LoadRules(data []byte) error {
 	return nil
 }
 
-// persistRules writes the raw rule-pack bytes to the default path.
+// persistRules writes the raw rule-pack bytes to the default path
+// (atomically: tmp + rename, V13 P2-16).
 func persistRules(data []byte) error {
 	path := DefaultRulesPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	tmp, err := os.CreateTemp(dir, ".rules-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // LoadPersistedRules loads the rule pack from disk at startup. Returns the

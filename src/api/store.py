@@ -1,6 +1,7 @@
 """EventStore - event lifecycle storage. Phase 2: PG JSONB primary, ES for full-text search."""
 
 import json
+import os
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -157,7 +158,8 @@ class EventStore:
         )
         async with await self._pg_conn() as conn:
             await conn.execute(
-                "INSERT INTO events (event_id, data) VALUES ($1, $2::jsonb)",
+                "INSERT INTO events (event_id, data) VALUES ($1, $2::jsonb) "
+                "ON CONFLICT (event_id) DO UPDATE SET data = EXCLUDED.data",
                 event_id,
                 rec.model_dump_json(),
             )
@@ -336,6 +338,11 @@ def get_event_store(backend: str | None = None) -> EventStore | MemoryEventStore
       "es"     -> Elasticsearch  (store_es.py)
       "pg"     -> PostgreSQL     (EventStore, this module)
       "memory" -> In-memory dict (MemoryEventStore, this module)
+
+    阶段 5 收尾 P-func-2:``memory`` backend 在分布式部署中**禁止使用**
+    (进程内单例,gateway/ai 跨进程不共享,system 问答路径会静默失效)。
+    启动期显式 warn 提示风险;通过 env ``SECAGENT_ALLOW_MEMORY_STORE=1`` 显式 opt-in
+    (单测/开发模式需要 memory 时设此 env)。
     """
     if backend is None:
         backend = get_settings().store_backend
@@ -344,6 +351,19 @@ def get_event_store(backend: str | None = None) -> EventStore | MemoryEventStore
 
         return get_es_event_store()  # type: ignore[return-value]
     if backend == "memory":
+        if os.environ.get("SECAGENT_ALLOW_MEMORY_STORE") != "1":
+            # 分布式部署:gateway 写 events 在 ai 进程读不到 → system 问答静默失败
+            # 通过 SECAGENT_ALLOW_MEMORY_STORE=1 显式 opt-in 跳过警告
+            logger.warning(
+                "store_backend_memory_in_distributed_deployment_risk",
+                note=(
+                    "store_backend='memory' in distributed deployment: "
+                    "gateway/ai/scan-engine run in separate processes, "
+                    "events written in gateway are NOT visible in ai process. "
+                    "Set store_backend='es' in Nacos shared dataId for production. "
+                    "For unit tests, set SECAGENT_ALLOW_MEMORY_STORE=1 to opt-in."
+                ),
+            )
         global _mem_store
         if _mem_store is None:
             _mem_store = MemoryEventStore()

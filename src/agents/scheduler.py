@@ -62,12 +62,39 @@ async def _offline_check_loop() -> None:
             logger.warning("offline_check_failed", error=str(exc))
 
 
+async def _purge_metrics_loop() -> None:
+    """需求①: retention sweep for host_metrics every 6 hours.
+
+    Deletes ES secagent-hostmetrics docs older than
+    ``metrics_retention_days`` (default 30). Mirrors the mark_offline_expired
+    sweep pattern: sleep → best-effort purge → log → repeat. A failure just
+    waits for the next round; the 6h cadence keeps the delete volume small.
+    """
+    interval_sec = 6 * 3600
+    logger.info("metrics_purge_scheduler_started", interval_sec=interval_sec)
+    while True:
+        await asyncio.sleep(interval_sec)
+        try:
+            from datetime import UTC
+
+            from src.agents.metrics_store import get_metrics_store
+
+            settings = get_settings()
+            cutoff = datetime.now(UTC) - timedelta(days=settings.metrics_retention_days)
+            deleted = await get_metrics_store().delete_before(cutoff.isoformat())
+            if deleted > 0:
+                logger.info("metrics_purged", deleted=deleted, cutoff=cutoff.isoformat())
+        except Exception as exc:
+            logger.warning("metrics_purge_failed", error=str(exc))
+
+
 def start_background_tasks() -> None:
     """Start all periodic background tasks. Called during FastAPI lifespan startup."""
     global _tasks
     _tasks = [
         asyncio.create_task(_rules_sync_loop()),
         asyncio.create_task(_offline_check_loop()),
+        asyncio.create_task(_purge_metrics_loop()),
     ]
     logger.info("background_tasks_started", count=len(_tasks))
 

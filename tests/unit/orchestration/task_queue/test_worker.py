@@ -171,3 +171,71 @@ def test_worker_max_concurrent_clamped_to_one():
     assert TaskWorker(max_concurrent=0).max_concurrent == 1
     assert TaskWorker(max_concurrent=-5).max_concurrent == 1
     assert TaskWorker(max_concurrent=4).max_concurrent == 4
+
+
+# -- P3-A (需求②): stream/group/runner 参数化 ---------------------------------
+
+
+def test_worker_defaults_to_vulnscan_queue():
+    """默认构造仍消费 vulnscan 队列（向后兼容，现有调用零改动）。"""
+    from src.orchestration.task_queue.keys import CONSUMER_GROUP, STREAM_DLQ, STREAM_TASKS
+    from src.orchestration.task_queue.worker import TaskWorker
+
+    w = TaskWorker()
+    assert w._stream == STREAM_TASKS
+    assert w._group == CONSUMER_GROUP
+    assert w._dlq == STREAM_DLQ
+    # runner 默认是 vulnscan 的 run_vulnscan_from_envelope
+    from src.orchestration.task_queue.runner import run_vulnscan_from_envelope
+
+    assert w._runner is run_vulnscan_from_envelope
+    assert w._envelope_cls.__name__ == "TaskEnvelope"
+
+
+def test_worker_accepts_custom_queue_params():
+    """asset-scan 服务可用自定义 stream/group/dlq/runner/envelope_cls。"""
+    from src.orchestration.task_queue.worker import TaskWorker
+
+    async def fake_asset_runner(envelope):
+        return None
+
+    class _AssetEnvelope:
+        @classmethod
+        def from_json(cls, raw):
+            return cls()
+
+        def to_json(self):
+            return "{}"
+
+    w = TaskWorker(
+        stream="assetscan:queue:tasks",
+        group="asset-scan-workers",
+        dlq="assetscan:queue:dlq",
+        runner=fake_asset_runner,
+        envelope_cls=_AssetEnvelope,
+    )
+    assert w._stream == "assetscan:queue:tasks"
+    assert w._group == "asset-scan-workers"
+    assert w._dlq == "assetscan:queue:dlq"
+    assert w._runner is fake_asset_runner
+    assert w._envelope_cls is _AssetEnvelope
+
+
+def test_dequeue_functions_default_to_vulnscan_queue():
+    """dequeue 各函数默认参数仍为 vulnscan 常量（调用方零改动）。"""
+    import inspect
+
+    from src.orchestration.task_queue import dequeue as dq
+    from src.orchestration.task_queue.keys import CONSUMER_GROUP, STREAM_TASKS
+
+    for fn_name in ("ensure_group", "read_message_blocking", "ack_message", "claim_stale"):
+        sig = inspect.signature(getattr(dq, fn_name))
+        assert sig.parameters["stream"].default is None
+        assert sig.parameters["group"].default is None
+    # 实际解析逻辑：None -> vulnscan 常量
+    assert dq.ensure_group.__defaults__ is None  # keyword-only
+    sig = inspect.signature(dq.move_to_dlq)
+    assert sig.parameters["dlq"].default is None
+    assert sig.parameters["stream"].default is None
+    assert STREAM_TASKS.startswith("vulnscan:")
+    assert CONSUMER_GROUP == "vulnscan-workers"

@@ -1,136 +1,191 @@
-# =====================================================================
-# SecAgent 生产部署
-# 业务配置走 Nacos(由 nacos-config.yaml 维护),docker-compose 只注入
-# 启动必须的引导变量。
-# =====================================================================
-
-name: secagent
-
-x-bootstrap-env: &bootstrap-env
-  # ---- 中间件地址(本地中间件)----
-  POSTGRES_HOST: "127.0.0.1"
-  POSTGRES_PORT: "5432"
-  PG_HOST: "127.0.0.1"
-  PG_PORT: "5432"
-  PG_DATABASE: "SecAgent"
-  PG_USER: "secagent"
-  PG_POOL_SIZE: "10"
-
-  REDIS_HOST: "127.0.0.1"
-  REDIS_PORT: "6379"
-
-  # ---- Nacos bootstrap ----
-  NACOS_SERVER: "http://127.0.0.1:8848"
-  NACOS_NAMESPACE: "prod"
-  NACOS_GROUP: "SECURITY"
-  NACOS_DATA_ID: "security-agent.yaml"
-
-  API_HOST: "0.0.0.0"
-  API_PORT: "8000"
-  LOG_LEVEL: "INFO"
-
-x-logging: &logging
-  driver: json-file
-  options:
-    max-size: "20m"
-    max-file: "5"
+# 阶段 5:docker-compose.yml(host 网络,生产 192.168.18.156 单机部署)
+# bridge 版见 docker-compose.bridge.yml(开发机 192.168.80.101)。
+#
+# 服务:gateway / ai / scan-engine / graphrag / celery(必启用)
+#     preprocessing(按需启用,默认注释)
+#     frontend(不变)
+#
+# 健康检查:
+# - gateway/ai/graphrag:HTTP /healthz
+# - scan-engine / celery / preprocessing:依赖 depends_on + entrypoint 日志关键字
 
 services:
-
-  # ============================================================
-  # API 网关
-  # 启动时序:lifespan init_schema() -> load_nacos_settings() ->
-  #          start_nacos_listener() -> uvicorn
-  # HEALTHCHECK 只在本服务上,因为其他服务(taskworker/celery)不暴露 HTTP
-  # ============================================================
-  api:
-    image: ${SECAGENT_IMAGE_API:-secagent-api:0.1.0}
-    container_name: secagent-api
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.gateway
+    image: secagent-gateway:0.1.0
+    container_name: secagent-gateway
     restart: unless-stopped
     network_mode: host
     env_file:
-      - .env
+      - ../.env
     environment:
-      <<: *bootstrap-env
-      # 健康检查用的 curl 必须绕过任何代理,直接打 127.0.0.1:8000
-      # (entrypoint 里有 no_proxy 但 curl 默认走 HTTPS_PROXY,所以这里显式再写一次)
-      no_proxy: "127.0.0.1,localhost,127.0.0.0/8"
-      NO_PROXY: "127.0.0.1,localhost,127.0.0.0/8"
-    volumes:
-      - ./logs/api:/app/logs
-    logging: *logging
+      # Nacos 多 dataId(阶段 0-2 nacos_loader 改造支持)
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-gateway.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+      # uvicorn bind 127.0.0.1 已在 Dockerfile CMD 写死(防绕过鉴权)
+      # AI 代理地址(默认指向本机 8001)
+      AI_BASE_URL: "http://127.0.0.1:8001"
+      GRAPHRAG_BASE_URL: "http://127.0.0.1:8002"
+      # 阶段 5 收尾:删 AI_PROXY_ENABLED(反代是唯一路径)
     healthcheck:
-      # --noproxy '*' + -4 强制走 IPv4,避开容器内 http_proxy 把 127.0.0.1
-      # 解析成代理自身 localhost 的问题
-      test: ["CMD-SHELL", "curl -fsS -4 --noproxy '*' http://127.0.0.1:8000/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 90s
-
-  # ============================================================
-  # TaskWorker — vulnscan Redis Stream 消费者
-  # ============================================================
-  taskworker:
-    image: ${SECAGENT_IMAGE_API:-secagent-api:0.1.0}
-    container_name: secagent-taskworker
-    restart: unless-stopped
-    network_mode: host
-    command: ["taskworker"]
-    env_file:
-      - .env
-    environment:
-      <<: *bootstrap-env
-    volumes:
-      - ./logs/taskworker:/app/logs
-    logging: *logging
-    depends_on:
-      - api
-
-  # ============================================================
-  # Celery worker — HITL 审批超时兜底
-  # ============================================================
-  celery:
-    image: ${SECAGENT_IMAGE_API:-secagent-api:0.1.0}
-    container_name: secagent-celery
-    restart: unless-stopped
-    network_mode: host
-    command: ["celery"]
-    env_file:
-      - .env
-    environment:
-      <<: *bootstrap-env
-      CELERY_CONCURRENCY: "4"
-    volumes:
-      - ./logs/celery:/app/logs
-    logging: *logging
-    depends_on:
-      - api
-
-  # ============================================================
-  # 前端 — nginx + React 静态
-  # ============================================================
-  frontend:
-    image: ${SECAGENT_IMAGE_FRONTEND:-secagent-frontend:0.1.0}
-    container_name: secagent-frontend
-    restart: unless-stopped
-    ports:
-      - "${FRONTEND_PORT:-8081}:80"
-    depends_on:
-      - api
-    # V12 5.11 (2026-08-02): api 服务是 network_mode: host（不在 docker
-    # bridge 网络内），nginx 的 upstream `secagent-api:8000` 无法通过
-    # docker DNS 解析。host-gateway 把该名字映射到宿主机网关，nginx
-    # 经宿主机的 host 网络端口到达 api。
-    extra_hosts:
-      - "secagent-api:host-gateway"
-    logging: *logging
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1/healthz"]
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 20s
+    depends_on:
+      ai:
+        condition: service_healthy
+      graphrag:
+        condition: service_healthy
 
-networks:
-  default:
-    name: secagent-net
+  ai:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.ai
+    image: secagent-ai:0.1.0
+    container_name: secagent-ai
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-ai.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8001/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  scan-engine:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.scan-engine
+    image: secagent-scan-engine:0.1.0
+    container_name: secagent-scan-engine
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-scan-engine.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+      GRAPHRAG_BASE_URL: "http://127.0.0.1:8002"
+    volumes:
+      # 沙箱需要 docker socket
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 健康检查:无 HTTP,依赖日志关键字 + pgrep
+    # entrypoint-scan-engine.sh 由 Dockerfile.scan-engine 加(阶段 5 收尾)
+    # healthcheck 走 docker 内置:pgrep -f scan_engine.main
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'src.scan_engine.main' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      graphrag:
+        condition: service_healthy
+
+  asset-scan:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.asset-scan
+    image: secagent-asset-scan:0.1.0
+    container_name: secagent-asset-scan
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-asset-scan.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+    # 需求②: agentless 扫描需从对目标网段可达的主机发起; 独立容器便于
+    # 收敛防火墙规则(仅本服务放行出站扫描)。健康检查走 pgrep。
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'src.asset_scan.main' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  graphrag:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.graphrag
+    image: secagent-graphrag:0.1.0
+    container_name: secagent-graphrag
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-graphrag.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+      EMBEDDING_MODEL_PATH: "/opt/models/bge-large-zh-v1.5"
+    volumes:
+      - /opt/models/bge-large-zh-v1.5:/opt/models/bge-large-zh-v1.5:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8002/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  celery:
+    build:
+      context: ../..
+      dockerfile: deployments/prod/docker/Dockerfile.celery
+    image: secagent-celery:0.1.0
+    container_name: secagent-celery
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ../.env
+    environment:
+      NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-celery.yaml"
+      NACOS_NAMESPACE: "prod"
+      NACOS_GROUP: "security"
+      REDIS_URL: "redis://127.0.0.1:6379/0"
+    # 健康检查:celery inspect ping(celery 启动后才接受 ping)
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A src.common.celery_app inspect ping -d celery@$(hostname) >/dev/null"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # preprocessing(按需启用,默认注释;生产未启用)
+  # preprocessing:
+  #   build:
+  #     context: ../..
+  #     dockerfile: deployments/prod/docker/Dockerfile.preprocessing
+  #   image: secagent-preprocessing:0.1.0
+  #   container_name: secagent-preprocessing
+  #   restart: unless-stopped
+  #   network_mode: host
+  #   env_file: ../.env
+  #   environment:
+  #     NACOS_DATA_IDS: "security-agent-shared.yaml,security-agent-preprocessing.yaml"
+  #   depends_on:
+  #     - scan-engine
+
+  frontend:
+    image: secagent-frontend:0.1.0
+    container_name: secagent-frontend
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    extra_hosts:
+      - "secagent-api:127.0.0.1"  # gateway host bind
+    depends_on:
+      - gateway

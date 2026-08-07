@@ -129,7 +129,10 @@ async def seed_demo_data(current_user=Depends(require_role("admin"))):
         )
 
         if verdict == "true_positive" and confidence >= 0.8:
-            ap_id = f"ap-{uuid.uuid4().hex[:8]}"
+            # P0 修复(2026-08-06 全量测试):approvals.approval_id 是 UUID 列,
+            # 原 f"ap-{uuid.uuid4().hex[:8]}" 非 UUID 格式 → asyncpg invalid UUID
+            # → demo seed 500。改用标准 uuid4。
+            ap_id = str(uuid.uuid4())
             await store.update_event(event_id, status="pending_approval", pending_approval_id=ap_id)
             await store.add_trace_step(
                 event_id,

@@ -142,6 +142,7 @@ func (r *CLIRunner) Run(ctx context.Context, req Request) (<-chan Result, Summar
 	// We only consume stdout; stderr is forwarded to the agent log.
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		cancel() // V13 P1-4 (go vet lostcancel): release the timeout context
 		return nil, summary, fmt.Errorf("open nuclei stdout: %w", err)
 	}
 	// nuclei writes JSON lines to stdout and human-friendly progress to stderr.
@@ -149,6 +150,7 @@ func (r *CLIRunner) Run(ctx context.Context, req Request) (<-chan Result, Summar
 	cmd.Stderr = &stderrWriter{prefix: "[nuclei]"}
 
 	if err := cmd.Start(); err != nil {
+		cancel() // V13 P1-4 (go vet lostcancel): release the timeout context
 		return nil, summary, fmt.Errorf("start nuclei: %w", err)
 	}
 

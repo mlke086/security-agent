@@ -40,8 +40,8 @@ class Playbook(BaseModel):
 
 def _infer_level(op_type: str) -> OpLevel:
     for level in ("L5", "L4", "L3", "L2"):
-        if any(kw in op_type for kw in _LEVEL_KEYWORDS[level]):  # type: ignore[index]
-            return level  # type: ignore[return-value]
+        if any(kw in op_type for kw in _LEVEL_KEYWORDS[level]):
+            return level
     return "L1"
 
 

@@ -178,6 +178,52 @@ class TestTasks:
         )
         assert resp.status_code == 422
 
+    def test_batch_delete_over_200_422(self, auth_headers):
+        """V13 P2-4: unbounded batches stall past the gateway timeout; cap."""
+        headers = auth_headers("admin")
+        resp = client.post(
+            "/api/v1/vulnscan/tasks/batch-delete",
+            json={"task_ids": [f"t{i}" for i in range(201)]},
+            headers=headers,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_rejects_overlong_targets(self, auth_headers):
+        """V13 P2-5: target list is bounded before it reaches the agents."""
+        headers = auth_headers("admin")
+        resp = client.post(
+            "/api/v1/vulnscan/tasks",
+            json={"targets": [f"host-{i}" for i in range(501)]},
+            headers=headers,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_rejects_bad_ports(self, auth_headers):
+        """V13 P2-5: nuclei_ports outside 1-65535 is rejected, not passed
+        through to the agent's command line."""
+        headers = auth_headers("admin")
+        resp = client.post(
+            "/api/v1/vulnscan/tasks",
+            json={"targets": ["host-a"], "engine": "nuclei", "nuclei_ports": [0, 70000, "22"]},
+            headers=headers,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_accepts_valid_ports(self, auth_headers):
+        headers = auth_headers("admin")
+        with patch("src.api.routers.vulnscan.get_vulnscan_store") as mock_vs:
+            mock_vs.return_value = _mock_store()
+            resp = client.post(
+                "/api/v1/vulnscan/tasks",
+                json={
+                    "targets": ["host-a"],
+                    "engine": "nuclei",
+                    "nuclei_ports": [22, 443, 8080],
+                },
+                headers=headers,
+            )
+        assert resp.status_code == 200
+
 
 # -- stream -------------------------------------------------------------------
 
@@ -856,3 +902,214 @@ class TestTaskFindingsEndpoint:
         assert body["total"] == 2
         assert [i["finding_id"] for i in body["items"]] == ["f-1", "f-2"]
         store.list_results.assert_awaited_once_with("t-1")
+
+
+# -- 需求③ (2026-08-06): /vulnscan/host-vuln-summary 主机维度聚合 ------------
+
+
+class TestHostVulnSummary:
+    """主机清单顶层视图端点。
+
+    与 /host-stats（组维度）不同，本端点按 agent_id 分桶，漏洞情况按
+    原始 severity 统计。store.host_vuln_summary_buckets 返回原始桶，
+    路由负责 PG JOIN（list_hosts）与排序分页。
+
+    鉴权说明：本环境无可用 PG（auth_headers fixture 的 /auth/me 会
+    连 PG），这里用 dependency_overrides 直接注入用户对象，使测试
+    不依赖外部服务。
+    """
+
+    def _auth(self, role):
+        from src.api.auth.jwt import UserInDB
+        from src.api.auth.routes import get_current_user
+
+        user = UserInDB(username=f"t-{role}", hashed_password="x", role=role, token_version=0)
+        app.dependency_overrides[get_current_user] = lambda: user
+        return {"Authorization": "Bearer t"}
+
+    def _cleanup(self):
+        app.dependency_overrides.clear()
+
+    def _mock_store_with_buckets(self, buckets, hosts):
+        store = _mock_store()
+        store.list_hosts = AsyncMock(return_value=hosts)
+        store.host_vuln_summary_buckets = AsyncMock(return_value=buckets)
+        return store
+
+    def _host(self, agent_id, hostname, ip, group):
+        from src.agents.models import Host
+
+        return Host(
+            agent_id=agent_id,
+            hostname=hostname,
+            ip=ip,
+            os="Ubuntu 22.04",
+            arch="amd64",
+            kernel="5.15",
+            group=group,
+        )
+
+    def test_host_vuln_summary_aggregation(self):
+        from src.api.routers.vulnscan import _HOST_VULN_SUMMARY_CACHE
+
+        _HOST_VULN_SUMMARY_CACHE.clear()
+        headers = self._auth("viewer")
+        buckets = [
+            {
+                "agent_id": "a1",
+                "total": 9,
+                "severity_counts": {"critical": 1, "high": 5, "medium": 3, "low": 0},
+                "status_counts": {"open": 7, "fixed": 2},
+                "last_scan_at": "2026-08-06T09:00:00+00:00",
+            },
+            {
+                "agent_id": "a2",
+                "total": 2,
+                "severity_counts": {"high": 2},
+                "status_counts": {"open": 2},
+                "last_scan_at": "2026-08-06T08:00:00+00:00",
+            },
+        ]
+        hosts = [self._host("a1", "web-01", "10.0.0.5", "生产"), self._host("a2", "db-01", "10.0.0.6", "生产")]
+        store = self._mock_store_with_buckets(buckets, hosts)
+        try:
+            with patch("src.api.routers.vulnscan.get_vulnscan_store", return_value=store):
+                resp = client.get("/api/v1/vulnscan/host-vuln-summary", headers=headers)
+        finally:
+            self._cleanup()
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["cached"] is False
+        assert body["total"] == 2
+        # 按漏洞数降序：a1(9) 在前
+        assert [i["agent_id"] for i in body["items"]] == ["a1", "a2"]
+        first = body["items"][0]
+        assert first["hostname"] == "web-01"
+        assert first["ip"] == "10.0.0.5"
+        assert first["os"] == "Ubuntu 22.04"
+        assert first["group"] == "生产"
+        assert first["severity_counts"] == {"critical": 1, "high": 5, "medium": 3, "low": 0}
+        assert first["total"] == 9
+        assert first["open_count"] == 7
+        assert first["fixed_count"] == 2
+        assert first["last_scan_at"] == "2026-08-06T09:00:00+00:00"
+        # PG JOIN：agent_id 批量查 hosts
+        store.list_hosts.assert_awaited_once()
+
+    def test_host_vuln_summary_uses_raw_severity(self):
+        """severity_counts 透传原始 severity 聚合结果（非 ai_severity）。"""
+        from src.api.routers.vulnscan import _HOST_VULN_SUMMARY_CACHE
+
+        _HOST_VULN_SUMMARY_CACHE.clear()
+        headers = self._auth("viewer")
+        buckets = [
+            {
+                "agent_id": "a1",
+                "total": 1,
+                "severity_counts": {"high": 1},  # 原始 severity
+                "status_counts": {"open": 1},
+                "last_scan_at": "",
+            },
+        ]
+        store = self._mock_store_with_buckets(buckets, [self._host("a1", "web-01", "10.0.0.5", "生产")])
+        try:
+            with patch("src.api.routers.vulnscan.get_vulnscan_store", return_value=store):
+                resp = client.get("/api/v1/vulnscan/host-vuln-summary", headers=headers)
+        finally:
+            self._cleanup()
+        assert resp.status_code == 200, resp.text
+        item = resp.json()["items"][0]
+        assert item["severity_counts"] == {"high": 1}
+        # 响应契约：主机清单不含 ai_severity 维度
+        assert "ai_severity" not in item
+
+    def test_host_vuln_summary_passes_filters_down(self):
+        """group/severity/status/hostname_keyword 筛选下推 store。"""
+        from src.api.routers.vulnscan import _HOST_VULN_SUMMARY_CACHE
+
+        _HOST_VULN_SUMMARY_CACHE.clear()
+        headers = self._auth("analyst")
+        hosts = [self._host("a1", "web-01", "10.0.0.5", "生产"), self._host("a2", "db-01", "10.0.0.6", "测试")]
+        store = self._mock_store_with_buckets([], hosts)
+
+        async def _list_hosts_group_filtered(group=None, **_):
+            # 模拟 PG：group 筛选下只返回该组主机
+            return [h for h in hosts if group is None or h.group == group]
+
+        store.list_hosts = AsyncMock(side_effect=_list_hosts_group_filtered)
+        try:
+            with patch("src.api.routers.vulnscan.get_vulnscan_store", return_value=store):
+                resp = client.get(
+                    "/api/v1/vulnscan/host-vuln-summary",
+                    params={"group": "生产", "severity": "high", "status": "open", "hostname_keyword": "web"},
+                    headers=headers,
+                )
+        finally:
+            self._cleanup()
+        assert resp.status_code == 200, resp.text
+        # group 筛选经 PG 变为 agent_id terms：只传该组主机
+        store.list_hosts.assert_awaited_once()
+        call_kwargs = store.list_hosts.await_args.kwargs
+        assert call_kwargs.get("group") == "生产"
+        store.host_vuln_summary_buckets.assert_awaited_once_with(
+            group_agent_ids=["a1"],
+            hostname_keyword="web",
+            severity="high",
+            status="open",
+            host_limit=500,
+        )
+
+    def test_host_vuln_summary_cache(self):
+        """30s TTL 内同参数二次请求命中缓存（store 不再被调）。"""
+        from src.api.routers.vulnscan import _HOST_VULN_SUMMARY_CACHE
+
+        _HOST_VULN_SUMMARY_CACHE.clear()
+        headers = self._auth("viewer")
+        buckets = [
+            {
+                "agent_id": "a1",
+                "total": 1,
+                "severity_counts": {"high": 1},
+                "status_counts": {"open": 1},
+                "last_scan_at": "2026-08-06T09:00:00+00:00",
+            },
+        ]
+        store = self._mock_store_with_buckets(buckets, [self._host("a1", "web-01", "10.0.0.5", "生产")])
+        try:
+            with patch("src.api.routers.vulnscan.get_vulnscan_store", return_value=store):
+                r1 = client.get("/api/v1/vulnscan/host-vuln-summary", headers=headers)
+                r2 = client.get("/api/v1/vulnscan/host-vuln-summary", headers=headers)
+        finally:
+            self._cleanup()
+        assert r1.status_code == 200 and r2.status_code == 200
+        assert r1.json()["cached"] is False
+        assert r2.json()["cached"] is True
+        assert r2.json()["items"] == r1.json()["items"]
+        store.host_vuln_summary_buckets.assert_awaited_once()
+        _HOST_VULN_SUMMARY_CACHE.clear()
+
+
+class TestVulnFilterAgentId:
+    """需求③ 钻取：VulnFilter.agent_id 在 ES 查询中生成 term 过滤。"""
+
+    def test_vulnfilter_has_agent_id(self):
+        from src.agents.models import VulnFilter
+
+        assert VulnFilter(agent_id="a1").agent_id == "a1"
+
+    def test_vulns_query_agent_id_term(self):
+        from src.agents.models import VulnFilter
+        from src.agents.store import VulnscanStore
+
+        query = VulnscanStore._vulns_query(VulnFilter(agent_id="a1"))
+        must = query["bool"]["must"]
+        assert {"term": {"agent_id": "a1"}} in must
+
+    def test_vulns_query_agent_id_coexists_with_agent_ids(self):
+        from src.agents.models import VulnFilter
+        from src.agents.store import VulnscanStore
+
+        query = VulnscanStore._vulns_query(VulnFilter(agent_id="a1", agent_ids=["a2", "a3"]))
+        must = query["bool"]["must"]
+        assert {"term": {"agent_id": "a1"}} in must
+        assert {"terms": {"agent_id": ["a2", "a3"]}} in must

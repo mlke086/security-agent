@@ -1,0 +1,56 @@
+# 阶段 5 nacos 拆分:gateway dataId
+# 仅 gateway 服务消费的字段(API/JWT/agent/signing/cors 等)。
+
+api_host: "0.0.0.0"
+api_port: 8000
+api_access_token_expire_minutes: 120
+api_refresh_token_expire_days: 7
+
+jwt_secret_key: "${API_SECRET_KEY}"
+agent_signing_key: "${AGENT_SIGNING_KEY}"
+agent_hmac_key: "${AGENT_HMAC_KEY}"
+agent_ca_cert: ""
+agent_tls_cert: ""
+agent_tls_key: ""
+agent_binary_dir: "/app/deployments/agent/dist"
+agent_binary_version: "0.1.0"
+agent_heartbeat_interval: 60
+agent_console_external_url: "https://127.0.0.1:8000"
+
+allowed_origins: ""
+
+# Sandbox(HTTP 暴露相关,如 sandbox network name)
+sandbox_network: "sandbox-net"
+
+# Nuclei rules_sync
+nuclei_download_base_url: ""
+nuclei_version: ""
+nuclei_templates_version: ""
+rules_sync_source: "nvd"
+rules_sync_cron: "0 3 * * *"
+
+# 需求① (2026-08-06): host_metrics 保留/降采样配置（settings 默认值兜底，
+# 这里下发生产可热更新；Nacos 过滤规则要求字段在 settings.py 声明）。
+metrics_retention_days: 30
+metrics_downsample_7d_interval: "5m"
+
+# NVD / GitHub advisory 在线同步
+nvd_api_key: null
+nvd_proxy: ""
+nvd_timeout_sec: 30
+nvd_lookback_hours: 24
+nvd_results_per_page: 100
+advisory_lookback_days: 30
+vuln_merge_enabled: true
+
+# V13 seed 密码(生产必设 ≥12 位)
+# Nacos 中置 null: 凭据类由 PROTECTED_OVERRIDE_KEYS 保护, 走 env
+# (nacos_loader 对 null 跳过, 不会覆盖 .env)
+dev_mode: false
+default_admin_password: null
+default_analyst_password: null
+default_viewer_password: null
+default_responder_password: null
+
+# AI 代理(阶段 3):双轨开关
+ai_proxy_enabled: true

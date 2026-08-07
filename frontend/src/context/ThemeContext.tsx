@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import { theme as antdTheme, ConfigProvider } from "antd"
 
 export type ThemeKey = "light" | "dark" | "tech-blue" | "eye-green"
@@ -73,14 +73,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   })
 
-  const setThemeKey = (k: ThemeKey) => {
+  // V13 P2-25: stabilize the callbacks / value so consumers of the context
+  // (every page) do not re-render on each ThemeProvider render -- the
+  // previous inline setThemeKey + freshly-built value object broke
+  // React.memo / useMemo consumers down the tree.
+  const setThemeKey = useMemo(() => (k: ThemeKey) => {
     // P3-7 修复：校验 key 合法 + setItem 容错（隐私模式 setItem 抛 QuotaExceededError）。
     if (!THEMES[k]) return
     setThemeKeyState(k)
     try {
       localStorage.setItem(STORAGE_KEY, k)
     } catch { /* localStorage 不可用，仅内存切换 */ }
-  }
+  }, [])
 
   const profile = THEMES[themeKey]
 
@@ -92,8 +96,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute("data-theme", themeKey)
   }, [themeKey])
 
+  const ctxValue = useMemo(
+    () => ({ themeKey, setThemeKey, profile }),
+    [themeKey, setThemeKey, profile],
+  )
+
   return (
-    <ThemeContext.Provider value={{ themeKey, setThemeKey, profile }}>
+    <ThemeContext.Provider value={ctxValue}>
       <ConfigProvider theme={{ algorithm: profile.algorithm, token: profile.token }}>
         {children}
       </ConfigProvider>

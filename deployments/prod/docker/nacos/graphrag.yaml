@@ -1,0 +1,21 @@
+# 阶段 5 nacos 拆分:graphrag dataId
+# 仅 graphrag 服务消费:Milvus/Neo4j 连接 + embedding 配置。
+
+milvus_host: "127.0.0.1"
+milvus_port: 19530
+milvus_collection: "threat_intel"
+milvus_score_threshold: 0.65
+
+neo4j_uri: "bolt://127.0.0.1:7687"
+neo4j_user: "neo4j"
+neo4j_password: "${NEO4J_PASSWORD}"
+
+# Embedding
+embedding_model_path: "/opt/models/bge-large-zh-v1.5"
+embedding_dim: 1024
+
+# 服务地址(自引用)
+graphrag_base_url: "http://127.0.0.1:8002"
+
+# LLM 缓存 TTL(Redis)
+redis_cache_ttl: 3600

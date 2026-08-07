@@ -79,3 +79,7 @@ class TestInstallScript:
             assert "192.168.80.101:8081" in script
             assert "nuclei_3.11.0_windows_" in script
             assert "nuclei-templates-10.4.6.zip" in script
+            # V13 P1-12: the enroll token must go in the Authorization
+            # header, never in the download URL query string.
+            assert "?token=$TOKEN" not in script
+            assert 'Authorization = "Bearer $TOKEN"' in script

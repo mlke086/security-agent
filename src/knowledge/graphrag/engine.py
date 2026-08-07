@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 from collections import defaultdict
 
 import redis.asyncio as aioredis
@@ -35,11 +37,16 @@ class GraphRAGEngine:
         ioc_values: list[str],
         top_k: int = 10,
     ) -> dict:
-        cache_key = f"graphrag:{':'.join(sorted(ioc_values))}"
+        # V13 P2-2: the cache key must include the query vector -- two
+        # different queries over the same IOC set (different embeddings)
+        # used to share one cache entry and return the wrong retrieval
+        # results. Empty IOC sets also used to share a single global key.
+        vec_hash = hashlib.sha256(
+            json.dumps(query_vector, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        cache_key = f"graphrag:{vec_hash}:{':'.join(sorted(ioc_values))}"
         cached = await self._redis.get(cache_key)
         if cached:
-            import json
-
             return json.loads(cached)
 
         vector_hits, graph_hits = await asyncio.gather(
@@ -56,8 +63,6 @@ class GraphRAGEngine:
             "vector_hits": vector_hits,
             "graph_relations": graph_hits,
         }
-
-        import json
 
         await self._redis.setex(cache_key, self._cache_ttl, json.dumps(result))
         return result

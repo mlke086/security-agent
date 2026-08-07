@@ -25,7 +25,10 @@ client = TestClient(app)
 results = {"passed": 0, "failed": 0, "total": 0}
 
 # Terminal statuses the pipeline may settle into once processing finishes.
-TERMINAL_STATUSES = {"completed", "pending_approval", "ignored", "error"}
+# V13 P2-28: "error" is NOT a valid pass -- a pipeline that crashed for
+# every event used to still count as "reached terminal status" and the
+# scenario passed. Keep only statuses that mean the flow worked.
+TERMINAL_STATUSES = {"completed", "pending_approval", "ignored"}
 
 
 def check(scenario: str, detail: str, ok: bool) -> None:

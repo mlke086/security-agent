@@ -36,6 +36,28 @@ CANCEL_TTL_SEC: int = 24 * 3600
 # separate counter (no atomicity guarantee with XADD).
 DEPTH_KEY: str = "vulnscan:queue:depth"
 
+# -- P3-A (需求②): 内网资产扫描队列 (agentless asset-scan 服务) -------------
+# 与 vulnscan 完全独立的 Redis Stream / group / DLQ / 状态 / 取消键。
+# 生产者 = gateway routers/asset_scan.py，消费者 = asset-scan 服务的
+# TaskWorker(stream=...)。
+
+STREAM_ASSET_TASKS: str = "assetscan:queue:tasks"
+STREAM_ASSET_DLQ: str = "assetscan:queue:dlq"
+ASSET_CONSUMER_GROUP: str = "asset-scan-workers"
+ASSET_STATUS_KEY_PREFIX: str = "assetscan:queue:status:"
+ASSET_CANCEL_KEY_PREFIX: str = "assetscan:queue:cancel:"
+ASSET_DEPTH_KEY: str = "assetscan:queue:depth"
+
+
+def asset_status_key(task_id: str) -> str:
+    """Redis key for the short-lived status side-channel of an asset task."""
+    return ASSET_STATUS_KEY_PREFIX + task_id
+
+
+def asset_cancel_key(task_id: str) -> str:
+    """Redis tombstone checked by asset-scan worker and graph nodes."""
+    return ASSET_CANCEL_KEY_PREFIX + task_id
+
 
 def status_key(task_id: str) -> str:
     """Redis key for the short-lived status side-channel of a task.

@@ -20,27 +20,66 @@ from src.orchestration.task_queue.dequeue import (
     read_message_blocking,
     stream_depth,
 )
-from src.orchestration.task_queue.enqueue import TaskEnvelope, enqueue_task
+from src.orchestration.task_queue.enqueue import (
+    AssetScanEnvelope,
+    TaskEnvelope,
+    enqueue_asset_task,
+    enqueue_task,
+)
 from src.orchestration.task_queue.keys import (
     CONSUMER_GROUP,
     STATUS_KEY_PREFIX,
+    STREAM_ASSET_TASKS,
     STREAM_DLQ,
     STREAM_TASKS,
+    asset_status_key,
     depth_key,
     status_key,
 )
-from src.orchestration.task_queue.runner import run_vulnscan_from_envelope
-from src.orchestration.task_queue.worker import TaskWorker, WorkerHandle
+
+# 阶段 0-3:防御性 lazy 化——runner 和 worker 顶层 import 会拖入
+# orchestration.subgraphs.vulnscan.graph(经 run_pipeline),间接拖 langgraph。
+# gateway 镜像不该含 langgraph(方案改动点 7)。采用 PEP 562 模块级 __getattr__
+# 按需加载:调用方显式 `from src.orchestration.task_queue import run_vulnscan_from_envelope`
+# 时才触发 import。其他场景(仅 enqueue/dequeue/keys)零代价。
+_LAZY_NAMES = {
+    "run_vulnscan_from_envelope": "src.orchestration.task_queue.runner",
+    "TaskWorker": "src.orchestration.task_queue.worker",
+    "WorkerHandle": "src.orchestration.task_queue.worker",
+}
+
+
+def __getattr__(name: str):
+    """PEP 562 lazy attribute loader for runner/worker symbols."""
+    module_path = _LAZY_NAMES.get(name)
+    if module_path is None:
+        raise AttributeError(f"module 'src.orchestration.task_queue' has no attribute {name!r}")
+    import importlib
+
+    module = importlib.import_module(module_path)
+    value = getattr(module, name)
+    globals()[name] = value  # cache for subsequent access
+    return value
+
+
+def __dir__():
+    """让 dir(task_queue) 能看到 lazy 属性,便于 IDE 自动补全。"""
+    return sorted(set(__all__) | set(globals().keys()))
+
 
 __all__ = [
     "STREAM_TASKS",
     "STREAM_DLQ",
     "CONSUMER_GROUP",
     "STATUS_KEY_PREFIX",
+    "STREAM_ASSET_TASKS",
     "depth_key",
     "status_key",
+    "asset_status_key",
     "TaskEnvelope",
+    "AssetScanEnvelope",
     "enqueue_task",
+    "enqueue_asset_task",
     "ack_message",
     "claim_stale",
     "pending_count",

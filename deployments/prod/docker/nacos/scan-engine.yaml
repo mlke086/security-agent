@@ -1,0 +1,36 @@
+# 阶段 5 nacos 拆分:scan-engine dataId
+# scan-engine 消费:流水线 + 子图 LLM + 沙箱执行参数。
+
+pipeline_concurrency: 4
+hitl_timeout_sec: 0  # 0 = 按 level 默认(L3=300/L4=900/L5=1800)
+action_dry_run: true
+
+# 沙箱执行参数(scan-engine 内 docker SDK)
+sandbox_container_pool_size: 5
+sandbox_exec_timeout_sec: 60
+sandbox_network: "sandbox-net"
+
+# 子图 LLM(同 ai 服务 LLM,但独立 Nacos 字段便于单独热更新)
+llm_provider: "claude"
+anthropic_api_key: "${ANTHROPIC_API_KEY}"
+openai_api_key: "${OPENAI_API_KEY}"
+llm_request_timeout_sec: 120
+
+# ---- 2026-08-06 LLM 分析监控:漏洞分析/报告生成的超时·失败·重试 ----
+# 第一层:即时重试(单批调用失败后立刻重试)
+llm_analysis_retry_attempts: 2          # 即时重试次数
+llm_analysis_retry_backoff_sec: 2.0     # 即时重试退避(指数)
+# 第二层:空闲补扫(失败批次进 Redis,队列空闲时重新分析)
+llm_analysis_rescan_enabled: true       # 是否启用空闲补扫
+llm_analysis_rescan_check_interval_sec: 30  # 空闲检测周期(秒)
+llm_analysis_max_total_attempts: 10     # 每个失败批次累计最高尝试次数
+llm_analysis_busy_threshold: 0          # 活跃 LLM 调用 ≤ 此值视为空闲
+# 指标保留窗口(秒):llm:usage / llm:failures 的 TTL
+llm_analysis_metrics_ttl_sec: 86400
+
+# Redis Stream 消费者配置
+stream_consumer_group: "scan-engine-consumers"
+stream_consumer_block_ms: 5000
+
+# 服务地址(供 scan-engine 调 graphrag)
+graphrag_base_url: "http://127.0.0.1:8002"

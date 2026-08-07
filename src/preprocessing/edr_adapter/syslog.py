@@ -47,5 +47,8 @@ class SyslogAdapter(EDRAdapter):
 
     def _iocs(self):
         msg = str(self.raw.get("msg") or self.raw.get("message") or "")
-        ips = re.findall("\b(?:\\d{1,3}\\.){3}\\d{1,3}\b", msg)
+        # V13 P1-2: raw string -- a plain "\b" in a regular string literal is
+        # the backspace character (U+0008), which made this regex demand a
+        # backspace around every IP and silently never match.
+        ips = re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", msg)
         return AlertIOC(ips=list(set(ips)))

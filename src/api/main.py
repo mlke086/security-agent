@@ -2,27 +2,34 @@ import asyncio
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Query, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.agents.ws_gateway import get_agent_gateway
 from src.api.auth import auth_router
 from src.api.auth.routes import require_role
+from src.api.gateway_proxy import router as proxy_router
 from src.api.routers.agents import router as agents_router
 from src.api.routers.alerts import router as alerts_router
-from src.api.routers.chat import router as chat_router
+from src.api.routers.asset_scan import router as asset_scan_router
+
+# 阶段 3-3:chat/scan_chat/models 三个 LLM 路由已迁至 ai 服务,
+# gateway 通过 src.api.gateway_proxy 反代(阶段 5 收尾删 AI_PROXY_ENABLED env,反代是唯一路径)。
+# 原 include_router 已删除,避免与反代 catch-all 重复注册。
 from src.api.routers.demo import router as demo_router
 from src.api.routers.detection import router as detection_router
-from src.api.routers.models import router as models_router
+from src.api.routers.llm_analytics import router as llm_analytics_router
 from src.api.routers.monitor import router as monitor_router
 from src.api.routers.nuclei_templates import router as nuclei_templates_router
 from src.api.routers.operations import router as operations_router
 from src.api.routers.responses import router as responses_router
 from src.api.routers.rules import router as rules_router
-from src.api.routers.scan_chat import router as scan_chat_router
 from src.api.routers.sigma_rules import router as sigma_rules_router
 from src.api.routers.stream import router as stream_router
+
+# 阶段 5 收尾 P6-monitor:LLM 队列监控路由(统计/堆积/release/告警阈值)
+from src.api.routers.task_monitor import router as task_monitor_router
 from src.api.routers.users import router as users_router
 from src.api.routers.vulnscan import router as vulnscan_router
 from src.api.store import get_event_store
@@ -97,8 +104,9 @@ async def _ensure_es_indices():
         logger.warning("es_index_setup_failed", error=str(exc))
 
 
-# TaskWorker 鍙ユ焺锛坙ifespan shutdown 鏃堕渶瑕佸仠姝級
-_task_worker_handle = None
+# TaskWorker 已迁至 src/scan_engine/main.py(阶段 2-2 拆分)。
+# gateway 仅做入队(POST /api/v1/vulnscan/tasks),不再启动 worker 进程。
+# `_task_worker_handle` 变量已删除,gateway 不持有 TaskWorker 句柄。
 
 
 @asynccontextmanager
@@ -161,28 +169,8 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("revocation_listener_failed", error=str(exc))
 
-    # 鍚姩 Vulnscan TaskWorker锛堟秷璐?Redis Stream 寮傛鎵弿浠诲姟锛?
-    global _task_worker_handle
-    import os as _os
-
-    if not _os.environ.get("DISABLE_TASK_WORKER"):
-        try:
-            from src.orchestration.task_queue import TaskWorker
-
-            worker = TaskWorker()
-            _task_worker_handle = worker.start()
-            logger.info("vulnscan_task_worker_started", consumer=worker.consumer)
-        except Exception as exc:
-            logger.warning("vulnscan_task_worker_start_failed", error=str(exc))
-
     yield
-    # Shutdown: 鍏堝仠 TaskWorker锛屽啀鍋?Nacos 鐩戝惉 + 鍏抽棴寮傛鍗曚緥
-    if _task_worker_handle is not None:
-        try:
-            await _task_worker_handle.stop(timeout=5.0)
-        except Exception as exc:
-            logger.warning("task_worker_shutdown_failed", error=str(exc))
-        _task_worker_handle = None
+    # Shutdown: 关 Nacos 监听 + 吊销监听异步任务。TaskWorker 已在 scan-engine 进程管理。
     from src.common.config.nacos_loader import stop_nacos_listener
 
     stop_nacos_listener()
@@ -243,21 +231,9 @@ class EventSubmitResponse(BaseModel):
     status: str
 
 
-async def _run_pipeline(event_id: str, text: str, iocs: dict, source: str):
-    """Background task: thin wrapper around shared runner."""
-    try:
-        from src.orchestration.runner import run_pipeline
-
-        await run_pipeline(event_id, text, iocs, source)
-    except Exception as exc:
-        await get_event_store().update_event(event_id, status="error")
-        logger.error("pipeline_failed", event_id=event_id, error=str(exc))
-
-
 @app.post("/api/v1/events", response_model=EventSubmitResponse)
 async def submit_event(
     req: EventSubmitRequest,
-    background_tasks: BackgroundTasks,
     sync: bool = Query(False, description="sync mode"),
     current_user=Depends(require_role("admin", "analyst")),
 ):
@@ -265,11 +241,35 @@ async def submit_event(
     store = get_event_store()
     await store.create_event(event_id, req.sanitized_text, req.iocs, req.source)
 
-    if sync:
-        await _run_pipeline(event_id, req.sanitized_text, req.iocs, req.source)
-    else:
-        background_tasks.add_task(_run_pipeline, event_id, req.sanitized_text, req.iocs, req.source)
+    # 阶段 5 收尾 P0-1:gateway 不再直跑 LangGraph 流水线(生产镜像无 langgraph 依赖)。
+    # 改为把事件推入 Redis Stream ``events:tasks``,由 scan-engine 的 events consumer
+    # 消费并执行流水线(方案 4.1:gateway → scan-engine Redis Stream 入队)。
+    # 原 `_run_pipeline`(函数内 import src.orchestration.runner → langgraph)已删除。
+    try:
+        from src.preprocessing.vulnscan_queue.enqueue import enqueue_event
 
+        await enqueue_event(
+            event_id=event_id,
+            payload={
+                "event_id": event_id,
+                "sanitized_text": req.sanitized_text,
+                "iocs": req.iocs,
+                "source": req.source,
+                "submitted_by": current_user.username,
+            },
+        )
+    except Exception as exc:
+        # 入队失败:显式标记 event 为 error,并返回 503 让调用方知道未提交成功
+        # (比原实现"后台静默失败"更诚实——入队是同步的、可立即感知)。
+        try:
+            await store.update_event(event_id, status="error")
+        except Exception:  # noqa: BLE001
+            pass
+        logger.error("event_enqueue_failed", event_id=event_id, error=str(exc))
+        raise HTTPException(status_code=503, detail=f"event enqueue failed: {exc!s}")
+
+    # sync 参数保留兼容:入队后由 scan-engine 异步执行,语义与 async 路径一致
+    # (原 sync 直跑流水线,但返回 status 也非"完成",此处统一为入队)。
     return EventSubmitResponse(event_id=event_id, status="processing")
 
 
@@ -315,21 +315,36 @@ app.include_router(auth_router)
 # operations_router. operations has GET /events/{event_id} which would
 # otherwise shadow the literal /events/stream with event_id="stream".
 app.include_router(stream_router)
+# 阶段 5:/metrics 端点(prometheus_client)
+from src.common.metrics import metrics_router  # noqa: E402
+
+app.include_router(metrics_router)
 app.include_router(users_router)
 app.include_router(operations_router)
 app.include_router(demo_router)
 app.include_router(agents_router)
+# 阶段 5 收尾 P6-monitor:task_monitor 必须在 vulnscan_router 之前 include,
+# 否则 vulnscan_router 的 /{task_id} 路径参数会吞掉 /stats /queue-status 等具体路径。
+app.include_router(task_monitor_router)
+app.include_router(llm_analytics_router)
 app.include_router(vulnscan_router)
 app.include_router(rules_router)
 app.include_router(nuclei_templates_router)
 app.include_router(responses_router)
 app.include_router(sigma_rules_router)
 app.include_router(monitor_router)
-app.include_router(models_router)
-app.include_router(chat_router)
-app.include_router(scan_chat_router)
 app.include_router(alerts_router)
 app.include_router(detection_router)
+# 需求② (2026-08-06): asset-scan 路由（在 proxy_router 之前注册）。
+app.include_router(asset_scan_router)
+# 阶段 3-3:原 models_router / chat_router / scan_chat_router 已迁至 ai 服务,
+# 由 src.api.gateway_proxy 反代(阶段 5 收尾:反代是唯一路径,无 AI_PROXY_ENABLED 切换)。
+# P0 修复(2026-08-06 全量功能测试):proxy_router 的 catch-all /api/v1/{full_path:path}
+# 必须放在**所有**具体 router 之后注册,否则按注册顺序先匹配,会把
+# alerts/detection 等未代理路径吞掉返回 404 "not a proxied ai route"。
+# 注册顺序 = 匹配优先级(FastAPI/Starlette 按序匹配)。
+app.include_router(proxy_router)
+# 阶段 5 收尾 P6-monitor:task_monitor_router 已在 vulnscan_router 之前 include。
 
 if __name__ == "__main__":
     import uvicorn

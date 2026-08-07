@@ -99,6 +99,27 @@ async def hitl_approval_node(state: ResponderSubState) -> dict[str, Any]:
     store = get_approval_store()
     await store.create(approval_id, state["event_id"], level, n_required)
 
+    # 阶段 4-1:celery 兜底接通。scan-engine 正常时 wait_result() 已先行 resolve
+    # (approval_store.resolve() 已终态则 no-op);scan-engine 崩溃/重启致 wait_result
+    # 丢失时由 celery 在 countdown 到期后兜底 resolve("timeout")。
+    # 延迟 import 避免 hitl_handler 模块级拉入 celery_app(approval_store 只依赖
+    # redis+pg,本模块保持零重依赖)。
+    try:
+        from src.common.celery_app import approval_timeout_task
+
+        approval_timeout_task.apply_async(
+            args=[approval_id, timeout_sec],
+            countdown=timeout_sec + 30,  # +30s buffer,避免与正常 resolve 抢跑
+        )
+        logger.info(
+            "hitl_celery_timeout_scheduled",
+            approval_id=approval_id,
+            countdown=timeout_sec + 30,
+        )
+    except Exception as exc:
+        # Celery broker 不可达时不影响主流程,仅记日志;scan-engine wait_result 仍兜底。
+        logger.warning("hitl_celery_schedule_failed", error=str(exc))
+
     await _push_approval_card(
         event_id=state["event_id"],
         approval_id=approval_id,

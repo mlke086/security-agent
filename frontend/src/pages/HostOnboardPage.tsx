@@ -1,7 +1,7 @@
 ﻿import { useEffect, useRef, useState, useMemo } from "react"
 import { showError } from "../utils/showError"
 import { Card, Button, Form, InputNumber, Select, message, Table, Tag, Typography, Space, Popconfirm, Tooltip, Modal, Input, Empty, Switch, Dropdown, Drawer, Spin } from "antd"
-import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined, DownOutlined, PoweroffOutlined, LockOutlined, MonitorOutlined } from "@ant-design/icons"
+import { PlusOutlined, CopyOutlined, ReloadOutlined, CloudServerOutlined, DeleteOutlined, TeamOutlined, CloudUploadOutlined, DownOutlined, PoweroffOutlined, LockOutlined, MonitorOutlined, LineChartOutlined } from "@ant-design/icons"
 import type { Host, HostGroup } from "../api/client"
 import {
   createEnrollToken, getHostStats, type HostStatsRow,
@@ -22,6 +22,7 @@ import {
   type MonitorEvent,
   type AgentUpgradeStatus,
 } from "../api/client"
+import HostPerfDrawer from "../components/HostPerfDrawer"
 import "./DashboardPage.css"
 
 const { Text } = Typography
@@ -212,6 +213,10 @@ export default function HostOnboardPage() {
     setMonitorEvents([])
     setMonitorDrawerOpen(false)
   }
+
+  // 需求①: 性能监控抽屉（host_metrics 趋势图）
+  const [perfHost, setPerfHost] = useState<Host | null>(null)
+  const [perfDrawerOpen, setPerfDrawerOpen] = useState(false)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(hostSearch.trim().toLowerCase()), 300)
@@ -612,7 +617,31 @@ export default function HostOnboardPage() {
       </Button>
     ),
   },
-  ], [upgrading, upgradeById])
+  // 需求①: 性能监控（host_metrics 趋势图抽屉）
+  {
+    title: "性能监控",
+    key: "perf",
+    width: 100,
+    render: (_: unknown, r: Host) => (
+      <Button
+        size="small"
+        icon={<LineChartOutlined />}
+        onClick={() => {
+          setPerfHost(r)
+          setPerfDrawerOpen(true)
+        }}
+        disabled={r.status === "decommissioned"}
+      >
+        查看
+      </Button>
+    ),
+  },
+    // V13 P2-22: deps must include groups -- the 组 column renders
+    // groupOptions (derived from groups), and a missing dep froze the
+    // dropdown on the mount-time group list until some upgrade state
+    // changed. groups is a stable reference; it only changes when the
+    // group list actually changes.
+  ], [upgrading, upgradeById, groups])
 
   const groupColumns = [
     { title: "组名", dataIndex: "name", key: "name", render: (v: string, r: HostGroup) => (
@@ -898,6 +927,16 @@ export default function HostOnboardPage() {
           />
         )}
       </Drawer>
+
+      {/* 需求①: host performance drawer */}
+      <HostPerfDrawer
+        host={perfHost}
+        open={perfDrawerOpen}
+        onClose={() => {
+          setPerfDrawerOpen(false)
+          setPerfHost(null)
+        }}
+      />
     </div>
   )
 }

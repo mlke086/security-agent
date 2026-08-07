@@ -43,6 +43,9 @@ INDEX_RESULTS = "vulnscan-results"
 INDEX_VULNS = "vulnscan-vulns"
 INDEX_REPORTS = "vulnscan-reports"
 INDEX_ALERTS = "secagent-alerts"
+# 需求①: host_metrics 时序索引（独立 store 操作，值须与
+# src/agents/metrics_store.py 的 INDEX_METRICS 一致）。
+INDEX_METRICS = "secagent-hostmetrics"
 
 _MAPPINGS = {
     INDEX_HOSTS: {
@@ -143,6 +146,30 @@ _MAPPINGS = {
                 "received_at": {"type": "date"},
                 "raw": {"type": "object", "enabled": False},
             },
+        },
+    },
+    # 需求① (2026-08-06): host_metrics 时序索引。独立 store
+    # (src/agents/metrics_store.py) 操作它; 这里登记 mapping 让 gateway
+    # lifespan 的 ensure_indices() 统一建索引。字段与
+    # agent/internal/metrics/reporter.go 的 MetricsSample JSON tag 对应。
+    INDEX_METRICS: {
+        "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+        "mappings": {
+            "properties": {
+                "agent_id": {"type": "keyword"},
+                "hostname": {"type": "keyword"},
+                "ts": {"type": "date"},
+                "cpu_percent": {"type": "float"},
+                "mem_percent": {"type": "float"},
+                "mem_total_mb": {"type": "float"},
+                "mem_used_mb": {"type": "float"},
+                "disk_percent": {"type": "float"},
+                "disk_total_gb": {"type": "float"},
+                "disk_used_gb": {"type": "float"},
+                "net_in_kbps": {"type": "float"},
+                "net_out_kbps": {"type": "float"},
+                "load1": {"type": "float"},
+            }
         },
     },
 }
@@ -695,6 +722,11 @@ class VulnscanStore:
         if fltr.agent_ids:
             # Server-side multi-agent batch fetch (aggregate reconcile step).
             must.append({"terms": {"agent_id": fltr.agent_ids}})
+        if fltr.agent_id:
+            # Host drill-down view: exact single-agent filter. Uses the
+            # stable agent_id key (hostname can repeat), matching the
+            # host-vuln-summary aggregation bucket key.
+            must.append({"term": {"agent_id": fltr.agent_id}})
         if fltr.severity:
             must.append({"term": {"severity": fltr.severity}})
         if fltr.status:
@@ -721,8 +753,11 @@ class VulnscanStore:
             must.append(
                 {
                     "wildcard": {
+                        # V13 P2-8: re.escape like the cve filter above --
+                        # a literal * / ? in the user's input was treated as
+                        # an ES wildcard metacharacter (over-broad match).
                         "hostname": {
-                            "value": f"*{fltr.hostname_keyword.lower()}*",
+                            "value": f"*{re.escape(fltr.hostname_keyword.lower())}*",
                             "case_insensitive": True,
                         }
                     }
@@ -735,7 +770,7 @@ class VulnscanStore:
                 {
                     "wildcard": {
                         "name.keyword": {
-                            "value": f"*{fltr.name_keyword}*",
+                            "value": f"*{re.escape(fltr.name_keyword)}*",
                             "case_insensitive": True,
                         }
                     }
@@ -824,6 +859,101 @@ class VulnscanStore:
             if len(page) < fltr.limit:
                 # Short page => no more hits.
                 break
+        return out
+
+    async def host_vuln_summary_buckets(
+        self,
+        *,
+        group_agent_ids: list[str] | None = None,
+        hostname_keyword: str | None = None,
+        severity: str | None = None,
+        status: str | None = None,
+        host_limit: int = 500,
+    ) -> list[dict]:
+        """按 agent_id 分桶的漏洞聚合（需求③ 主机清单顶层视图）。
+
+        一次性 ES terms 聚合取代"拉全量漏洞再内存分桶"（/host-stats 的
+        旧做法），主机多时不再受 list_vulns(limit) 截断影响。返回每台
+        有漏洞记录主机的原始统计:
+
+            {agent_id, total, severity_counts, status_counts, last_scan_at}
+
+        - ``severity_counts`` 按 **原始 severity** 字段统计（非 ai_severity）;
+        - ``last_scan_at`` 为该主机漏洞的 max(detected_at)（v1 近似,
+          v2 可改取 vulnscan-results 的 is_final ts）;
+        - 筛选（group 已由调用方转成 agent_id 集合 / hostname_keyword /
+          severity / status）全部下推到 ES, counts 为过滤后统计,
+          语义与 ``list_vulns`` 一致;
+        - ``host_limit`` 即 terms size 上限; >500 主机时需 composite
+          翻页（v2 增强）。
+        """
+        must: list[dict] = []
+        if severity:
+            must.append({"term": {"severity": severity}})
+        if status:
+            must.append({"term": {"status": status}})
+        if hostname_keyword:
+            if len(hostname_keyword) > 200:
+                raise ValueError("hostname_keyword exceeds 200 chars")
+            must.append(
+                {
+                    "wildcard": {
+                        # re.escape like _vulns_query -- literal * / ?
+                        # in user input must not act as ES wildcards.
+                        "hostname": {
+                            "value": f"*{re.escape(hostname_keyword.lower())}*",
+                            "case_insensitive": True,
+                        }
+                    }
+                }
+            )
+        if group_agent_ids:
+            must.append({"terms": {"agent_id": group_agent_ids}})
+        query = {"bool": {"must": must}} if must else {"match_all": {}}
+
+        resp = await self._es.search(
+            index=INDEX_VULNS,
+            query=query,
+            size=0,
+            aggs={
+                "by_host": {
+                    "terms": {"field": "agent_id", "size": host_limit},
+                    "aggs": {
+                        "by_sev": {"terms": {"field": "severity"}},
+                        "by_status": {"terms": {"field": "status"}},
+                        "last_scan": {"max": {"field": "detected_at"}},
+                    },
+                }
+            },
+        )
+        buckets = (resp.get("aggregations") or {}).get("by_host", {}).get("buckets", [])
+        out: list[dict] = []
+        for b in buckets:
+            sev_counts: dict[str, int] = {}
+            for sb in (b.get("by_sev") or {}).get("buckets", []):
+                key = sb.get("key")
+                if isinstance(key, str):
+                    sev_counts[key] = sb.get("doc_count", 0)
+            status_counts: dict[str, int] = {}
+            for sb in (b.get("by_status") or {}).get("buckets", []):
+                key = sb.get("key")
+                if isinstance(key, str):
+                    status_counts[key] = sb.get("doc_count", 0)
+            last_ms = (b.get("last_scan") or {}).get("value")
+            last_scan_at = (
+                datetime.fromtimestamp(last_ms / 1000, UTC).isoformat()
+                if last_ms is not None
+                else ""
+            )
+            out.append(
+                {
+                    "agent_id": b["key"],
+                    "total": b.get("doc_count", 0),
+                    "severity_counts": sev_counts,
+                    "status_counts": status_counts,
+                    "last_scan_at": last_scan_at,
+                }
+            )
         return out
 
     async def get_vuln(self, finding_id: str) -> VulnFinding | None:

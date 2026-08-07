@@ -174,6 +174,89 @@ class TestEvaluator:
         is_match, _ = matches(rule, {"status": "success"})
         assert not is_match
 
+    def test_1of_any_block_match_is_hit(self):
+        """V13 P1-3: ``1 of selection_*`` is OR-of-blocks -- a behaviour
+        matching only the second block must still trigger the rule (the
+        old implementation silently AND'd only the first block and missed
+        it)."""
+        rule = parse_sigma_dict(
+            {
+                "title": "1of",
+                "id": "t-1of",
+                "level": "medium",
+                "detection": {
+                    "selection": {
+                        "selection_a": {"status": "failed", "src_ip": "10.0.0.1"},
+                        "selection_b": {"status": "failed", "cmdline|contains": "nc -e"},
+                    },
+                    "condition": "1 of selection_*",
+                },
+            }
+        )
+        assert rule.condition_mode == "1of"
+        assert len(rule.pred_lists) == 2
+        # Only the second block matches.
+        is_match, matched = matches(rule, {"status": "failed", "cmdline": "nc -e /bin/sh"})
+        assert is_match
+        assert matched["cmdline"] == "nc -e /bin/sh"
+
+    def test_1of_all_blocks_miss_no_hit(self):
+        rule = parse_sigma_dict(
+            {
+                "title": "1of-miss",
+                "id": "t-1of-miss",
+                "level": "medium",
+                "detection": {
+                    "selection": {
+                        "selection_a": {"status": "failed", "src_ip": "10.0.0.1"},
+                        "selection_b": {"cmdline|contains": "nc -e"},
+                    },
+                    "condition": "1 of selection_*",
+                },
+            }
+        )
+        is_match, _ = matches(rule, {"status": "ok", "cmdline": "ls"})
+        assert not is_match
+
+    def test_1of_them_supported(self):
+        rule = parse_sigma_dict(
+            {
+                "title": "1of-them",
+                "id": "t-1of-them",
+                "level": "medium",
+                "detection": {
+                    "selection": {
+                        "selection_a": {"a": 1},
+                        "selection_b": {"b": 2},
+                    },
+                    "condition": "1 of them",
+                },
+            }
+        )
+        assert rule.condition_mode == "1of"
+        assert matches(rule, {"b": 2})[0] is True
+        assert matches(rule, {"a": 1})[0] is True
+        assert matches(rule, {"c": 3})[0] is False
+
+    def test_all_of_them_requires_every_block(self):
+        rule = parse_sigma_dict(
+            {
+                "title": "all-them",
+                "id": "t-all-them",
+                "level": "medium",
+                "detection": {
+                    "selection": {
+                        "selection_a": {"a": 1},
+                        "selection_b": {"b": 2},
+                    },
+                    "condition": "all of them",
+                },
+            }
+        )
+        assert rule.condition_mode == "all"
+        assert matches(rule, {"a": 1, "b": 2})[0] is True
+        assert matches(rule, {"a": 1})[0] is False
+
     def test_gte_numeric(self):
         rule = parse_sigma_dict(
             {

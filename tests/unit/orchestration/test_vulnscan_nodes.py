@@ -1,4 +1,4 @@
-"""Unit tests for vulnscan subgraph nodes."""
+﻿"""Unit tests for vulnscan subgraph nodes."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -947,7 +947,7 @@ class TestGenerateReport:
         state = _default_state("manual", targets=["host-a"])
         v = _vuln()
         mock_store = AsyncMock()
-        mock_store.list_vulns.return_value = [v]
+        mock_store.list_vulns_all.return_value = [v]
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
@@ -979,7 +979,7 @@ class TestGenerateReport:
     async def test_report_no_vulns(self):
         state = _default_state("manual", targets=["host-a"])
         mock_store = AsyncMock()
-        mock_store.list_vulns.return_value = []
+        mock_store.list_vulns_all.return_value = []
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
@@ -1008,7 +1008,7 @@ class TestGenerateReport:
         medium = _vuln(finding_id="f-m", severity="medium", name="CVE-MED")
         high = _vuln(finding_id="f-h", severity="high", name="CVE-HIGH")
         mock_store = AsyncMock()
-        mock_store.list_vulns.return_value = [medium, high, critical]
+        mock_store.list_vulns_all.return_value = [medium, high, critical]
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
@@ -1048,7 +1048,7 @@ class TestGenerateReport:
             name="Weak password policy",
         )
         mock_store = AsyncMock()
-        mock_store.list_vulns.return_value = [critical, baseline]
+        mock_store.list_vulns_all.return_value = [critical, baseline]
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
@@ -1085,7 +1085,7 @@ class TestGenerateReport:
         state = _default_state("manual", targets=["host-a"])
         v = _vuln()
         mock_store = AsyncMock()
-        mock_store.list_vulns.return_value = [v]
+        mock_store.list_vulns_all.return_value = [v]
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
@@ -1113,7 +1113,7 @@ class TestGenerateReport:
             assert result["report"].ai_processed is False
             assert result["report"].ai_model == ""
             assert result["report"].ai_overall_advice == ""
-            assert result["report"].ai_processed_at == ""
+            assert result["report"].ai_processed_at is None
 
 
 # ---------------------------------------------------------------
@@ -1329,6 +1329,74 @@ class TestConfirmCancellation:
         for call in mock_store.return_value.update_task.await_args_list:
             assert call.kwargs.get("status") != "cancelled"
 
+    @pytest.mark.asyncio
+    async def test_dispatch_redis_blip_does_not_abort(self):
+        """V13 P1-5: the dispatch entry check must use the double-checked
+        confirmation -- a redis blip (unconfirmed) must NOT abort a healthy
+        task before it even dispatches."""
+        from src.orchestration.subgraphs.vulnscan.nodes import dispatch
+
+        state = _default_state("manual", targets=["host-a"])
+        mock_store = AsyncMock()
+        mock_store.save_task = AsyncMock()
+        mock_store.update_task = AsyncMock()
+        mock_gateway = MagicMock()
+        mock_gateway.broadcast = AsyncMock(return_value={"sent": 1, "failed": 0})
+        mock_gateway.send_to_agent = AsyncMock(return_value=True)
+        fake_redis = AsyncMock(exists=AsyncMock(return_value=0))
+        fake_redis.publish = AsyncMock()
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._confirm_cancellation",
+                AsyncMock(return_value=False),  # blip: first check True, re-check False
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_agent_gateway",
+                return_value=mock_gateway,
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._resolve_targets",
+                return_value=["agent-a"],
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._nuclei_targets_by_agent",
+                return_value={},
+            ),
+            patch("redis.asyncio.from_url", return_value=fake_redis),
+            patch(
+                "src.common.config.settings.get_settings",
+                return_value=MagicMock(redis_url="redis://x"),
+            ),
+        ):
+            result = await dispatch(state)
+
+        assert result["status"] != "cancelled", "blip must not abort dispatch"
+        mock_store.save_task.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_confirmed_cancel_still_aborts(self):
+        """A real (double-confirmed) cancellation must still abort dispatch."""
+        from src.orchestration.subgraphs.vulnscan.nodes import dispatch
+
+        state = _default_state("manual", targets=["host-a"])
+        with (
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes._confirm_cancellation",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "src.orchestration.subgraphs.vulnscan.nodes.get_vulnscan_store",
+                return_value=AsyncMock(),
+            ),
+        ):
+            result = await dispatch(state)
+        assert result["status"] == "cancelled"
+        assert result["dispatched"] is False
+
 
 class TestLLMAnalysisFallback:
     """2026-07-29 UX upgrade: the LLM analysis node must always write back
@@ -1481,7 +1549,7 @@ class TestGenerateReportAIEvidence:
         state["ai_processed"] = True
         v = _vuln()
         mock_store = AsyncMock()
-        mock_store.list_vulns.return_value = [v]
+        mock_store.list_vulns_all.return_value = [v]
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
@@ -1519,7 +1587,7 @@ class TestGenerateReportAIEvidence:
     async def test_report_with_no_vulns_marks_ai_not_processed(self):
         state = _default_state("manual", targets=["host-a"])
         mock_store = AsyncMock()
-        mock_store.list_vulns.return_value = []
+        mock_store.list_vulns_all.return_value = []
         mock_store.save_report = AsyncMock()
         mock_store.update_task = AsyncMock()
 
@@ -1542,7 +1610,7 @@ class TestGenerateReportAIEvidence:
         assert r.ai_processed is False
         assert r.ai_model == ""
         assert r.ai_overall_advice == ""
-        assert r.ai_processed_at == ""
+        assert r.ai_processed_at is None
 
 
 class TestDispatchLanes:

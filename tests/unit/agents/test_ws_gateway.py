@@ -139,6 +139,42 @@ class TestHandleMessage:
         await gateway.handle_message(mock_ws, raw)
 
     @pytest.mark.asyncio
+    async def test_handle_host_metrics_persists(self, gateway, mock_ws):
+        """需求①: host_metrics 分支写入 metrics_store。
+
+        agent_id 由已认证连接盖章（不信任线上值）；hostname 从 payload
+        读出后传给 store（store 侧白名单过滤，不落 ES 数值字段）。
+        """
+        raw = (
+            '{"type":"host_metrics","payload":{"cpu_percent":42.3,"mem_percent":68.1,'
+            '"net_in_kbps":128.5,"hostname":"web-01"}}'
+        )
+        mock_metrics_store = AsyncMock()
+        mock_metrics_store.save_metrics = AsyncMock()
+        with patch(
+            "src.agents.metrics_store.get_metrics_store", return_value=mock_metrics_store
+        ):
+            await gateway.handle_message(mock_ws, raw)
+        mock_metrics_store.save_metrics.assert_awaited_once()
+        args, kwargs = mock_metrics_store.save_metrics.await_args
+        assert args[0] == "agent-1"  # 连接盖章的 agent_id
+        assert args[1] == "web-01"  # payload 中的 hostname
+        assert args[2]["cpu_percent"] == 42.3
+        assert args[2]["mem_percent"] == 68.1
+
+    @pytest.mark.asyncio
+    async def test_handle_host_metrics_never_raises(self, gateway, mock_ws):
+        """需求①: 存储失败绝不能拖垮 WS 连接（fire-and-forget）。"""
+        raw = '{"type":"host_metrics","payload":{"cpu_percent":1.0}}'
+
+        class _Boom:
+            async def save_metrics(self, *a, **k):
+                raise RuntimeError("es down")
+
+        with patch("src.agents.metrics_store.get_metrics_store", return_value=_Boom()):
+            await gateway.handle_message(mock_ws, raw)  # 不应抛异常
+
+    @pytest.mark.asyncio
     async def test_handle_invalid_json(self, gateway, mock_ws):
         raw = "not json at all"
         await gateway.handle_message(mock_ws, raw)
@@ -169,6 +205,7 @@ class TestSendToAgent:
         gw_mod._conns.clear()
         mock_redis = AsyncMock()
         mock_redis.publish = AsyncMock(return_value=1)
+        mock_redis.get = AsyncMock(return_value="worker")  # owner present
 
         msg = {"type": "scan_command", "payload": {}}
         with (
@@ -178,7 +215,10 @@ class TestSendToAgent:
             result = await gateway.send_to_agent("agent-1", msg)
             assert result is True
             mock_redis.publish.assert_called_once()
-            mock_redis.aclose.assert_awaited_once()
+            # V13 P1-1: the shared redis client is process-lifetime and must
+            # NOT be closed per call -- this assertion used to lock the old
+            # (broken) per-call aclose behaviour.
+            mock_redis.aclose.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_send_to_disconnected_without_subscriber_fails(self, gateway):
@@ -367,3 +407,56 @@ class TestScanResultAdaptation:
             "src.agents.ws_gateway.process_heartbeat", AsyncMock(side_effect=RuntimeError("boom"))
         ):
             await gateway.handle_message(mock_ws, raw)  # must NOT raise
+
+
+# -- V13 P1-1: shared redis client must not be closed -------------------------
+
+
+class TestSharedRedisNotClosed:
+    """V13 P1-1 regression: the module-level shared redis client (V12 5.6
+    single-instance fix) was being aclose()'d in 4 places, tearing down the
+    shared connection pool on every send_to_agent / disconnect / ack. The
+    shared client is process-lifetime; no code path may close it."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_shared_redis(self):
+        import src.agents.ws_gateway as wsg
+
+        wsg._redis_client = None
+        yield
+        wsg._redis_client = None
+
+    async def test_send_to_agent_does_not_close_shared_client(self, gateway):
+        """Disconnected-agent publish path must leave the shared client open."""
+        import src.agents.ws_gateway as wsg
+
+        fake = AsyncMock()
+        fake.aclose = AsyncMock()
+        fake.publish = AsyncMock(return_value=0)  # no subscribers -> pending path
+        fake.get = AsyncMock(return_value=None)
+        with patch.object(wsg, "_get_redis", return_value=fake):
+            await gateway.send_to_agent("agent-1", {"type": "scan_command"})
+        fake.aclose.assert_not_awaited()
+
+    async def test_record_response_ack_does_not_close_shared_client(self, gateway):
+        import src.agents.ws_gateway as wsg
+
+        fake = AsyncMock()
+        fake.aclose = AsyncMock()
+        with patch.object(wsg, "_get_redis", return_value=fake):
+            await gateway._record_response_ack("agent-1", {"action_id": "a1", "ok": True})
+        fake.aclose.assert_not_awaited()
+
+    async def test_disconnect_does_not_close_shared_client(self, gateway, mock_ws):
+        import src.agents.ws_gateway as wsg
+
+        fake = AsyncMock()
+        fake.aclose = AsyncMock()
+        fake.get = AsyncMock(return_value="worker")
+        wsg._conns["agent-1"] = mock_ws
+        try:
+            with patch.object(wsg, "_get_redis", return_value=fake):
+                await gateway.disconnect(mock_ws)
+        finally:
+            wsg._conns.clear()
+        fake.aclose.assert_not_awaited()

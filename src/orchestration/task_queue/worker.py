@@ -27,6 +27,7 @@ from src.orchestration.task_queue.dequeue import (
     read_message_blocking,
 )
 from src.orchestration.task_queue.enqueue import TaskEnvelope
+from src.orchestration.task_queue.keys import CONSUMER_GROUP, STREAM_DLQ, STREAM_TASKS
 from src.orchestration.task_queue.runner import run_vulnscan_from_envelope
 
 logger = get_logger(__name__)
@@ -51,7 +52,7 @@ class WorkerHandle:
 
 
 class TaskWorker:
-    """Asyncio consumer loop for ``STREAM_TASKS``.
+    """Asyncio consumer loop for a Redis Stream task queue.
 
     Constructor only stores config; call ``start()`` to spawn the actual
     task. ``block_ms`` controls how long XREADGROUP sleeps when the
@@ -61,6 +62,10 @@ class TaskWorker:
     ``redis_factory`` lets tests inject a fakeredis connection without
     touching global state. Production code passes nothing and gets the
     real Redis from settings.
+
+    P3-A (需求②): ``stream``/``group``/``dlq``/``runner``/``envelope_cls``
+    参数化, 默认仍是 vulnscan 队列与 runner (向后兼容); asset-scan 服务
+    传自己的队列与 run_asset_scan_from_envelope。
     """
 
     def __init__(
@@ -70,6 +75,11 @@ class TaskWorker:
         claim_interval_sec: float = 30.0,
         max_concurrent: int = 8,
         redis_factory=None,
+        stream: str = STREAM_TASKS,
+        group: str = CONSUMER_GROUP,
+        dlq: str = STREAM_DLQ,
+        runner=None,
+        envelope_cls=TaskEnvelope,
     ) -> None:
         self.block_ms = block_ms
         self.claim_interval_sec = claim_interval_sec
@@ -79,6 +89,11 @@ class TaskWorker:
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._active_tasks: set[asyncio.Task] = set()
+        self._stream = stream
+        self._group = group
+        self._dlq = dlq
+        self._runner = runner or run_vulnscan_from_envelope
+        self._envelope_cls = envelope_cls
 
     @property
     def consumer(self) -> str:
@@ -89,7 +104,7 @@ class TaskWorker:
         if self._task is not None and not self._task.done():
             return WorkerHandle(self._task, self._consumer)
         self._stop.clear()
-        self._task = asyncio.create_task(self._run(), name=f"vulnscan-worker-{self._consumer}")
+        self._task = asyncio.create_task(self._run(), name=f"{self._group}-worker-{self._consumer}")
         logger.info("task_worker_started", consumer=self._consumer)
         return WorkerHandle(self._task, self._consumer)
 
@@ -201,7 +216,7 @@ class TaskWorker:
         restart loop (P2-VULN-08) can wrap it without duplicating state.
         """
         logger.info("task_worker_enter_run", consumer=self._consumer)
-        await ensure_group(redis)
+        await ensure_group(redis, stream=self._stream, group=self._group)
         logger.info("task_worker_group_ready", consumer=self._consumer)
         await self._claim_loop(redis)  # warm up
         logger.info("task_worker_claim_loop_done", consumer=self._consumer)
@@ -229,13 +244,15 @@ class TaskWorker:
             redis,
             consumer=self._consumer,
             block_ms=self.block_ms,
+            stream=self._stream,
+            group=self._group,
         )
         if msg is None:
             return None
         entry_id, payload = msg
         t = asyncio.create_task(
             self._process(redis, entry_id, payload),
-            name=f"vulnscan-task-{entry_id}",
+            name=f"{self._group}-task-{entry_id}",
         )
         self._active_tasks.add(t)
         t.add_done_callback(self._active_tasks.discard)
@@ -279,6 +296,8 @@ class TaskWorker:
                 redis,
                 consumer=self._consumer,
                 min_idle_ms=STALE_CLAIM_MIN_IDLE_MS,
+                stream=self._stream,
+                group=self._group,
             )
             if claimed is None:
                 return
@@ -300,18 +319,38 @@ class TaskWorker:
             await move_to_dlq(redis, entry_id, payload, reason="envelope_missing")
             return
 
+        # 阶段 5 收尾 P2-8:埋点 taskworker_lag —— 算 stream entry ID 时间戳
+        # 与 now 的差。Redis stream ID 形如 ``<ms>-<seq>``,前段是 ms epoch。
+        # 设 gauge 表示"队列堆积"或"消费慢",告警阈值建议 60s。
         try:
-            envelope = TaskEnvelope.from_json(envelope_raw)
+            from src.common.metrics import taskworker_lag
+
+            ms_part = entry_id.split("-", 1)[0]
+            entry_ms = int(ms_part)
+            now_ms = int(__import__("time").time() * 1000)
+            lag_sec = max(0.0, (now_ms - entry_ms) / 1000.0)
+            taskworker_lag.set(lag_sec)
+        except Exception as exc:  # noqa: BLE001
+            # 埋点失败不阻断主流程
+            logger.debug("taskworker_lag_metric_failed", error=str(exc))
+
+        try:
+            envelope = self._envelope_cls.from_json(envelope_raw)
         except Exception as exc:  # noqa: BLE001
             logger.warning("envelope_parse_failed", entry_id=entry_id, error=str(exc))
-            await move_to_dlq(redis, entry_id, payload, reason=f"parse:{exc}")
+            await move_to_dlq(
+                redis, entry_id, payload, reason=f"parse:{exc}",
+                stream=self._stream, group=self._group, dlq=self._dlq,
+            )
             return
 
         try:
-            await run_vulnscan_from_envelope(envelope)
-            await ack_message(redis, entry_id)
+            await self._runner(envelope)
+            await ack_message(redis, entry_id, stream=self._stream, group=self._group)
         except Exception as exc:  # noqa: BLE001
-            attempts = await delivery_count(redis, entry_id)
+            attempts = await delivery_count(
+                redis, entry_id, stream=self._stream, group=self._group
+            )
             logger.warning(
                 "task_run_failed",
                 entry_id=entry_id,
@@ -320,5 +359,8 @@ class TaskWorker:
                 error=str(exc),
             )
             if attempts >= MAX_DELIVERY:
-                await move_to_dlq(redis, entry_id, payload, reason=f"max_delivery:{exc}")
+                await move_to_dlq(
+                    redis, entry_id, payload, reason=f"max_delivery:{exc}",
+                    stream=self._stream, group=self._group, dlq=self._dlq,
+                )
             # Otherwise leave it in PEL for the next claim cycle.

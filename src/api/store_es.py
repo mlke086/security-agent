@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from elasticsearch import AsyncElasticsearch
+from elasticsearch import AsyncElasticsearch, NotFoundError
 
 from src.api.store import ApprovalEntry, EventRecord, TraceStep
 from src.common.config.settings import get_settings
@@ -80,7 +80,13 @@ class ESEventStore:
         doc = {k: v for k, v in kwargs.items() if v is not None}
         if not doc:
             return
-        await self._es.update(index=self._events_index, id=event_id, doc=doc)
+        # V13 P2-10: updating a vanished event must not surface an ES
+        # NotFoundError to callers (e.g. the Kafka consumer redelivery
+        # path) as a hard failure -- the event is simply gone.
+        try:
+            await self._es.update(index=self._events_index, id=event_id, doc=doc)
+        except NotFoundError:
+            return
         try:
             from src.api.events_bus import get_event_bus
 
@@ -169,11 +175,27 @@ class ESEventStore:
         # full id -> 0 matches -> the event detail page showed "暂无推理轨迹"
         # even though add_trace_step wrote the steps. .keyword is the exact,
         # unanalyzed value and matches correctly.
+        # P0 修复(2026-08-06 全量测试):audit index 的 event_id 实际 mapping
+        # 是 keyword(无 .keyword 子字段),原查询 term event_id.keyword 永远
+        # 0 命中 → 事件详情页 trace 永远为空(即使 add_trace_step 写成功)。
+        # 兼容两种索引形态:keyword 类型直接 term event_id;text+keyword 老索引
+        # 用 event_id.keyword。bool should 任一命中即可。
         resp = await self._es.search(
             index=self._audit_index,
-            query={"term": {"event_id.keyword": event_id}},
+            query={
+                "bool": {
+                    "should": [
+                        {"term": {"event_id": event_id}},
+                        {"term": {"event_id.keyword": event_id}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
             sort=[{"timestamp": "asc"}],
-            size=100,
+            # V13 P2-10: 100 hard-capped the trace for long pipelines (the
+            # investigation/vuln-check/respond chain writes ~20-30 steps per
+            # event; LLM-heavy runs can exceed 100 with retries).
+            size=1000,
         )
         return [
             TraceStep(

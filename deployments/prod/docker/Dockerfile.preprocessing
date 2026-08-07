@@ -1,0 +1,16 @@
+# 阶段 5:preprocessing 服务 Dockerfile(aiokafka 隔离,默认按需启用)
+FROM secagent-base:0.1.0
+
+COPY requirements/preprocessing.txt /tmp/requirements-preprocessing.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-preprocessing.txt \
+    && rm /tmp/requirements-preprocessing.txt
+
+# COPY preprocessing 子包
+COPY src/ /app/src/
+WORKDIR /app
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["python", "-m", "src.preprocessing.consumer"]

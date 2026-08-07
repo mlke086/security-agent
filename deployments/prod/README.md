@@ -29,7 +29,104 @@ AGENT_CONSOLE_EXTERNAL_URL    # 主机特定值(Agent 回调地址)
 业务配置(LLM API Key、ES 地址、Kafka topic、Milvus 集合名、webhook URL 等)全部在
 `deployments/prod/docker/nacos-config.yaml` 里维护,推到 Nacos 后**所有容器自动获取**。
 
+**V13 AI search-agent 配置**(也在 Nacos,热更新切换):
+```yaml
+serper_enabled: true          # 用 Serper 则 true
+serper_api_key: <Serper key>
+tavily_enabled: false         # 用 Tavily 则 true
+tavily_api_key: <Tavily key>
+```
+> 两个都 false = 关闭实时搜索(实时问题回退 LLM 直答)。额度按次计费:代码内
+> `_needs_realtime` 三层门控(强实时词直搜 / 弱信号 LLM 复核 / 无信号不搜)+
+> Redis 30min 缓存,避免浪费额度。
+
+**⚠️ V13 D0-1 凭据出库**:`settings.py` 的中间件凭据默认值已置空,`nacos-config.yaml`
+里的 `${XXX}` 占位符会被 `nacos_loader` 跳过不注入——**部署时必须把占位符替换成真实值**
+再推送 Nacos(或走 `.env`/Secret)。曾进 git 历史的真实凭据生产上线前必须轮换。
+
 ---
+
+## 0.5. 阶段 5 新增:env 与 Nacos 字段的同步规则(拆分后)
+
+阶段 5 拆分后,SecAgent 拆为 gateway / ai / scan-engine / graphrag / celery 5 个服务
++ preprocessing(按需)。每个服务有独立的 `NACOS_DATA_IDS`(逗号分隔),从 Nacos 拉自己的
+dataId(共享 + 本服务专属)。`.env` 中只放**引导密钥与主机特定值**,
+其余业务配置全部走 Nacos dataId。
+
+### env 字段表(`.env` 必填 12 项,其他都在 Nacos)
+
+| env | 用途 | 哪个服务读 | Nacos dataId 是否可覆盖 |
+|---|---|---|---|
+| `PG_PASSWORD` | Postgres 业务库 | gateway / scan-engine / celery | 否(白名单) |
+| `NACOS_PASSWORD` | Nacos 鉴权 | 全部 | 否(白名单) |
+| `API_SECRET_KEY` | JWT 签名 | gateway / ai(自验) / celery | 否(白名单) |
+| `AGENT_SIGNING_KEY` | Agent Ed25519 | gateway | 否(白名单) |
+| `AGENT_CONSOLE_EXTERNAL_URL` | Agent 回调 | gateway | 否(白名单) |
+| `AI_BASE_URL` | gateway 反代目标 | gateway(8001 默认) | 是(shared dataId 注入) |
+| `GRAPHRAG_BASE_URL` | scan-engine 调图谱 | scan-engine(8002 默认) | 是 |
+| `NACOS_DATA_IDS` | 每服务不同 | 每个服务独立 | 是(启动必读) |
+| `EMBEDDING_MODEL_PATH` | BGE 模型路径 | graphrag | 是(只在 graphrag dataId) |
+| `SECAGENT_IMAGE_*` | 镜像 tag | 全部 | — |
+| `FRONTEND_PORT` | 前端端口 | frontend | — |
+
+### Nacos 字段分布表(7 个 dataId)
+
+| dataId | 消费服务 | 包含字段 | 改后影响范围 |
+|---|---|---|---|
+| `security-agent-shared.yaml` | 全部 | `redis_url` / `es_hosts` / `pg_*` / `kafka_*` / `log_level` | 改一个字段,所有服务热加载;建议只放连接串 |
+| `security-agent-gateway.yaml` | gateway | `api.*` / `jwt.*` / `agent_*` / `signing.*` / `cors.*` / `nuclei.*` / `rules_sync.*` | gateway 进程热加载;改 api_host/port 需重启 nginx 转发 |
+| `security-agent-ai.yaml` | ai | `llm_provider` / `openai_*` / `anthropic_*` / `serper_*` / `tavily_*` / `llm_request_timeout_sec` | ai 服务热加载 |
+| `security-agent-scan-engine.yaml` | scan-engine | `pipeline_concurrency` / `hitl_timeout_sec` / `action_dry_run` / `sandbox.*` / `llm.*`(子图) / `stream_consumer_group` | scan-engine 进程热加载 |
+| `security-agent-graphrag.yaml` | graphrag | `milvus_*` / `neo4j_*` / `embedding_model_path` | graphrag 进程热加载 |
+| `security-agent-celery.yaml` | celery | `celery_broker_url` / `celery_backend_url` / `hitl_timeout_buffer_sec` | celery 进程热加载 |
+| `security-agent-preprocessing.yaml` | preprocessing(按需) | `kafka_*` / `edr_*` | preprocessing 进程热加载 |
+
+### 字段流转规则(运维必看)
+
+1. **改连接串**(PG host / Redis url / ES host):
+   - 改 `.env` 不行(`.env` 不含完整 URL,只含密码);
+   - 改 `security-agent-shared.yaml` 的对应字段,Nacos 热加载后所有服务都生效;
+   - **不重启**容器即可生效(Nacos long-poll 检测到变更)。
+
+2. **改 LLM provider 或 key**:
+   - `security-agent-ai.yaml`(ai 服务自己用);
+   - `security-agent-scan-engine.yaml` 的 `llm.*`(子图 LLM,scan-engine 用);
+   - **两处都要改**!之前单体时代只改一处,现在两处独立 Nacos dataId 互不影响。
+
+3. **改 JWT 签名密钥**:
+   - **必须改 `.env`**(白名单,不走 Nacos);
+   - 改完**必须重启**所有服务(ai 自验 JWT 用此 key,新 key 不重启会导致 401);
+   - 先改 gateway 再改 ai/scan-engine,避免新 JWT 在 ai 端验证失败。
+
+4. **改端口**:
+   - 业务端口(8000/8001/8002):在 `docker-compose.yml` 的 `ports:` 与 `command:` 同步改;
+   - 主机内部端口若被占:阶段 0 先用 `ss -tln` 预检(见 0.6 节);
+
+5. **新增字段**:
+   - 若字段在 `src/common/config/settings.py` 没声明,即使 Nacos 配了也不会被读;
+   - **先改代码**加字段,deploy,再改 Nacos 注入值;
+   - 阶段 0 验收门槛:grep `ai_base_url|graphrag_base_url` 必须命中 `settings.py`。
+
+### 与拆分前(单体)的对比
+
+| 变更类型 | 单体时代操作 | 拆分后操作 |
+|---|---|---|
+| 改 LLM provider | 改 `nacos-config.yaml` 一个文件 | 改 `ai.yaml` + `scan-engine.yaml` 两个文件 |
+| 改 redis url | 同上 | 改 `shared.yaml`(Nacos 1 处) |
+| 加新业务字段 | 改 `nacos-config.yaml` | 选 6 个 dataId 之一 + 改 `settings.py` 加字段 + 改对应服务 Dockerfile 装包(如需) |
+| 改 JWT 密钥 | 改 `.env` | 改 `.env` + **重启 3 个服务**(gateway + ai + scan-engine)|
+| 重置服务 | `docker restart secagent-api` | `docker restart secagent-gateway`(只一个)或 `docker compose up -d --no-deps secagent-ai` |
+
+## 0.6. 端口预检脚本(部署前必跑)
+
+阶段 0 验收门槛:本机 `ss -tln` 确认 8000/8001/8002 未被占用。一行命令:
+
+```bash
+ss -tln | grep -E ':(8000|8001|8002)\b' || echo "OK: ports 8000/8001/8002 空闲"
+```
+
+若被占用,调整 `docker-compose.yml` 的 `ports:` 映射(如 `8000:18000`),或
+通过 `.env` 覆盖 `AI_BASE_URL` / `GRAPHRAG_BASE_URL` 指向实际监听端口。
 
 ## 1. 部署架构
 
@@ -289,6 +386,19 @@ cd ../deployments/prod && docker compose up -d
 | 问题 | 解决 |
 |---|---|
 | `POST /api/v1/auth/login` → 500 `password cannot be longer than 72 bytes` | 同 §7.5 bcrypt,镜像里装 `bcrypt==4.0.1` 即可 |
+
+### 7.10 Agent 规则包下载失败(ca.pem 缺失)
+
+| 问题 | 解决 |
+|---|---|
+| agent 日志 `rule_update failed: build http client: read CA cert /etc/secagent/ca.pem: no such file or directory`,且扫描任务 0 findings(rule_version 一直是 "0") | console 是 **HTTP 明文**时 agent 根本不需要 CA。把 `/etc/secagent/config.json` 的 `ca_path` 置空(`"ca_path": ""`)后重启 `secagent.service`;若未来 console 启用 HTTPS,再把 CA 放到该路径并恢复配置 |
+| 注意:`ca_path` 缺失会让 V12 5.1 的"CA 硬错误"生效 → 规则包永远下载失败 → matcher 无规则 → 617 项采集 0 匹配 | 同上 |
+
+### 7.11 规则同步 400 `rules.check.value cannot be changed from text/keyword to date`
+
+| 问题 | 解决 |
+|---|---|
+| `POST /api/v1/rules/sync` → 500 `mapper [rules.check.value] cannot be changed from type [text/keyword] to [date]` | NVD 规则 `check.value` 混有日期形版本号(`2024-01-01`),ES date detection 把已建字段改 date 而冲突。**索引须带 `date_detection: false` + `dynamic_templates`(字符串固定 keyword)**;代码 `rules_sync.py` 已内置,重建索引:删除 `vulnscan-rules` 后让 sync 重建(或手动 PUT 上述 mapping) |
 
 ---
 

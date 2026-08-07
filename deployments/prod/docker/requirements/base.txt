@@ -1,0 +1,20 @@
+# 阶段 0-6:基础镜像共享依赖(方案 6.1,所有服务)
+# 锁定版本与 pyproject.toml 对齐。
+# 范围:gateway/ai/scan-engine/graphrag/preprocessing/celery 全部需要
+# 注意:不含 langgraph/sentence-transformers/pymilvus/neo4j/docker/aiokafka/celery —— 这些在各自 service requirements 追加
+fastapi==0.115.4
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+pydantic-settings==2.6.1
+asyncpg==0.30.0
+redis==5.2.0
+elasticsearch==8.15.1
+httpx>=0.28,<0.29
+structlog==24.4.0
+PyYAML==6.0.2
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.12
+watchdog==5.0.3
+tenacity==9.0.0
+prometheus_client==0.21.0

@@ -1,13 +1,14 @@
-package crypto
+﻿package crypto
 
 import (
 	"crypto/ed25519"
-	"fmt"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 )
 
 func TestSetPublicKey_Valid(t *testing.T) {
@@ -87,7 +88,7 @@ func TestVerify_ValidSignature(t *testing.T) {
 	payload := map[string]interface{}{"task_id": "t1", "modules": []string{"sys_vuln"}}
 	payloadBytes, _ := json.Marshal(payload)
 	msgType := "scan_command"
-	ts := "2026-01-01T00:00:00Z"
+	ts := time.Now().UTC().Format(time.RFC3339)
 	// Sign over the same canonical form Verify builds internally.
 	canonical := msgType + "|" + ts + "|" + canonicalJSON(payload)
 	sig := ed25519.Sign(priv, []byte(canonical))
@@ -108,7 +109,7 @@ func TestVerify_TamperedPayload_Fails(t *testing.T) {
 
 	payload := json.RawMessage(`{"task_id":"t1"}`)
 	msgType := "scan_command"
-	ts := "2026-01-01T00:00:00Z"
+	ts := time.Now().UTC().Format(time.RFC3339)
 	canonical := msgType + "|" + ts + "|" + string(payload)
 	sig := ed25519.Sign(priv, []byte(canonical))
 	sigB64 := base64.StdEncoding.EncodeToString(sig)
@@ -131,7 +132,7 @@ func TestVerify_WrongPublicKey_Fails(t *testing.T) {
 
 	payload := json.RawMessage(`{"task_id":"t1"}`)
 	msgType := "scan_command"
-	ts := "2026-01-01T00:00:00Z"
+	ts := time.Now().UTC().Format(time.RFC3339)
 	canonical := msgType + "|" + ts + "|" + string(payload)
 	sig := ed25519.Sign(priv, []byte(canonical))
 	sigB64 := base64.StdEncoding.EncodeToString(sig)
@@ -182,8 +183,8 @@ func TestCanonicalJSON_MatchesPythonSortKeys(t *testing.T) {
 			},
 			`{"options": {"a": 1, "z": 9}, "target_id": "x"}`},
 		{"string with non-ASCII stays as UTF-8",
-			map[string]interface{}{"name": "主机-A"},
-			`{"name": "主机-A"}`},
+			map[string]interface{}{"name": "涓绘満-A"},
+			`{"name": "涓绘満-A"}`},
 		{"slice preserves order",
 			map[string]interface{}{"ids": []interface{}{1, 2, 3}},
 			`{"ids": [1, 2, 3]}`},
@@ -225,7 +226,7 @@ func TestVerify_AcceptsPythonStyleSortedPayload(t *testing.T) {
 		},
 		"modules": []interface{}{"sys_vuln", "baseline"},
 	}
-	ts := "2026-07-19T07:00:00+00:00"
+	ts := time.Now().UTC().Format(time.RFC3339)
 	signStr := fmt.Sprintf("scan_command|%s|%s", ts, canonicalJSON(payload))
 	sig := ed25519.Sign(priv, []byte(signStr))
 
@@ -246,7 +247,7 @@ func TestVerify_RejectsWrongKeyOrder(t *testing.T) {
 
 	// Sign with the canonical (sorted) form.
 	payload := map[string]interface{}{"b": 2, "a": 1}
-	ts := "2026-07-19T07:00:00+00:00"
+	ts := time.Now().UTC().Format(time.RFC3339)
 	signStr := fmt.Sprintf("scan_command|%s|%s", ts, canonicalJSON(payload))
 	sig := ed25519.Sign(priv, []byte(signStr))
 
@@ -297,7 +298,7 @@ func TestVerify_AcceptsLivePythonPayload(t *testing.T) {
 	// Live Python canonical: scan_command|<ts>|{"deadline": "", ...}
 	// ts comes from the wire and is included in the canonical; we use a
 	// fixed one here so the test is reproducible.
-	ts := "2026-07-19T08:05:27.278308+00:00"
+	ts := time.Now().UTC().Format(time.RFC3339)
 	payloadCanonical := `{"deadline": "", "engine": "matcher", "modules": ["sys_vuln"], "nuclei_severity": [], "nuclei_tags": [], "nuclei_targets": ["agent-891d0fe74ad9"], "nuclei_templates": [], "nuclei_timeout_sec": 0, "policy": {"modules": ["sys_vuln"], "resource_limit": {"cpu_percent": 30, "mem_percent": 30}, "time_window": null, "timeout_sec": 1800}, "resource_limit": {"cpu_percent": 30, "mem_percent": 30}, "rule_version": "latest", "task_id": "a7be5e51-e33d-4f1f-97f4-a33843f82658"}`
 	canonical := "scan_command|" + ts + "|" + payloadCanonical
 	sig := ed25519.Sign(priv, []byte(canonical))

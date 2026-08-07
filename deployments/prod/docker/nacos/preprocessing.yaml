@@ -1,0 +1,16 @@
+# 阶段 5 nacos 拆分:preprocessing dataId
+# 仅 preprocessing 服务消费:Kafka topics + EDR 适配器开关。
+
+kafka_bootstrap_servers: "127.0.0.1:9092"
+kafka_topic_raw_alerts: "raw-alerts"
+kafka_topic_dlq: "dead-letter-queue"
+kafka_consumer_group: "preprocessing-group"
+
+# EDR 适配器开关
+edr_crowdstrike_enabled: false
+edr_elastic_enabled: true
+edr_elkeid_enabled: false
+edr_secagent_enabled: true
+edr_sentinelone_enabled: false
+edr_syslog_enabled: false
+edr_wazuh_enabled: false

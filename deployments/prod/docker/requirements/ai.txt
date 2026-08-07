@@ -1,0 +1,5 @@
+# ai 服务独享(方案 6.2 ai 行)
+langchain==0.3.7
+langchain-openai==0.2.9
+langchain-anthropic==0.3.0
+# 阶段 0-6 实证:chat_kb/engine.py 纯关键字检索,无需 langgraph

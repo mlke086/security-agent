@@ -25,6 +25,13 @@ type Config struct {
 	// whenever HandleRuleUpdate hot-loads a new pack.
 	RuleVersion     string `json:"rule_version"`
 	HeartbeatSec    int    `json:"heartbeat_sec"`
+	// MetricsIntervalSec 是 host_metrics 性能上报间隔（秒），独立于心跳
+	// （需求①）。0/缺省由 metrics.Reporter 兜底为 15s；服务端可通过
+	// config_update 下发热更新。
+	MetricsIntervalSec int `json:"metrics_interval_sec"`
+	// MetricsMounts 是磁盘采样的挂载点列表（可选；需求①）。空时取
+	// 平台默认（"/" 或 Windows "C:"）。v1 仅用第一个挂载点。
+	MetricsMounts []string `json:"metrics_mounts"`
 	ResourceLimit   struct {
 		CPUPercent int `json:"cpu_percent"`
 		MemPercent int `json:"mem_percent"`
@@ -61,6 +68,8 @@ func Load(path string) (*Config, error) {
 	}
 	cfg := &Config{
 		HeartbeatSec: 60,
+		// 需求①：默认 15s，与 metrics.Reporter 的兜底一致。
+		MetricsIntervalSec: 15,
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -68,10 +77,15 @@ func Load(path string) (*Config, error) {
 	if cfg.HeartbeatSec <= 0 {
 		cfg.HeartbeatSec = 60
 	}
+	if cfg.MetricsIntervalSec <= 0 {
+		cfg.MetricsIntervalSec = 15
+	}
 	return cfg, nil
 }
 
-// Save writes configuration back to the file.
+// Save writes configuration back to the file (atomically: tmp + rename,
+// so a crash mid-write can never corrupt config.json -- which holds the
+// agent_token; V13 P2-16).
 func (c *Config) Save(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -81,8 +95,24 @@ func (c *Config) Save(path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write config: %w", err)
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("rename config: %w", err)
 	}
 	return nil
 }

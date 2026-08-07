@@ -1,5 +1,6 @@
 import axios from "axios"
 import type { EventRecord, Approval, Metrics, TimelinePoint } from "../types"
+import { sseBaseUrl } from "../utils/sseBaseUrl"
 
 // same-origin default; can override via VITE_API_BASE_URL at build time.
 const host = window.location.hostname
@@ -150,6 +151,176 @@ export interface MonitorEventList {
 export async function getAgentMonitor(agentId: string, limit = 20): Promise<MonitorEventList> {
   const res = await api.get(`/agents/${agentId}/monitor`, { params: { limit } })
   return res.data as MonitorEventList
+}
+
+// -- 需求①: host performance metrics --------------------------------------
+
+export interface HostMetricPoint {
+  ts: string
+  cpu: number | null
+  mem: number | null
+  disk: number | null
+  net_in: number | null
+  net_out: number | null
+  load1: number | null
+}
+
+export interface HostMetricsResp {
+  agent_id: string
+  range: "1h" | "24h" | "7d"
+  points: HostMetricPoint[]
+  latest: {
+    ts: string
+    cpu: number | null
+    mem: number | null
+    mem_total_mb: number | null
+    mem_used_mb: number | null
+    disk: number | null
+    disk_total_gb: number | null
+    disk_used_gb: number | null
+    net_in: number | null
+    net_out: number | null
+    load1: number | null
+  } | null
+}
+
+export async function getHostMetrics(agentId: string, range: "1h" | "24h" | "7d" = "24h") {
+  const res = await api.get(`/agents/${agentId}/metrics`, { params: { range } })
+  return res.data as HostMetricsResp
+}
+
+export async function getHostMetricsLatest(agentId: string) {
+  const res = await api.get(`/agents/${agentId}/metrics/latest`)
+  return res.data as { agent_id: string; present: boolean; ts?: string; cpu?: number | null; mem?: number | null; disk?: number | null }
+}
+
+// -- 需求②: asset-scan (agentless 内网资产扫描) ------------------------------
+
+export interface AssetScanTask {
+  task_id: string
+  source: string
+  targets: string[]
+  ports: number[]
+  engine: "fast" | "full" | "global"
+  modules: string[]
+  schedule: string
+  actor: string
+  status: string
+  created_at: string
+  updated_at?: string
+  started_at?: string
+  finished_at?: string
+  error?: string
+}
+
+export interface AssetScanService {
+  port: number
+  protocol?: string
+  name: string
+  product?: string
+  version?: string
+  cpe?: string
+  banner?: string
+  http_title?: string
+}
+
+export interface AssetScanAsset {
+  task_id: string
+  ip: string
+  hostname?: string
+  os_guess?: string
+  ports: number[]
+  services?: AssetScanService[]
+  detected_at?: string
+}
+
+export interface AssetScanVuln {
+  vuln_id: string
+  ip: string
+  port: number
+  service?: string
+  cve?: string | null
+  template_id?: string | null
+  name: string
+  severity: string
+  ai_severity?: string | null
+  ai_processed?: boolean
+  ai_reason?: string
+  evidence?: string
+  fix_advice?: string
+  status: string
+  detected_at?: string
+}
+
+export interface AssetScanReport {
+  task_id: string
+  summary: string
+  ai_analysis?: string
+  stats: {
+    hosts_alive: number
+    open_ports: number
+    services: number
+    vulns: number
+    by_severity: Record<string, number>
+  }
+  top_vulns: Array<{ ip: string; port: number; cve?: string | null; name: string; severity: string }>
+  recommendations: string[]
+  generated_at: string
+}
+
+export interface AssetScanCreateBody {
+  targets: string[]
+  ports?: number[]
+  engine?: "fast" | "full" | "global"
+  modules?: string[]
+  schedule?: string
+}
+
+export async function createAssetScanTask(body: AssetScanCreateBody) {
+  const res = await api.post("/asset-scan/tasks", body)
+  return res.data as { task_id: string; status: string }
+}
+
+export async function listAssetScanTasks(params: { status?: string; page?: number; page_size?: number } = {}) {
+  const res = await api.get("/asset-scan/tasks", { params })
+  return res.data as { items: AssetScanTask[]; total: number; page: number; page_size: number }
+}
+
+export async function getAssetScanTask(taskId: string) {
+  const res = await api.get(`/asset-scan/tasks/${taskId}`)
+  return res.data as AssetScanTask
+}
+
+export async function cancelAssetScanTask(taskId: string) {
+  const res = await api.post(`/asset-scan/tasks/${taskId}/cancel`)
+  return res.data as { task_id: string; status: string }
+}
+
+export async function deleteAssetScanTask(taskId: string) {
+  const res = await api.delete(`/asset-scan/tasks/${taskId}`)
+  return res.data as { task_id: string; status: string }
+}
+
+export async function getAssetScanAssets(taskId: string) {
+  const res = await api.get(`/asset-scan/tasks/${taskId}/assets`)
+  return res.data as { task_id: string; items: AssetScanAsset[]; count: number }
+}
+
+export async function getAssetScanVulns(taskId: string) {
+  const res = await api.get(`/asset-scan/tasks/${taskId}/vulns`)
+  return res.data as { task_id: string; items: AssetScanVuln[]; count: number }
+}
+
+export async function getAssetScanReport(taskId: string) {
+  const res = await api.get(`/asset-scan/tasks/${taskId}/report`)
+  return res.data as AssetScanReport
+}
+
+/** SSE 任务进度流 URL（EventSource 用；token 为登录 JWT，服务端 decode_token 校验）。 */
+export function assetScanStreamUrl(taskId: string): string {
+  const token = localStorage.getItem("token") || ""
+  const base = sseBaseUrl()
+  return `${base}/asset-scan/tasks/${taskId}/stream?token=${encodeURIComponent(token)}`
 }
 
 // -- Sigma detection rules (Phase 6 of monitoring plan) -----------------
@@ -435,7 +606,8 @@ export interface ScanIntentData {
   engine?: string
   resource_limit?: Record<string, unknown>
   schedule?: string | null
-  // nuclei-specific knobs (only used when engine === 'nuclei')
+  // nuclei-specific knobs (used when engine === 'nuclei' or 'global')
+  nuclei_ports?: number[]
   nuclei_severity?: string[]
   nuclei_tags?: string[]
   nuclei_templates?: string[]
@@ -515,9 +687,10 @@ export async function patchMessage(
   return res.data as Conversation
 }
 
-// -- General assistant (project Q&A + web search + scan routing) ----------
+// -- General assistant (scan routing + system Q&A + LLM passthrough) -------
+// V13 三分类：scan（创建任务）/ system（系统能力问答）/ chat（外部回答透传）。
 
-export type ChatRoute = "scan" | "project" | "web" | "chat"
+export type ChatRoute = "scan" | "system" | "chat"
 
 export interface ChatSource {
   title: string
@@ -739,6 +912,7 @@ export interface VulnFinding {
 export interface VulnFilter {
   task_id?: string
   hostname?: string
+  agent_id?: string
   severity?: string
   status?: string
   cve?: string
@@ -804,4 +978,147 @@ export interface HostStatsRow {
 export async function getHostStats() {
   const res = await api.get("/vulnscan/host-stats")
   return res.data as { items: HostStatsRow[] }
+}
+
+export interface HostVulnSummaryRow {
+  /** 一台有漏洞记录的主机（需求③ 主机清单顶层视图，按 agent_id 聚合）。 */
+  agent_id: string
+  hostname: string
+  ip: string
+  os: string
+  group: string
+  /** 原始 severity 计数（非 ai_severity），形如 {critical:1, high:5, ...} */
+  severity_counts: Record<string, number>
+  total: number
+  open_count: number
+  fixed_count: number
+  last_scan_at: string
+}
+
+export interface HostVulnSummaryFilter {
+  group?: string
+  hostname_keyword?: string
+  severity?: string
+  status?: string
+  page?: number
+  page_size?: number
+}
+
+export async function getHostVulnSummary(filter: HostVulnSummaryFilter = {}) {
+  const params: Record<string, string> = {}
+  for (const [k, v] of Object.entries(filter)) {
+    if (v === undefined || v === null || v === "") continue
+    params[k] = String(v)
+  }
+  const res = await api.get("/vulnscan/host-vuln-summary", { params })
+  return res.data as {
+    items: HostVulnSummaryRow[]
+    total: number
+    page: number
+    page_size: number
+    cached: boolean
+  }
+}
+
+// -- LLM 队列监控 (阶段 5 收尾 P6-monitor) ------------------------------
+
+export interface TaskStatusCount {
+  status: string
+  count: number
+}
+
+export interface QueueStatusResp {
+  stream: string
+  xlen: number
+  pending: number
+  pending_consumers: number
+  dlq_xlen: number
+  dlq_stream: string
+  oldest_entry_id: string | null
+  oldest_entry_age_sec: number | null
+  enabled: boolean
+}
+
+export interface AlertConfig {
+  queued_threshold: number
+  oldest_age_sec: number
+  scan_check_enabled: boolean
+  check_interval_sec: number
+  updated_at?: string | null
+  updated_by?: string | null
+}
+
+export interface ReleaseResultItem {
+  task_id: string
+  status: "released" | "not_found" | "busy_scanning" | "error"
+  detail?: string | null
+}
+
+export interface ReleaseResponse {
+  items: ReleaseResultItem[]
+  released: number
+  failed: number
+  busy: number
+  not_found: number
+}
+
+export async function getTaskStats(): Promise<TaskStatusCount[]> {
+  const res = await api.get("/vulnscan/tasks/stats")
+  return res.data as TaskStatusCount[]
+}
+
+export async function getQueueStatus(): Promise<QueueStatusResp> {
+  const res = await api.get("/vulnscan/tasks/queue-status")
+  return res.data as QueueStatusResp
+}
+
+export async function getAlertConfig(): Promise<AlertConfig> {
+  const res = await api.get("/vulnscan/tasks/alert-config")
+  return res.data as AlertConfig
+}
+
+export async function putAlertConfig(cfg: AlertConfig): Promise<AlertConfig> {
+  const res = await api.put("/vulnscan/tasks/alert-config", cfg)
+  return res.data as AlertConfig
+}
+
+export async function releaseTask(taskId: string): Promise<ReleaseResultItem> {
+  const res = await api.post(`/vulnscan/tasks/release`, null, { params: { task_id: taskId } })
+  return res.data as ReleaseResultItem
+}
+
+export async function releaseTasksBatch(taskIds: string[]): Promise<ReleaseResponse> {
+  const res = await api.post("/vulnscan/tasks/release-batch", { task_ids: taskIds })
+  return res.data as ReleaseResponse
+}
+
+// ---- 2026-08-06 LLM 分析监控 ----
+export interface LlmUsageSummary {
+  total_calls: number
+  by_kind: Record<string, Record<string, number>>
+  success: number
+  timeout: number
+  failed: number
+  retried: number
+  active_calls: number
+  avg_duration_ms: number
+  total_duration_ms: number
+  failures_recent: Array<Record<string, unknown>>
+  retry_pending: Array<{
+    task_id: string
+    pending_batches: number
+    entries: Array<{ finding_id: string; attempts: number }>
+  }>
+  outcomes: Array<Record<string, unknown>>
+  window_days: string[]
+}
+
+export async function getLlmUsage(): Promise<LlmUsageSummary> {
+  const res = await api.get("/ai-analytics/llm-usage")
+  return res.data as LlmUsageSummary
+}
+
+export async function getLlmRescanPending(): Promise<LlmUsageSummary["retry_pending"]> {
+  const res = await api.get("/ai-analytics/llm-usage/rescan")
+  return res.data as LlmUsageSummary["retry_pending"]
 }

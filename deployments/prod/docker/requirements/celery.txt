@@ -1,0 +1,2 @@
+# celery 服务独享(方案 6.2 celery 行)
+celery==5.4.0

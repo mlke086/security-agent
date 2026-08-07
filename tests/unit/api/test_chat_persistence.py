@@ -11,6 +11,7 @@ Covers:
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
@@ -392,7 +393,6 @@ def test_patch_message_sanitizes_meta_keys( auth_headers ):
     sources, task_id) are persisted. Junk keys are silently stripped so
     the jsonb shape stays predictable for analytics / audit code."""
     from src.agents import conversation as conv_module
-    import asyncio as _asyncio
 
     # Drive the storage layer directly (no HTTP) so we can inspect the
     # actual sanitization contract.
@@ -438,7 +438,6 @@ def test_chat_scan_with_bare_group_name( auth_headers ):
     """E2E simulation: the LLM returns `targets: ["test"]` for the user
     request `扫描 test 组的主机`. The persisted scan_intent carries the
     bare name and the helper skips the regex fallback (no log line)."""
-    import json as _json
     from src.agents.models import ScanIntent
     from src.api.routers.chat import IntentDecision
 
@@ -774,8 +773,9 @@ async def test_append_then_patch_round_trip_with_real_ts():
     actual `ts` PG wrote; patch_message MUST find that same row
     when the caller forwards that `ts` back. This is what makes the
     chat -> patchMessage(task_id) -> reload flow reliable."""
-    from src.agents import conversation as conv
     from datetime import UTC, datetime
+
+    from src.agents import conversation as conv
 
     # Stub the PG connection so we don't need a real DB.
     in_memory = {"msgs": []}
@@ -867,7 +867,6 @@ def test_chat_returns_503_when_classifier_returns_none( auth_headers ):
     classification failure. This was the bug behind the 500 the user
     just hit on production: AttributeError: 'NoneType' object has no
     attribute 'intent'."""
-    from src.api.routers.chat import IntentDecision
 
     def completion(*a, **kw):
         # Simulate the LangChain adapter returning None for a structured
@@ -908,7 +907,6 @@ def test_chat_returns_503_when_classifier_returns_none( auth_headers ):
 def test_chat_returns_503_when_classifier_returns_wrong_type( auth_headers ):
     """V9 follow-up: same defence for when the adapter returns a
     non-IntentDecision value (e.g. a string for a free-form call)."""
-    from src.api.routers.chat import IntentDecision
 
     def completion(*a, **kw):
         return "unexpectedly-a-string"
@@ -955,17 +953,15 @@ def test_chat_degraded_web_question_returns_200_with_answer( auth_headers ):
         patch("src.api.routers.chat.get_model_adapter") as mock_get,
         patch("src.api.routers.chat.conv_store") as mock_conv,
         patch("src.api.routers.chat.get_audit_logger") as mock_audit,
-        patch("src.api.routers.chat.search_with_fallback") as mock_search,
+        # V13 三分类：degraded 下 system 关键词命中事件能力，走真实事件
+        # store（此处为空）再 LLM 汇总。
+        patch("src.api.store.get_event_store") as mock_events,
     ):
         mock_get.return_value = _adapter_for(completion)
         mock_conv.append_message = AsyncMock()
         mock_audit.return_value.log = AsyncMock()
-        # Stub web search to return no hits so the web handler falls
-        # through to a deterministic LLM-only answer.
-        import asyncio as _asyncio
-        async def fake_search(q, limit=6):
-            return [], "nvd"
-        mock_search.side_effect = fake_search
+        mock_events.return_value.list_events = AsyncMock(return_value=[])
+        mock_events.return_value.total_count = AsyncMock(return_value=0)
         resp = client.post(
             "/api/v1/chat",
             json={
@@ -979,8 +975,8 @@ def test_chat_degraded_web_question_returns_200_with_answer( auth_headers ):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert "\u8fd1\u671f\u884c\u4e1a" in body["reply"], body["reply"]
-    # The response route was inferred as web (CVE / industry keywords).
-    assert body["intent"] == "web", body
+    # V13：该消息命中 system 的事件能力（不再是 web 联网搜索）。
+    assert body["intent"] == "system", body
     # The audit entry was still recorded -- we never silently bypassed
     # the gate, the operator just got a degraded answer.
     mock_audit.return_value.log.assert_awaited_once()
@@ -1024,36 +1020,45 @@ def test_chat_degraded_scan_question_still_503( auth_headers ):
     # Audit logged for the operator.
     mock_audit.return_value.log.assert_awaited_once()
 def test_degraded_routing_matrix_for_typical_user_messages():
-    """V9 follow-up: walk the most common user messages through
-    the degraded-routing heuristics and assert where each lands.
-    This protects the keyword lists from silent drift -- a user
-    asking `详细介绍某个主机的漏洞情况` MUST not end up 503'd,
+    """V9 follow-up (updated for V13 三分类): walk the most common user
+    messages through the degraded-routing heuristics and assert where
+    each lands. This protects the keyword lists from silent drift -- a
+    user asking `详细介绍某个主机的漏洞情况` MUST not end up 503'd,
     and a user asking `扫描 test 组` MUST end up 503'd even when
-    the structured classifier drops the ball."""
+    the structured classifier drops the ball. V13: fallback routes are
+    now `system` (real data / docs) or `chat` (LLM passthrough)."""
     from src.api.routers.chat import (
-        _looks_like_scan_intent, _WEB_KEYWORDS, _PROJECT_KEYWORDS,
-        _HOST_KEYWORDS, _SCAN_KEYWORDS,
+        _HOST_KEYWORDS,
+        _SCAN_KEYWORDS,
+        _SYSTEM_DOC_KEYWORDS,
+        _SYSTEM_EVENT_KEYWORDS,
+        _SYSTEM_RULE_KEYWORDS,
+        _SYSTEM_STAT_KEYWORDS,
+        _SYSTEM_TASK_KEYWORDS,
+        _looks_like_scan_intent,
     )
 
     cases = [
-        # (message, expected_scan_intent, expected_fallback_route)
-        # --- the two the user just asked about -----------------------
-        ("详细介绍某个主机的漏洞情况", False, "host"),
-        ("历史上有哪些重大的安全事件", False, "web"),
-        # host-shaped with a specific hostname in the message -- host
-        # wins over web (the host handler queries the real vuln store).
-        ("给我详细说一下 Rocky001 这台主机的漏洞", False, "host"),
-        ("web-02 有哪些漏洞", False, "host"),
-        ("某个 IP 10.0.0.5 的漏洞情况", False, "host"),
-        # --- broader sweep so the matrix stays honest ---------------
-        ("最近有什么新的 CVE 利用代码", False, "web"),
-        ("APT 组织的最新活动", False, "web"),
-        ("企业被入侵了怎么办", False, "web"),
-        ("Rocky001 有哪些漏洞", False, "host"),
-        ("今天有什么重要新闻", False, "web"),
+        # (message, expected_scan_intent, expected_system_or_chat)
+        ("详细介绍某个主机的漏洞情况", False, "system"),
+        ("历史上有哪些重大的安全事件", False, "system"),
+        ("给我详细说一下 Rocky001 这台主机的漏洞", False, "system"),
+        ("web-02 有哪些漏洞", False, "system"),
+        ("某个 IP 10.0.0.5 的漏洞情况", False, "system"),
+        # 外部问题 → chat 透传（V13 不再走联网搜索路由）
+        ("最近有什么新的 CVE 利用代码", False, "chat"),
+        ("APT 组织的最新活动", False, "chat"),
+        ("企业被入侵了怎么办", False, "chat"),
+        ("今天有什么重要新闻", False, "chat"),
+        ("Rocky001 有哪些漏洞", False, "system"),
         ("你好，你是谁", False, "chat"),
-        ("这个系统的架构是怎么样的", False, "project"),
-        ("如何将一台新主机接入这个系统", False, "project"),
+        ("这个系统的架构是怎么样的", False, "system"),
+        ("如何将一台新主机接入这个系统", False, "system"),
+        ("现在有多少主机纳管了", False, "system"),
+        ("test 组有多少台主机", False, "system"),
+        ("最近的扫描任务报告", False, "system"),
+        ("现在有哪些扫描规则", False, "system"),
+        ("有没有待审批的安全事件", False, "system"),
         # --- the lock-out cases (must be 503) -------------------------
         ("帮我扫描 test 组", True, None),
         ("scan foo", True, None),
@@ -1062,14 +1067,12 @@ def test_degraded_routing_matrix_for_typical_user_messages():
         ("扫描二维码什么意思", True, None),
     ]
 
-    def fallback_route_for(message: str) -> str:
-        # Mirrors _degraded_best_effort: a hostname-shaped token +
-        # host/web keyword upgrades to host (the vuln store is more
-        # useful than a web search for "web-02 \u6709\u54ea\u4e9b\u6f0f\u6d1e").
-        # We also mirror the production blacklist + digit/hyphen/dot
-        # filter so CVE / APT / web / api are NOT mis-classified as
-        # host tokens.
+    def system_route_for(message: str) -> str:
+        # Mirrors _answer_system_question's capability order. We mirror
+        # the production hostname blacklist + digit/hyphen/dot filter so
+        # CVE / APT / web / api are NOT mis-classified as host tokens.
         import re as _re
+
         from src.api.routers.chat import _HOST_TOKEN_BLACKLIST
         text = (message or "").lower()
         host_tokens: list[str] = []
@@ -1084,21 +1087,19 @@ def test_degraded_routing_matrix_for_typical_user_messages():
             if not any(c.isdigit() or c in "-." for c in tok):
                 continue
             host_tokens.append(tok)
-        if host_tokens and any(
-            kw in text for kw in (_HOST_KEYWORDS + _WEB_KEYWORDS)
+        if host_tokens or any(kw in text for kw in _HOST_KEYWORDS):
+            return "system"  # host_vulns capability
+        for kws in (
+            _SYSTEM_STAT_KEYWORDS, _SYSTEM_TASK_KEYWORDS, _SYSTEM_RULE_KEYWORDS,
+            _SYSTEM_EVENT_KEYWORDS, _SYSTEM_DOC_KEYWORDS,
         ):
-            return "host"
-        if any(kw in text for kw in _HOST_KEYWORDS):
-            return "host"
-        if any(kw in text for kw in _WEB_KEYWORDS):
-            return "web"
-        if any(kw in text for kw in _PROJECT_KEYWORDS):
-            return "project"
+            if any(kw in text for kw in kws):
+                return "system"
         return "chat"
 
     for message, expected_scan, expected_route in cases:
         got_scan = _looks_like_scan_intent(message)
-        got_route = fallback_route_for(message) if not got_scan else None
+        got_route = system_route_for(message) if not got_scan else None
         assert got_scan == expected_scan, (
             f"scan-intent for {message!r}: got {got_scan}, expected {expected_scan}"
         )
@@ -1106,21 +1107,23 @@ def test_degraded_routing_matrix_for_typical_user_messages():
             assert got_route == expected_route, (
                 f"fallback route for {message!r}: got {got_route}, expected {expected_route}"
             )
-        # Sanity: scan-keyword + project-keyword lists should be disjoint
-        # so the lock-out does not accidentally fire for project questions.
-        overlap = set(_SCAN_KEYWORDS) & set(_PROJECT_KEYWORDS)
-        assert not overlap, f"scan/project keyword overlap: {overlap}"
-        overlap2 = set(_SCAN_KEYWORDS) & set(_WEB_KEYWORDS)
-        assert not overlap2, f"scan/web keyword overlap: {overlap2}"
+        # Sanity: scan-keyword + system-capability keyword lists should be
+        # disjoint so the lock-out does not accidentally fire for
+        # system questions.
+        overlap = set(_SCAN_KEYWORDS) & set(_HOST_KEYWORDS)
+        assert not overlap, f"scan/host keyword overlap: {overlap}"
+        overlap2 = set(_SCAN_KEYWORDS) & set(_SYSTEM_TASK_KEYWORDS)
+        assert not overlap2, f"scan/task keyword overlap: {overlap2}"
+
 def test_degraded_host_question_queries_vulnstore_by_hostname( auth_headers ):
     """V9 follow-up: when the user asks about a specific host's
     vulnerabilities via the degraded path, the chat router must
     call vulnstore.list_vulns(VulnFilter(hostname=...)) and let the
     LLM compose the answer from the real findings -- not invent
     from training data, not fall through to a free-form apology."""
+
+    from src.agents.models import Host, ScanModule, VulnFinding
     from src.api.routers.chat import IntentDecision
-    from src.agents.models import Host, VulnFilter, VulnFinding, ScanModule
-    import datetime as _dt
 
     class _FakeVulnStore:
         def __init__(self):
@@ -1224,7 +1227,6 @@ def test_degraded_host_question_unknown_host_returns_explicit_message( auth_head
     in the vuln store, the handler must say so explicitly -- it
     must NOT pretend there are no findings or invent data."""
     from src.api.routers.chat import IntentDecision
-    from src.agents.models import Host
 
     class _FakeVulnStore:
         async def list_hosts(self, **kwargs):
@@ -1272,8 +1274,8 @@ def test_degraded_host_question_without_specific_host_lists_top_n( auth_headers 
     (no specific hostname), the handler must fall back to a top-N
     view of the hosts with most findings so the operator can pick
     one to ask about next."""
+    from src.agents.models import ScanModule, VulnFinding
     from src.api.routers.chat import IntentDecision
-    from src.agents.models import VulnFilter, VulnFinding, ScanModule
 
     class _FakeVulnStore:
         async def list_hosts(self, **kwargs):
@@ -1430,3 +1432,132 @@ class TestChatAutoTitle:
         assert resp.status_code == 200, resp.text
         # maybe_generate_title must have been called (background auto-title)
         assert mock_title.call_count >= 1
+
+
+
+# ---------------------------------------------------------------------------
+# V13 三分类：system 能力路由（scan / system / chat）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_system_question_host_vulns_capability():
+    """'某主机的漏洞' 命中 host_vulns 能力，返回 system 路由。"""
+    from src.api.routers.chat import _answer_system_question
+
+    with (
+        patch(
+            "src.api.routers.chat._answer_with_hosts",
+            AsyncMock(return_value=("rocky001 的漏洞情况：...", [])),
+        ) as mock_host,
+    ):
+        reply, sources, route = await _answer_system_question(
+            "给我详细说一下 Rocky001 这台主机的漏洞", None, []
+        )
+    assert route == "system"
+    assert mock_host.await_count == 1
+    assert "rocky001" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_system_question_host_stats_capability():
+    """'多少主机纳管' 命中统计能力，返回 system 路由。"""
+    from src.api.routers.chat import _answer_system_question
+
+    with (
+        patch(
+            "src.api.routers.chat._answer_host_stats",
+            AsyncMock(return_value=("当前纳管 12 台主机，在线 10 台。", [])),
+        ) as mock_stats,
+    ):
+        reply, sources, route = await _answer_system_question(
+            "现在有多少主机纳管了？", None, []
+        )
+    assert route == "system"
+    assert mock_stats.await_count == 1
+    assert "12" in reply
+
+
+@pytest.mark.asyncio
+async def test_system_question_task_report_capability():
+    """'扫描任务报告' 命中任务能力（且不被 _looks_like_scan_intent 误锁）。"""
+    from src.api.routers.chat import _answer_system_question, _looks_like_scan_intent
+
+    assert _looks_like_scan_intent("最近的扫描任务报告") is False
+    with (
+        patch(
+            "src.api.routers.chat._answer_task_report",
+            AsyncMock(return_value=("最近任务：...", [])),
+        ) as mock_task,
+    ):
+        reply, sources, route = await _answer_system_question(
+            "最近的扫描任务报告", None, []
+        )
+    assert route == "system"
+    assert mock_task.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_system_question_unmatched_passthrough():
+    """不匹配任何系统能力 → LLM 透传，route=chat。"""
+    from src.api.routers.chat import _answer_system_question
+
+    with (
+        patch(
+            "src.api.routers.chat._answer_freeform",
+            AsyncMock(return_value=("普通回答", [])),
+        ) as mock_free,
+    ):
+        reply, sources, route = await _answer_system_question(
+            "今天天气怎么样", None, []
+        )
+    assert route == "chat"
+    assert mock_free.await_count == 1
+
+
+
+# ---------------------------------------------------------------------------
+# V13 扫描意图：三类引擎 + nuclei 端口/选项字段
+# ---------------------------------------------------------------------------
+
+
+def test_scan_intent_three_engines_and_nuclei_fields():
+    """V13: ScanIntent 必须承载 matcher/nuclei/global 三类引擎与 nuclei
+    端口/选项，确认卡片才能按 LLM 提取结果预填（Spec-P2-ENGINE）。"""
+    from src.agents.models import ScanIntent
+
+    # global + 端口 + severity + templates
+    i = ScanIntent(
+        engine="global",
+        nuclei_ports=[80, 443],
+        nuclei_severity=["high"],
+        nuclei_templates=["cves/2024/CVE-2024-1234"],
+        nuclei_timeout_sec=120,
+    )
+    assert i.engine == "global"
+    assert i.nuclei_ports == [80, 443]
+    assert i.nuclei_timeout_sec == 120
+
+    # matcher 默认值
+    d = ScanIntent()
+    assert d.engine == "matcher"
+    assert d.nuclei_ports == []
+    assert d.nuclei_timeout_sec == 0
+
+    # 非法引擎拒绝（防 LLM 乱填）
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        ScanIntent(engine="bogus")
+
+
+def test_scan_intent_nuclei_ports_range_validated():
+    """端口必须 1-65535（前端提交也过滤，这里模型层兜底）。"""
+    from src.agents.models import ScanIntent
+
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        ScanIntent(engine="nuclei", nuclei_ports=[0])
+    with pytest.raises(pydantic.ValidationError):
+        ScanIntent(engine="nuclei", nuclei_ports=[70000])

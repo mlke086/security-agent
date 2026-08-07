@@ -1,0 +1,13 @@
+# asset-pkgs 离线安装包缓存（V13 P3-F）
+# 这些文件不进 git 仓库（合计 ~35 MB），但保留目录作为构建时的
+# fallback 与分发约定：
+# - nuclei + 模板必须有，nmap/masscan .deb 可选（构建机若可达 archive.ubuntu.com，apt 装即可）
+# - 构建期 Dockerfile 优先使用本目录（COPY -> dpkg -i），不可达时降级到 apt / curl GitHub
+# - 运维侧通过 build-images.sh 的 PROXY 一次性联网下完这些文件后与代码一起打包走离线通道
+# - 协议: tag 升级时只需更新 nuclei / templates 即可
+*.deb
+*.zip
+*.tar.gz
+!README.md
+!.gitignore
+!.placeholder

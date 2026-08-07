@@ -19,7 +19,11 @@ class ElkeidAdapter(EDRAdapter):
         return str(data.get("description") or "")
 
     def _severity(self):
-        lvl = int(self.raw.get("data", {}).get("level", 3))
+        # V13 P2-1: untrusted vendor level -- fall back instead of raising.
+        try:
+            lvl = int(self.raw.get("data", {}).get("level", 3))
+        except (TypeError, ValueError):
+            lvl = 3
         if lvl >= 5:
             return AlertSeverity.CRITICAL
         if lvl >= 4:

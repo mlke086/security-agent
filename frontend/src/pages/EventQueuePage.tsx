@@ -1,4 +1,4 @@
-﻿import { useEffect, useState, useRef, useMemo } from "react"
+﻿import { useEffect, useRef, useState, useMemo, useCallback } from "react"
 import { Table, Tag, Button, Drawer, Form, Input, Select, message, Space, Typography, Badge, Progress } from "antd"
 import { PlusOutlined, EyeOutlined } from "@ant-design/icons"
 import { useNavigate } from "react-router-dom"
@@ -26,18 +26,28 @@ export default function EventQueuePage() {
 
   const canSubmit = user?.role === "admin" || user?.role === "analyst"
 
-  const fetchEvents = async () => {
+  // V13 P2-24: keep the latest filters in a ref so the SSE handler (and the
+  // mount-only effect) always fetch with current filters, and guard fetches
+  // with a request sequence so a slow SSE-triggered response can never
+  // overwrite a newer filtered fetch.
+  const filtersRef = useRef(filters)
+  useEffect(() => { filtersRef.current = filters }, [filters])
+  const fetchSeq = useRef(0)
+
+  const fetchEvents = useCallback(async () => {
+    const seq = ++fetchSeq.current
     try {
-      const data = await getEvents(filters)
+      const data = await getEvents(filtersRef.current)
+      if (seq !== fetchSeq.current) return // stale response, drop it
       setEvents(data.items); setTotal(data.total)
     } catch { /* ignore */ }
-    finally { setLoading(false) }
-  }
+    finally { if (seq === fetchSeq.current) setLoading(false) }
+  }, [])
 
-  // P2-FE-09 (2026-07-20): subscribe to the events list SSE stream instead
-  // of polling every 5s. The server publishes a message on
-  // `events:list` whenever an event is created/updated, so the page
-  // reflects new activity in <1s with no extra request load.
+  // V13 P2-24: the SSE subscription is mount-only (deps [fetchEvents]) --
+  // filter changes re-fetch via the separate effect below instead of
+  // tearing down and re-minting the EventSource (previously a filter
+  // switch = disconnect storm + token re-mint on every change).
   useEffect(() => {
     fetchEvents()
     // F2 (2026-07-21): mint a 60s scoped token first so the long-lived
@@ -76,6 +86,12 @@ export default function EventQueuePage() {
       if (es) { es.close(); es = null }
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchEvents])
+
+  // V13 P2-24: filter changes re-fetch the list without touching the SSE.
+  useEffect(() => {
+    fetchEvents()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters])
 

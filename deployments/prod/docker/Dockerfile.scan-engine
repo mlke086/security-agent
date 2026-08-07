@@ -1,0 +1,31 @@
+# 阶段 5:scan-engine 服务 Dockerfile
+# base + langgraph + langchain + langchain-openai/anthropic + docker SDK(沙箱)
+# 无对外端口,健康检查走日志关键字 + pgrep
+FROM secagent-base:0.1.0
+
+# scan-engine 独享依赖(锁定)
+COPY requirements/scan-engine.txt /tmp/requirements-scan-engine.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-scan-engine.txt \
+    && rm /tmp/requirements-scan-engine.txt
+
+# COPY scan-engine 所需子包:
+# - src/scan_engine/(main)
+# - src/orchestration/(含 subgraphs 全部 langgraph 子图 + task_queue + responder + runner + memory 仍含 lazy langgraph)
+# - src/execution/(sandbox + docker SDK)
+# - src/agents/(store + models)
+# - src/api/(store.py + events_bus.py,run_pipeline publish 用)
+# - src/common/
+COPY src/ /app/src/
+WORKDIR /app
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+# 沙箱需要访问宿主机 docker socket(经 docker SDK)
+ENV DOCKER_HOST=unix:///var/run/docker.sock
+
+# 阶段 5 收尾:挂载 entrypoint(Redis Stream + Docker socket + graphrag 可达)
+COPY deployments/prod/docker/entrypoint-scan-engine.sh /usr/local/bin/entrypoint-scan-engine.sh
+RUN chmod +x /usr/local/bin/entrypoint-scan-engine.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-scan-engine.sh"]
+CMD ["uvicorn", "src.scan_engine.main:app", "--host", "127.0.0.1", "--port", "8003", "--proxy-headers"]

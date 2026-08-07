@@ -47,6 +47,7 @@ interface ChatMessageEx extends ChatMessage {
 }
 
 interface NucleiOptions {
+  nuclei_ports: number[]
   nuclei_severity: string[]
   nuclei_tags: string[]
   nuclei_templates: string
@@ -55,8 +56,7 @@ interface NucleiOptions {
 
 const ROUTE_LABEL: Record<ChatRoute, { text: string; cls: string }> = {
   scan:    { text: "🔍 扫描意图识别", cls: "scan" },
-  project: { text: "📚 项目文档问答", cls: "project" },
-  web:     { text: "🌐 联网搜索", cls: "web" },
+  system:  { text: "🔧 系统能力", cls: "system" },
   chat:    { text: "💬 自由对话", cls: "chat" },
 }
 
@@ -141,7 +141,11 @@ export default function ChatScan() {
         }
         // Forward nuclei knobs when the engine wants them. The backend
         // ignores them for engine=='matcher', so it's safe to always send.
-        if ((intent.engine || "matcher") === "nuclei") {
+        // V13: global (matcher + nuclei) also forwards them.
+        if (intent.engine === "nuclei" || intent.engine === "global") {
+          body.nuclei_ports = (nuclei.nuclei_ports || []).filter(
+            (p: number) => Number.isInteger(p) && p >= 1 && p <= 65535,
+          )
           body.nuclei_severity = nuclei.nuclei_severity || []
           body.nuclei_tags = nuclei.nuclei_tags || []
           body.nuclei_templates = (nuclei.nuclei_templates || "")
@@ -329,6 +333,7 @@ export default function ChatScan() {
       const conv = await createConversation()
       setActiveId(conv.id)
       setMessages([])
+      setInput("") // V13 P2-21: new conversation must start with a clean input
       refreshList()
     } catch {
       message.error("新建对话失败")
@@ -343,6 +348,12 @@ export default function ChatScan() {
       // convert server shape to extended (no route/sources on load -- they are ephemeral)
       setMessages((conv.messages || []).map((m) => ({ ...m })))
       setModelId(conv.model_id)
+      // V13 P2-21: reset per-conversation transient state so switching to
+      // another conversation never leaks the previous one's draft input,
+      // in-flight send or executing-scan flag into the new view.
+      setInput("")
+      setSending(false)
+      setExecuting(false)
     } catch {
       message.error("加载对话失败")
     } finally {
@@ -718,8 +729,9 @@ function IntentCard({
   const mergedTargets = Array.from(new Set([...bareInitial, ...pickedHosts]))
   const modules = intent.modules?.length ? intent.modules : ["sys_vuln", "baseline"]
   const engine = intent.engine || "matcher"
-  const showNuclei = engine === "nuclei"
+  const showNuclei = engine === "nuclei" || engine === "global"
   const [nuclei, setNuclei] = useState<NucleiOptions>({
+    nuclei_ports: intent.nuclei_ports || [],
     nuclei_severity: intent.nuclei_severity || [],
     nuclei_tags: intent.nuclei_tags || [],
     nuclei_templates: (intent.nuclei_templates || []).join(", "),
@@ -796,6 +808,22 @@ function IntentCard({
           </button>
           {advanced && (
             <div className="intent-nuclei-grid">
+              <label>
+                <span>端口</span>
+                <Select
+                  mode="tags"
+                  size="small"
+                  style={{ width: "100%" }}
+                  value={nuclei.nuclei_ports.map(String)}
+                  onChange={(v) => setNuclei((s) => ({
+                    ...s,
+                    nuclei_ports: (v || [])
+                      .map((x) => Number(x))
+                      .filter((p: number) => Number.isInteger(p) && p >= 1 && p <= 65535),
+                  }))}
+                  placeholder="留空 = 全部端口（可输入 80,443,8080）"
+                />
+              </label>
               <label>
                 <span>严重等级</span>
                 <Select

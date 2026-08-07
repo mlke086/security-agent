@@ -36,10 +36,10 @@ class Settings(BaseSettings):
     # Neo4j
     neo4j_uri: str = "bolt://192.168.80.101:7687"
     neo4j_user: str = "neo4j"
-    neo4j_password: str = "neo4j_password_2026"
+    neo4j_password: str = ""  # V13 D0-1: no default credential; must come from env
 
     # Redis
-    redis_url: str = "redis://:redis_password_2026@192.168.80.101:6379/0"
+    redis_url: str = ""  # V13 D0-1: no default credential; must come from env
     redis_cache_ttl: int = 3600
 
     # Elasticsearch
@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # Threat Intel APIs
     virustotal_api_key: str = ""
     alienvault_otx_api_key: str = ""
+    # V13: AI search-agent 实时检索。两个独立开关：哪个 enabled=true 就用哪个
+    # （serper 优先）；都 false = 关闭搜索（回退 LLM 直答）。额度按次计费，
+    # 仅实时性问题才触发，见 chat.py _needs_realtime 门控。
+    serper_enabled: bool = False
+    tavily_enabled: bool = False
+    serper_api_key: str = ""
+    tavily_api_key: str = ""
 
     # Notification webhooks
     wechat_work_webhook: str = ""
@@ -94,7 +101,7 @@ class Settings(BaseSettings):
     pg_port: int = 5432
     pg_database: str = "SecAgent"
     pg_user: str = "secagent"
-    pg_password: str = "Ke615700"
+    pg_password: str = ""  # V13 D0-1: no default credential; must come from env
     pg_pool_size: int = 10
     # -- Agent / Vulnscan subsystem --
     agent_console_external_url: str = "https://192.168.80.101:8000"
@@ -120,6 +127,22 @@ class Settings(BaseSettings):
     # upgrade payload reads deployments/agent/dist/VERSION first; this value
     # is the fallback when that file is missing.
     agent_binary_version: str = "0.1.0"
+    # -- 需求①: host_metrics 性能指标（2026-08-06）--
+    # 保留天数；超期由 gateway 的 _purge_metrics_loop 每 6h 清扫
+    # （ES secagent-hostmetrics）。>500 主机或保留 >90d 时迁移
+    # ClickHouse（HostMetricsStore 是替换点，端点/前端零改动）。
+    metrics_retention_days: int = 30
+    # 7d 查询的降采样桶宽（date_histogram fixed_interval），默认 5m
+    # 把 ~4 万原始点压到 ~2k 点。
+    metrics_downsample_7d_interval: str = "5m"
+    # -- 需求②: asset-scan 服务（2026-08-06）--
+    # agentless 内网资产扫描的并发/限速/超时。masscan/nmap 是网络密集
+    # 工具，rate 保守默认，防止误伤生产网络；上线前按目标网络评估。
+    asset_scan_concurrency: int = 2        # 同时运行的扫描子图数
+    asset_scan_masscan_rate: int = 2000    # masscan 发包速率 pps
+    asset_scan_nmap_max_rate: int = 100    # nmap --max-rate
+    asset_scan_task_timeout_sec: int = 3600  # 单任务总超时（大网段可数十分钟）
+    asset_scan_nuclei_severity: str = "critical,high,medium"  # nuclei 默认等级
     # Nuclei CLI 版本控制：内网下载站 base URL + 版本号。包名按约定拼接为
     # {base}/nuclei_{version}_{os}_{arch}.zip。Nacos 可热更新；安装脚本生成时
     # 嵌入，心跳路径据此对比 agent 上报版本，不一致则下发 nuclei_upgrade。
@@ -150,6 +173,17 @@ class Settings(BaseSettings):
     # "详细介绍某主机漏洞情况"这类长上下文回答容易触顶报
     # "timeout of 30000ms exceeded"。默认 120s。
     llm_request_timeout_sec: int = Field(default=120, ge=10, le=600)
+    # ---- 2026-08-06 LLM 分析监控:漏洞分析/报告生成的超时·失败·重试参数 ----
+    # 第一层:即时重试(单批调用失败后立刻重试)
+    llm_analysis_retry_attempts: int = Field(default=2, ge=0, le=5)      # 即时重试次数
+    llm_analysis_retry_backoff_sec: float = Field(default=2.0, ge=0.0, le=60.0)  # 即时重试退避(指数)
+    # 第二层:空闲补扫(失败批次进 Redis,队列空闲时重新分析)
+    llm_analysis_rescan_enabled: bool = True                              # 是否启用空闲补扫
+    llm_analysis_rescan_check_interval_sec: int = Field(default=30, ge=5, le=600)  # 空闲检测周期
+    llm_analysis_max_total_attempts: int = Field(default=10, ge=1, le=50)  # 每个失败批次累计最高尝试次数
+    llm_analysis_busy_threshold: int = Field(default=0, ge=0, le=50)      # 活跃 LLM 调用 ≤ 此值视为空闲
+    # 指标保留窗口(分钟):llm:usage / llm:failures 在 Redis 的 TTL
+    llm_analysis_metrics_ttl_sec: int = Field(default=86400, ge=60, le=604800)
     # NVD 拉取最近 N 小时更新的 CVE；0 = 兜底走 DEFAULT_LOOKBACK_HOURS(模块常量)。
     nvd_lookback_hours: int = Field(default=24, ge=0, le=8760)
     # NVD 每页条数；服务端硬上限 2000，超出会 400。
@@ -175,6 +209,13 @@ class Settings(BaseSettings):
     nacos_namespace: str = "prod"
     nacos_username: str = "nacos"
     nacos_password: str = "nacos"
+    # 阶段 0 必加:多 dataId 拆分(见 docs/分布式架构拆分方案.md 5.3)
+    # 逗号分隔,如 "security-agent-shared.yaml,security-agent-gateway.yaml";
+    # 为空时回退到单 nacos_data_id(向后兼容旧部署)
+    nacos_data_ids: str = ""
+    # 阶段 0 必加:服务地址配置(2.3 / 第七节)
+    ai_base_url: str = "http://127.0.0.1:8001"
+    graphrag_base_url: str = "http://127.0.0.1:8002"
 
     @model_validator(mode="after")
     def _validate_api_secret_key(self) -> "Settings":
@@ -221,25 +262,24 @@ async def load_nacos_settings() -> None:
         return  # 未配置 Nacos，用 .env + 默认值
 
     from src.common.config.nacos_loader import (
+        _fetch_all_data_ids,
+        _resolve_data_ids,
         apply_nacos_overrides,
-        fetch_nacos_config,
         start_nacos_listener,
     )
 
-    nacos_config = await fetch_nacos_config(
-        server=s.nacos_server,
-        data_id=s.nacos_data_id,
-        group=s.nacos_group,
-        namespace=s.nacos_namespace,
-        username=s.nacos_username,
-        password=s.nacos_password,
-    )
+    data_ids = _resolve_data_ids(s)
+    nacos_config = await _fetch_all_data_ids(s)
     if nacos_config:
         apply_nacos_overrides(nacos_config)
         # 重建 Settings（env 已被 Nacos 填充，容器显式 env 保留最高优先级）
         reload_settings()
         from src.common.logging.logger import get_logger as _gl
 
-        _gl(__name__).info("settings_reloaded_from_nacos", keys=len(nacos_config))
+        _gl(__name__).info(
+            "settings_reloaded_from_nacos",
+            data_ids=data_ids,
+            keys=len(nacos_config),
+        )
         # 启动配置变更监听（热更新）
         await start_nacos_listener()

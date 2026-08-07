@@ -20,6 +20,7 @@ import (
 	"github.com/security-agent/agent/internal/config"
 	"github.com/security-agent/agent/internal/crypto"
 	"github.com/security-agent/agent/internal/queue"
+	"github.com/security-agent/agent/internal/resource"
 	"github.com/security-agent/agent/internal/scan"
 )
 
@@ -252,6 +253,19 @@ func (c *Client) Connect(ctx context.Context) error {
 		// Start heartbeat
 		go c.heartbeatLoop(ctx)
 
+		// V13 P1-11: single handler worker -- messages are processed strictly
+		// FIFO so a scan_cancel can never overtake the scan_command it targets
+		// (previously every message spawned its own goroutine and ordering was
+		// arbitrary). A slow upgrade download now queues later commands behind
+		// it, which is the correct semantic -- the server must not dispatch
+		// new work while an upgrade is in flight.
+		handlerCh := make(chan []byte, 128)
+		go func() {
+			for raw := range handlerCh {
+				c.handleMessage(raw)
+			}
+		}()
+
 		// Read loop. P1-GO-03: bound each ReadMessage with a deadline so a
 		// wedged TCP read cannot pin the agent. 后端每 30s 发 keepalive 保活，
 		// 故 deadline 设 90s（3 个 keepalive 周期）-- 后端正常时每 30s 重置
@@ -273,16 +287,17 @@ func (c *Client) Connect(ctx context.Context) error {
 				// reconnect loop takes over with backoff.
 					log.Printf("[comm] read deadline reached, closing and reconnecting")
 					_ = conn.Close()
+					close(handlerCh) // V13 P1-11: stop the FIFO worker (reconnect builds a fresh one)
 					goto reconnect
 				}
 				log.Printf("[comm] read error: %v", err)
 				break
 			}
-			// P1-GO-03: run handleMessage on its own goroutine so a slow
-			// upgrade download (which can take 10-30s on a slow link) does
-			// not block the read loop and starve heartbeats.
-			go c.handleMessage(raw)
+			// V13 P1-11: strict FIFO via the single handler worker (see above).
+			handlerCh <- raw
 		}
+
+		close(handlerCh) // V13 P1-11: no more messages on this connection
 
 		c.mu.Lock()
 		c.conn = nil
@@ -341,8 +356,9 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 				"hostname":      getHostname(),
 				"os":            runtime.GOOS,
 				"arch":          runtime.GOARCH,
-				"cpu":           0,
-				"mem":           0,
+				// V13 P2-19: cpu/mem were hardcoded 0 placeholders and the
+				// server never consumed them -- dropped from the wire format
+				// (real resource usage is reported via protection/resource).
 				"status_reason": reason,
 			},
 		}
@@ -636,6 +652,63 @@ func (c *Client) SendMonitorEvent(payload interface{}) {
 		"v":    1,
 		"type": "monitor_event",
 		"ts":   time.Now().UTC().Format(time.RFC3339),
+		"payload": payload,
+	})
+}
+
+// IsConnected reports whether the WS connection is currently established.
+// Used by ephemeral senders (host metrics) to skip work while offline
+// without touching the offline queue.
+func (c *Client) IsConnected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn != nil
+}
+
+// sendEphemeral writes a message ONLY while connected and drops it when the
+// connection is down -- unlike send(), it never touches the SQLite offline
+// queue. Reserved for high-frequency time-series data (host_metrics, 需求①):
+// replaying a stale offline backlog after a reconnect would flood the server
+// with worthless points, so "connected-only, drop on disconnect" is correct
+// by design. Same 10s write deadline as send() to avoid pinning the agent.
+func (c *Client) sendEphemeral(msg map[string]interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return
+	}
+	if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		log.Printf("[comm] set_write_deadline_failed: %v", err)
+	}
+	if err := c.conn.WriteJSON(msg); err != nil {
+		log.Printf("[comm] sendEphemeral error: %v", err)
+	}
+	_ = c.conn.SetWriteDeadline(time.Time{})
+}
+
+// SendMetrics uploads one host performance sample as ``host_metrics``
+// (需求①). hostname rides inside the payload (same convention as
+// monitor_event); the server stamps agent_id from the authenticated
+// connection. Delivery is ephemeral (sendEphemeral): disconnected ticks
+// are dropped, never queued.
+func (c *Client) SendMetrics(sample resource.MetricsSample) {
+	payload := map[string]interface{}{
+		"hostname":      getHostname(),
+		"cpu_percent":   sample.CPUPerc,
+		"mem_percent":   sample.MemPerc,
+		"mem_total_mb":  sample.MemTotalMB,
+		"mem_used_mb":   sample.MemUsedMB,
+		"disk_percent":  sample.DiskPerc,
+		"disk_total_gb": sample.DiskTotalGB,
+		"disk_used_gb":  sample.DiskUsedGB,
+		"net_in_kbps":   sample.NetInKbps,
+		"net_out_kbps":  sample.NetOutKbps,
+		"load1":         sample.Load1,
+	}
+	c.sendEphemeral(map[string]interface{}{
+		"v":       1,
+		"type":    "host_metrics",
+		"ts":      time.Now().UTC().Format(time.RFC3339),
 		"payload": payload,
 	})
 }

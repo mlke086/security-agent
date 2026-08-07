@@ -20,7 +20,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from src.agents import conversation as conv_store
-from src.agents.conversation import maybe_generate_title
+from src.agents.conversation import (
+    InvalidConversationIdError,
+    maybe_generate_title,
+    validate_conv_id,
+)
 from src.agents.models import ScanIntent
 from src.api.auth.routes import require_role
 from src.common.audit.audit_logger import get_audit_logger
@@ -36,6 +40,15 @@ logger = get_logger(__name__)
 _BG_TASKS: set = set()
 
 router = APIRouter(prefix="/api/v1/vulnscan/conversations", tags=["scan-chat"])
+
+
+def _require_valid_conv_id(conv_id: str) -> None:
+    """Reject malformed conversation ids with 400 instead of a 500 from
+    uuid.UUID deep inside the storage layer (V13 P2-9)."""
+    try:
+        validate_conv_id(conv_id)
+    except InvalidConversationIdError:
+        raise HTTPException(status_code=400, detail="无效的会话 ID")
 
 SYSTEM_PROMPT = (
     "你是漏洞扫描助手。用户会用自然语言描述扫描需求（目标主机/组、"
@@ -142,6 +155,7 @@ async def api_get_conversation(
     conv_id: str,
     current_user=Depends(require_role("admin", "analyst")),
 ):
+    _require_valid_conv_id(conv_id)
     conv = await conv_store.get_conversation(conv_id)
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -154,6 +168,7 @@ async def api_update_conversation(
     req: UpdateConversationRequest,
     current_user=Depends(require_role("admin", "analyst")),
 ):
+    _require_valid_conv_id(conv_id)
     conv = await conv_store.update_conversation(conv_id, title=req.title, model_id=req.model_id)
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -177,6 +192,7 @@ async def api_patch_message(
     not in the meta allow-list. This keeps the jsonb shape predictable and
     prevents the frontend from accidentally writing unrelated fields.
     """
+    _require_valid_conv_id(conv_id)
     conv = await conv_store.patch_message(conv_id, ts, req.model_dump(exclude_none=True))
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -188,6 +204,7 @@ async def api_delete_conversation(
     conv_id: str,
     current_user=Depends(require_role("admin", "analyst")),
 ):
+    _require_valid_conv_id(conv_id)
     ok = await conv_store.delete_conversation(conv_id)
     if not ok:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -202,6 +219,7 @@ async def api_chat(
 ):
     """Multi-turn dialog. Persists user + assistant, returns the updated
     conversation along with the (auto-extracted) ScanIntent if any."""
+    _require_valid_conv_id(conv_id)
     conv = await conv_store.get_conversation(conv_id)
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")

@@ -5,6 +5,7 @@ import {
   LogoutOutlined, SecurityScanOutlined, BugOutlined,
   CloudServerOutlined, EyeOutlined, FileSearchOutlined,
   SyncOutlined, SkinOutlined, RobotOutlined, KeyOutlined,
+  ThunderboltOutlined, CompassOutlined,
 } from "@ant-design/icons"
 import { useNavigate, useLocation, Outlet } from "react-router-dom"
 import { useAuth } from "../context/AuthContext"
@@ -29,7 +30,9 @@ export default function AppLayout() {
     { key: "/", icon: <DashboardOutlined />, label: "态势感知" },
     { key: "/hosts", icon: <CloudServerOutlined />, label: "主机纳管" },
     { key: "/scan", icon: <BugOutlined />, label: "扫描任务" },
+    { key: "/queue-monitor", icon: <ThunderboltOutlined />, label: "队列监控" },
     { key: "/vulns", icon: <EyeOutlined />, label: "漏洞清单" },
+    { key: "/asset-scan", icon: <CompassOutlined />, label: "内网资产扫描" },
     { key: "/report", icon: <FileSearchOutlined />, label: "扫描报告" },
     { key: "/rules", icon: <SyncOutlined />, label: "规则管理" },
     { key: "/models", icon: <RobotOutlined />, label: "模型管理" },

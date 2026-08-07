@@ -1,0 +1,14 @@
+# 需求②:asset-scan 服务 dataId(security-agent-asset-scan.yaml)
+# 与 settings.py 的 asset_scan_* 字段一一对应, Nacos 过滤规则要求字段声明。
+# rate 保守默认, 上线前按目标网络评估。
+asset_scan_concurrency: 2
+asset_scan_masscan_rate: 2000
+asset_scan_nmap_max_rate: 100
+asset_scan_task_timeout_sec: 3600
+asset_scan_nuclei_severity: "critical,high,medium"
+
+# 中间件（与 shared 一致的显式覆盖：nacos 写 null，运行时由 env 提供，
+# 避免 nacos 旧 127.0.0.1 字面量覆盖 .env）
+es_hosts: null
+redis_url: null
+nuclei_templates_version: ""

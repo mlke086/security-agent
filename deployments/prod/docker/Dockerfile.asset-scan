@@ -1,0 +1,109 @@
+# 需求②:asset-scan 服务 Dockerfile（内网资产扫描，agentless）
+#
+# V13 P3-F (2026-08-07): 多级 fallback 构建
+#   1) 首选: 从 192.168.80.101:8011（项目内网下载站，与 agent nuclei 同源）
+#   2) 次选: 从 GitHub projectdiscovery/nuclei 下载
+#   3) 兜底: COPY asset-pkgs/ 离线包
+#
+# 模板/二进制与 agent 端对齐（nuclei 3.11.0, templates 10.4.6），安装路径
+# /opt/secagent/{bin,templates} 与 agent 端 nuclei_templates_update 同源。
+#
+# base + langgraph/langchain 栈 + 系统包 nmap/masscan。
+FROM secagent-base:0.1.0
+
+# -- nmap / masscan --------------------------------------------------------
+# 优先 .deb 离线装；缺失则 apt 装（masscan 在 Debian bookworm main，
+# 源默认启用 main contrib 即可直接拉取）。
+COPY deployments/prod/asset-pkgs/ /tmp/asset-pkgs/
+RUN if ls /tmp/asset-pkgs/*.deb 1>/dev/null 2>&1; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+          /tmp/asset-pkgs/libpcap0.8.deb \
+          /tmp/asset-pkgs/liblinear4.deb \
+          /tmp/asset-pkgs/masscan.deb \
+          /tmp/asset-pkgs/nmap.deb \
+        && rm -rf /var/lib/apt/lists/* \
+        && echo "nmap/masscan installed from offline debs" \
+        || (apt-get update && apt-get install -y --no-install-recommends nmap masscan \
+            && echo "nmap/masscan installed from apt (fallback)"); \
+    else \
+        apt-get update && apt-get install -y --no-install-recommends nmap masscan \
+        && rm -rf /var/lib/apt/lists/* \
+        && echo "nmap/masscan installed from apt (no offline debs present)"; \
+    fi
+
+# -- nuclei 二进制 --------------------------------------------------------
+# 路径: /opt/secagent/bin/nuclei （与 agent 端约定一致）
+ARG NUCLEI_VERSION=3.11.0
+ARG NUCLEI_TEMPLATES_VERSION=10.4.6
+# 内部下载站基础 URL（与 agent nuclei_download_base_url 同一来源）
+ARG NUCLEI_DOWNLOAD_BASE_URL=http://192.168.80.101:8011
+
+RUN mkdir -p /opt/secagent/bin \
+    && if [ -f /tmp/asset-pkgs/nuclei_${NUCLEI_VERSION}_linux_amd64.zip ]; then \
+         unzip -o /tmp/asset-pkgs/nuclei_${NUCLEI_VERSION}_linux_amd64.zip -d /opt/secagent/bin \
+         && echo "nuclei ${NUCLEI_VERSION} from offline zip"; \
+       elif curl -fsSL --connect-timeout 10 \
+            "${NUCLEI_DOWNLOAD_BASE_URL}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" -o /tmp/nuclei.zip; then \
+         unzip -o /tmp/nuclei.zip -d /opt/secagent/bin \
+         && rm /tmp/nuclei.zip \
+         && echo "nuclei ${NUCLEI_VERSION} from internal mirror"; \
+       elif curl -fsSL --connect-timeout 30 \
+            "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" -o /tmp/nuclei.zip; then \
+         unzip -o /tmp/nuclei.zip -d /opt/secagent/bin \
+         && rm /tmp/nuclei.zip \
+         && echo "nuclei ${NUCLEI_VERSION} from GitHub"; \
+       else \
+         (apt-get install -y --no-install-recommends nuclei 2>/dev/null || true) \
+         && echo "nuclei installed from apt (last fallback)"; \
+       fi \
+    && chmod +x /opt/secagent/bin/nuclei 2>/dev/null || true \
+    && ln -sf /opt/secagent/bin/nuclei /usr/local/bin/nuclei
+
+# -- nuclei 模板预置 ------------------------------------------------------
+# 路径: /opt/secagent/templates （与 agent nuclei_templates_update 同路径，
+# nuclei 启动会读 NUCLEI_TEMPLATES 环境变量）
+ENV NUCLEI_TEMPLATES=/opt/secagent/templates
+
+RUN mkdir -p /opt/secagent/templates \
+    && if [ -f /tmp/asset-pkgs/nuclei-templates-${NUCLEI_TEMPLATES_VERSION}.zip ]; then \
+         unzip -q /tmp/asset-pkgs/nuclei-templates-${NUCLEI_TEMPLATES_VERSION}.zip -d /opt \
+         && [ -d /opt/nuclei-templates-${NUCLEI_TEMPLATES_VERSION} ] \
+            && mv /opt/nuclei-templates-${NUCLEI_TEMPLATES_VERSION}/* /opt/secagent/templates/ \
+            || cp -r /opt/nuclei-templates-${NUCLEI_TEMPLATES_VERSION}/* /opt/secagent/templates/ \
+         && rm -rf /opt/nuclei-templates-${NUCLEI_TEMPLATES_VERSION} \
+         && echo "nuclei-templates ${NUCLEI_TEMPLATES_VERSION} preinstalled (offline)"; \
+       elif curl -fsSL --connect-timeout 10 \
+            "${NUCLEI_DOWNLOAD_BASE_URL}/nuclei-templates-${NUCLEI_TEMPLATES_VERSION}.zip" -o /tmp/tpl.zip; then \
+         unzip -q /tmp/tmp.zip -d /opt 2>/dev/null || unzip -q /tmp/tpl.zip -d /opt \
+         && mv /opt/nuclei-templates-${NUCLEI_TEMPLATES_VERSION}/* /opt/secagent/templates/ 2>/dev/null \
+         && rm -rf /opt/nuclei-templates-${NUCLEI_TEMPLATES_VERSION} \
+         && echo "nuclei-templates ${NUCLEI_TEMPLATES_VERSION} from internal mirror"; \
+       elif curl -fsSL --connect-timeout 30 \
+            "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v${NUCLEI_TEMPLATES_VERSION}.zip" -o /tmp/tpl.zip; then \
+         unzip -q /tmp/tpl.zip -d /opt \
+         && mv /opt/nuclei-templates-${NUCLEI_TEMPLATES_VERSION}/* /opt/secagent/templates/ \
+         && rm -rf /opt/nuclei-templates-${NUCLEI_TEMPLATES_VERSION} \
+         && echo "nuclei-templates ${NUCLEI_TEMPLATES_VERSION} from GitHub"; \
+       else \
+         echo "nuclei-templates NOT preinstalled (will fail at runtime if no network)"; \
+       fi
+
+# -- asset-scan 独享依赖 ------------------------------------------------
+COPY requirements/scan-engine.txt /tmp/requirements-scan-engine.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-scan-engine.txt \
+    && rm /tmp/requirements-scan-engine.txt
+
+# -- 复制源码 + 离线包 ----------------------------------------------------
+COPY src/ /app/src/
+# 清理构建上下文的 asset-pkgs(已装到 /opt 与系统)
+RUN rm -rf /tmp/asset-pkgs
+WORKDIR /app
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+COPY deployments/prod/docker/entrypoint-asset-scan.sh /usr/local/bin/entrypoint-asset-scan.sh
+RUN chmod +x /usr/local/bin/entrypoint-asset-scan.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-asset-scan.sh"]
+CMD ["uvicorn", "src.asset_scan.main:app", "--host", "127.0.0.1", "--port", "8004", "--proxy-headers"]

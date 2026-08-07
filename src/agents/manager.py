@@ -173,6 +173,16 @@ async def decommission_host(agent_id: str) -> None:
     # Clean Redis keys
     r = _redis()
     await r.delete(f"agent:online:{agent_id}", f"agent:conn:{agent_id}", f"agent:token:{agent_id}")
+    # V13 P1-8: also revoke the persisted agent_token (PG revoked_at + WS
+    # disconnect broadcast) so a replaced/NAT-shared host cannot reconnect
+    # under its old credentials. Best-effort: a PG blip must not break the
+    # decommission flow itself.
+    try:
+        from src.agents.revoke import revoke_agent
+
+        await revoke_agent(agent_id)
+    except Exception as exc:
+        logger.warning("decommission_revoke_failed", agent_id=agent_id, error=str(exc))
     logger.info("host_decommissioned", agent_id=agent_id)
 
 
@@ -190,6 +200,17 @@ async def delete_host_permanently(agent_id: str) -> bool:
     await get_vulnscan_store().delete_host(agent_id)
     r = _redis()
     await r.delete(f"agent:online:{agent_id}", f"agent:conn:{agent_id}", f"agent:token:{agent_id}")
+    # V13 P1-7: a permanent delete MUST also revoke the persisted token --
+    # previously the agent_tokens row survived (revoked_at stayed NULL) and
+    # the deleted host could re-establish a WS with its old credentials.
+    # Best-effort like decommission: revocation failure must not block the
+    # delete.
+    try:
+        from src.agents.revoke import revoke_agent
+
+        await revoke_agent(agent_id)
+    except Exception as exc:
+        logger.warning("purge_revoke_failed", agent_id=agent_id, error=str(exc))
     logger.info("host_deleted_permanently", agent_id=agent_id)
     return True
 

@@ -1,18 +1,17 @@
 package comm
 
 import (
-
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/security-agent/agent/internal/config"
 	"github.com/security-agent/agent/internal/crypto"
 	"github.com/security-agent/agent/internal/queue"
-
-	"os"
-	"bytes"
 )
 // signTestMessage creates a real Ed25519 signature over the canonical
 // "<type>|<ts>|<payload>" envelope used by crypto.Verify. Tests that exercise
@@ -43,7 +42,10 @@ func signTestMessage(t *testing.T, msgType, ts string, payload []byte) string {
 func signedTestMsg(t *testing.T, msgType string, payload map[string]interface{}) []byte {
 	t.Helper()
 	payloadBytes, _ := json.Marshal(payload)
-	ts := "2026-01-01T00:00:00Z"
+	// V13 P2-14: use a current timestamp -- crypto.Verify now enforces a
+	// 15-minute freshness window on sensitive commands, so the fixed
+	// 2026-01-01 ts would be rejected as a replay.
+	ts := time.Now().UTC().Format(time.RFC3339)
 	sig := signTestMessage(t, msgType, ts, payloadBytes)
 	out := map[string]interface{}{
 		"v":       1,
@@ -351,5 +353,43 @@ func TestApplyHeartbeatInterval(t *testing.T) {
 	client.heartbeatMu.Unlock()
 	if got != 45 {
 		t.Fatalf("invalid ApplyHeartbeatInterval should be ignored; got %d", got)
+	}
+}
+
+
+// V13 G0-1: response_action must be signature-verified like every other
+// sensitive command. Before this test existed the type was missing from
+// crypto.SensitiveTypes and any unsigned kill_process / quarantine_file
+// payload was accepted (MitM on the plain ws:// channel -> arbitrary
+// process termination).
+func TestHandleMessage_ResponseAction_RejectsBadSig(t *testing.T) {
+	crypto.PublicKey = make(ed25519.PublicKey, ed25519.PublicKeySize)
+	client, _ := NewClient(&config.Config{})
+	received := false
+	client.OnResponseAction = func(payload json.RawMessage) {
+		received = true
+	}
+
+	raw := []byte(`{"v":1,"type":"response_action","ts":"2026-01-01T00:00:00Z","sig":"AAAA","payload":{"action":"kill_process"}}`)
+	client.handleMessage(raw)
+
+	if received {
+		t.Error("OnResponseAction should NOT be called with bad signature")
+	}
+}
+
+func TestHandleMessage_ResponseAction_AcceptsValidSig(t *testing.T) {
+	crypto.PublicKey = make(ed25519.PublicKey, ed25519.PublicKeySize)
+	client, _ := NewClient(&config.Config{})
+	received := false
+	client.OnResponseAction = func(payload json.RawMessage) {
+		received = true
+	}
+
+	raw := signedTestMsg(t, "response_action", map[string]interface{}{"action": "kill_process"})
+	client.handleMessage(raw)
+
+	if !received {
+		t.Error("OnResponseAction was not called for a valid signature")
 	}
 }

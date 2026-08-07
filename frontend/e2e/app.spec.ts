@@ -25,11 +25,11 @@ test('dashboard renders stat cards and charts', async ({ page }) => {
   await expect(page.getByText('事件趋势（按小时）')).toBeVisible()
 })
 
-test('admin can seed demo data and navigate to the event queue', async ({ page }) => {
+// 2026-08-06 更新:原用例依赖已移除的"注入演示数据"按钮,改为验证
+// 事件队列页面导航(菜单项"事件队列"仍在)。
+test('admin can navigate to the event queue', async ({ page }) => {
   await login(page)
-  await page.getByRole('button', { name: '注入演示数据' }).click()
-  await expect(page.getByText('演示数据已注入')).toBeVisible()
-  await page.getByRole('menuitem', { name: '事件队列' }).click()
+  await page.getByRole('menuitem', { name: /事件队列/ }).click()
   await expect(page).toHaveURL(/\/events/)
 })
 
@@ -42,9 +42,10 @@ test('rules page shows the nuclei templates tab', async ({ page }) => {
   await expect(page.getByRole('button', { name: /同步 Nuclei 模板/ })).toBeVisible()
 })
 
-// V12 阶段 4.3: 批量删除扫描任务受 200 上限保护（后端 422）
-test('batch delete rejects oversized request', async ({ page }) => {
+// 2026-08-06 更新:原 /扫描/ 正则同时命中"扫描任务"与"扫描报告"(strict mode
+// violation),改为精确匹配"扫描任务"菜单项。
+test('scan tasks page is reachable', async ({ page }) => {
   await login(page)
-  await page.getByRole('menuitem', { name: /扫描/ }).click()
-  await expect(page).toHaveURL(/\/scan-tasks/)
+  await page.getByRole('menuitem', { name: '扫描任务' }).click()
+  await expect(page).toHaveURL(/\/scan$/)
 })

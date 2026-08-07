@@ -344,3 +344,123 @@ async def test_sync_from_mirror_rejects_oversized_zip():
         pytest.raises(RuntimeError, match="上限"),
     ):
         await sync_from_mirror()
+
+
+# -- V13 P1-9: rebuild_manifest is atomic (alias-swap) -------------------------
+
+
+class _RecordingES:
+    """Records the indices.* / bulk calls so tests can assert the
+    alias-swap order and the failure cleanup behaviour."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.aliases: dict[str, str] = {}  # alias -> backing
+        self.fail_bulk = False
+        self.fail_alias = False
+
+    class _Indices:
+        def __init__(self, es) -> None:
+            self.es = es
+
+        async def create(self, index):
+            self.es.calls.append(f"create:{index}")
+
+        async def delete(self, index, ignore_unavailable=True):
+            self.es.calls.append(f"delete:{index}")
+
+        async def get_alias(self, name):
+            self.es.calls.append(f"get_alias:{name}")
+            backing = self.es.aliases.get(name)
+            if backing is None:
+                raise Exception("alias missing")
+            return {backing: {}}
+
+        async def update_aliases(self, actions):
+            self.es.calls.append("update_aliases")
+            if self.es.fail_alias:
+                raise RuntimeError("alias fail")
+            for act in actions:
+                if "add" in act:
+                    self.es.aliases[act["add"]["alias"]] = act["add"]["index"]
+
+    indices: _Indices
+
+    async def async_bulk(self, actions, refresh):
+        self.calls.append(f"bulk:{len(actions)}")
+        if self.fail_bulk:
+            raise RuntimeError("bulk fail")
+
+    def make_es(self):
+        self.indices = self._Indices(self)
+        es = MagicMock()
+        es.indices = self.indices
+        return es
+
+
+@pytest.mark.asyncio
+async def test_rebuild_swaps_alias_atomically():
+    from src.agents.nuclei_templates import rebuild_manifest
+
+    rec = _RecordingES()
+    rec.aliases["nuclei-templates"] = "nuclei-templates-v1"
+    es = rec.make_es()
+    items = [
+        MagicMock(path="a.yaml", doc=lambda: {"x": 1}),
+        MagicMock(path="b.yaml", doc=lambda: {"x": 2}),
+    ]
+    with patch("src.agents.nuclei_templates._es", return_value=es), patch(
+        "src.agents.nuclei_templates.async_bulk",
+        new=lambda es, actions, refresh="wait_for": rec.async_bulk(actions, refresh=refresh),
+    ):
+        n = await rebuild_manifest(items)
+
+    assert n == 2
+    # Order: create new -> bulk new -> resolve old backing -> switch alias -> delete old.
+    assert rec.calls[0].startswith("create:nuclei-templates-v")
+    assert rec.calls[1] == "bulk:2"
+    assert rec.calls[2] == "get_alias:nuclei-templates"
+    assert rec.calls[3] == "update_aliases"
+    assert rec.calls[4].startswith("delete:nuclei-templates-v1")
+    new_backing = [c for c in rec.calls if c.startswith("create:")][0].split(":", 1)[1]
+    assert rec.aliases["nuclei-templates"] == new_backing
+
+
+@pytest.mark.asyncio
+async def test_rebuild_bulk_failure_keeps_old_index_serving():
+    from src.agents.nuclei_templates import rebuild_manifest
+
+    rec = _RecordingES()
+    rec.aliases["nuclei-templates"] = "nuclei-templates-v1"
+    rec.fail_bulk = True
+    es = rec.make_es()
+    items = [MagicMock(path="a.yaml", doc=lambda: {"x": 1})]
+    with patch("src.agents.nuclei_templates._es", return_value=es), patch(
+        "src.agents.nuclei_templates.async_bulk",
+        new=lambda es, actions, refresh="wait_for": rec.async_bulk(actions, refresh=refresh),
+    ):
+        with pytest.raises(RuntimeError, match="bulk fail"):
+            await rebuild_manifest(items)
+
+    assert any(c.startswith("delete:nuclei-templates-v") for c in rec.calls)
+    assert "update_aliases" not in rec.calls
+    assert rec.aliases["nuclei-templates"] == "nuclei-templates-v1"
+
+
+@pytest.mark.asyncio
+async def test_rebuild_first_sync_creates_alias_without_old():
+    from src.agents.nuclei_templates import rebuild_manifest
+
+    rec = _RecordingES()
+    es = rec.make_es()
+    items = [MagicMock(path="a.yaml", doc=lambda: {"x": 1})]
+    with patch("src.agents.nuclei_templates._es", return_value=es), patch(
+        "src.agents.nuclei_templates.async_bulk",
+        new=lambda es, actions, refresh="wait_for": rec.async_bulk(actions, refresh=refresh),
+    ):
+        n = await rebuild_manifest(items)
+
+    assert n == 1
+    assert "update_aliases" in rec.calls
+    assert rec.aliases["nuclei-templates"].startswith("nuclei-templates-v")
+    assert not any(c.startswith("delete:nuclei-templates-v") for c in rec.calls)

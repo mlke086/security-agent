@@ -95,10 +95,20 @@ async def test_get_event_fetches_trace_by_event_id_keyword(store):
     assert ev is not None
     assert len(ev.trace) == 1
     assert ev.trace[0].node == "entry"
-    # The trace query must use the .keyword subfield for an exact match --
-    # querying the analyzed `event_id` text field returns 0 hits for UUIDs.
+    # The trace query must match the exact, unanalyzed UUID. Since the
+    # b37c0ab5 P0 fix, the query is a bool should over both `event_id`
+    # (keyword-typed audit index) and `event_id.keyword` (legacy
+    # text+keyword dynamic mapping) so either index shape matches.
     query = store._es.search.await_args.kwargs["query"]
-    assert query == {"term": {"event_id.keyword": uuid_id}}
+    assert query == {
+        "bool": {
+            "minimum_should_match": 1,
+            "should": [
+                {"term": {"event_id": uuid_id}},
+                {"term": {"event_id.keyword": uuid_id}},
+            ],
+        }
+    }
 
 
 @pytest.mark.asyncio

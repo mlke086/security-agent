@@ -1,0 +1,28 @@
+# 阶段 5:ai 服务 Dockerfile
+# base + langchain + langchain-openai/anthropic(无 langgraph)
+# uvicorn --host 127.0.0.1 --port 8001(防绕过 gateway 鉴权)
+FROM secagent-base:0.1.0
+
+# ai 独享依赖(锁定,不含 langgraph)
+COPY requirements/ai.txt /tmp/requirements-ai.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-ai.txt \
+    && rm /tmp/requirements-ai.txt
+
+# COPY ai 所需子包:
+# - src/ai/(main)
+# - src/api/(auth + store + store_es + events_bus + routers/chat,scan_chat,models)
+# - src/agents/(chat_kb, chat_search, conversation, models, store)
+# - src/common/(config + db + logging + audit)
+# - src/knowledge/models/(adapter + store)
+COPY src/ /app/src/
+WORKDIR /app
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# 阶段 5 收尾:挂载 entrypoint(API_SECRET_KEY + LLM provider key 校验)
+COPY deployments/prod/docker/entrypoint-ai.sh /usr/local/bin/entrypoint-ai.sh
+RUN chmod +x /usr/local/bin/entrypoint-ai.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-ai.sh"]
+CMD ["uvicorn", "src.ai.main:app", "--host", "127.0.0.1", "--port", "8001", "--proxy-headers"]

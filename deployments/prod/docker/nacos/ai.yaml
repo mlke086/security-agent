@@ -1,0 +1,22 @@
+# 阶段 5 nacos 拆分:ai dataId
+# 仅 ai 服务消费的 LLM 字段。
+
+llm_provider: "claude"
+anthropic_api_key: "${ANTHROPIC_API_KEY}"
+openai_api_key: "${OPENAI_API_KEY}"
+openai_base_url: ""
+openai_model: "gpt-4o"
+vllm_base_url: "http://192.168.80.101:8000"
+vllm_model: "qwen2.5-72b"
+
+# AI 搜索代理
+serper_enabled: false
+tavily_enabled: false
+serper_api_key: "${SERPER_API_KEY}"
+tavily_api_key: "${TAVILY_API_KEY}"
+
+# LLM 请求超时(秒)
+llm_request_timeout_sec: 120
+
+# ai 服务地址(自引用 + 供 gateway 反代)
+ai_base_url: "http://127.0.0.1:8001"

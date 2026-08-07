@@ -221,6 +221,18 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_status ON events ((data->>'status'));
 CREATE INDEX IF NOT EXISTS idx_events_submitted ON events ((data->>'submitted_at'));
+
+-- 阶段 5 收尾 P6-monitor:LLM 队列监控告警阈值配置(单行,只一条)
+CREATE TABLE IF NOT EXISTS queue_alert_config (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),  -- 单行表
+    queued_threshold INTEGER NOT NULL DEFAULT 50,      -- 堆积任务数告警阈值
+    oldest_age_sec INTEGER NOT NULL DEFAULT 1800,     -- 最老任务等待秒数阈值(默认 30min)
+    scan_check_enabled BOOLEAN NOT NULL DEFAULT TRUE,   -- 是否启用周期扫描
+    check_interval_sec INTEGER NOT NULL DEFAULT 60,     -- 扫描间隔
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by VARCHAR(64)                              -- 修改者(username)
+);
+INSERT INTO queue_alert_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 """
 
 # Default users to seed on first run. Passwords are NOT hardcoded --

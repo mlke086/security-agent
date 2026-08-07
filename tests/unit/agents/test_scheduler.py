@@ -19,7 +19,8 @@ class TestStartStop:
         with patch("src.agents.scheduler.asyncio.create_task") as mock_ct:
             mock_ct.side_effect = lambda c: c
             start_background_tasks()
-            assert mock_ct.call_count == 2
+            # 需求①: +1 = _purge_metrics_loop（metrics 保留清扫）
+            assert mock_ct.call_count == 3
 
     @pytest.mark.asyncio
     async def test_stop_cancels_and_clears(self):

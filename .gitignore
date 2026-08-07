@@ -100,3 +100,15 @@ vulnscan_consolidate_backup_*.json
 
 # Dev session text exports
 对话界面.txt
+
+# V13 P2-27: binary assets / one-shot scripts that slipped into the repo
+frontend/background/
+frontend/favicon-package/
+agent/_p_*.py
+agent/dist/
+
+# Reasonix local session/task data (tool state, not project files)
+.reasonix/
+
+# local venv created for WSL tryout
+.venv-wsl/

@@ -20,7 +20,9 @@ from src.common.config.settings import get_settings
 from src.common.logging.logger import get_logger
 from src.orchestration.task_queue.keys import (
     STATUS_TTL_SEC,
+    STREAM_ASSET_TASKS,
     STREAM_TASKS,
+    asset_status_key,
     status_key,
 )
 
@@ -77,6 +79,47 @@ class TaskEnvelope:
     @classmethod
     def from_dict(cls, obj: dict[str, Any]) -> TaskEnvelope:
         """Build from a plain dict. Unknown keys are silently dropped."""
+        allowed = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in obj.items() if k in allowed})
+
+
+@dataclass
+class AssetScanEnvelope:
+    """Serialised request to run the asset-scan subgraph (需求②).
+
+    Mirrors ``subgraphs.asset_scan.graph.run_asset_scan`` kwargs. Fields:
+
+    - ``targets``: CIDR / single IP strings, e.g. ["10.0.0.0/24", "10.0.1.5"].
+    - ``ports``: explicit port list when engine != "full"; empty = engine
+      default (full scans 1-65535, fast scans top-1000).
+    - ``engine``: "fast" | "full" | "global" (masscan rate / nmap ranges).
+    - ``modules``: scan modules, e.g. ["discovery", "fingerprint", "cve",
+      "nuclei", "brute"]; "brute" is off by default.
+    - ``schedule``: optional cron expression for periodic runs (v2).
+    """
+
+    task_id: str
+    source: str
+    targets: list[str] = field(default_factory=list)
+    ports: list[int] = field(default_factory=list)
+    engine: str = "fast"
+    modules: list[str] = field(default_factory=lambda: ["discovery", "fingerprint", "cve", "nuclei"])
+    schedule: str = ""
+    actor: str = ""
+    submitted_at: str = ""
+    submitted_by: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False)
+
+    @classmethod
+    def from_json(cls, raw: str | bytes) -> AssetScanEnvelope:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        return cls.from_dict(json.loads(raw))
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> AssetScanEnvelope:
         allowed = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in obj.items() if k in allowed})
 
@@ -166,6 +209,110 @@ async def enqueue_task(
             )
         logger.info(
             "task_enqueued",
+            task_id=envelope.task_id,
+            engine=envelope.engine,
+            targets=envelope.targets,
+        )
+    finally:
+        await redis.aclose()
+
+    return envelope
+
+
+async def enqueue_asset_task(
+    *,
+    source: str,
+    targets: list[str],
+    ports: list[int] | None = None,
+    engine: str = "fast",
+    modules: list[str] | None = None,
+    schedule: str = "",
+    actor: str = "",
+    task_id: str | None = None,
+) -> AssetScanEnvelope:
+    """Push an asset-scan envelope onto the assetscan stream (需求②).
+
+    Mirrors ``enqueue_task``: XADD to ``assetscan:queue:tasks`` (bounded
+    MAXLEN 10k) + short-lived queued status side-channel. The asset-scan
+    service's TaskWorker consumes this stream with its own group
+    ``asset-scan-workers``.
+    """
+    envelope = AssetScanEnvelope(
+        task_id=task_id or str(uuid.uuid4()),
+        source=source,
+        targets=list(targets),
+        ports=list(ports or []),
+        engine=engine,
+        modules=list(modules or ["discovery", "fingerprint", "cve", "nuclei"]),
+        schedule=schedule,
+        actor=actor,
+        submitted_at=datetime.now(UTC).isoformat(),
+        submitted_by=socket.gethostname(),
+    )
+
+    settings = get_settings()
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        # P3-F fix (2026-08-07, race condition): 先写 ES 再 xadd stream.
+        # 旧顺序: xadd → runner 立即 XREADGROUP → update_task → ES doc_missing.
+        # 因为 runner 与 enqueue 并发, save_task 还没传到 ES runner 就 update.
+        # 改为 save_task → xadd, 保证 worker 看到 entry 时 doc 必然存在.
+        try:
+            from src.asset_scan.store import get_asset_store
+
+            now = datetime.now(UTC).isoformat()
+            await get_asset_store().save_task(
+                {
+                    "task_id": envelope.task_id,
+                    "source": envelope.source,
+                    "targets": envelope.targets,
+                    "ports": envelope.ports,
+                    "engine": envelope.engine,
+                    "modules": envelope.modules,
+                    "schedule": envelope.schedule,
+                    "actor": actor,
+                    "status": "queued",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "asset_es_task_write_failed",
+                task_id=envelope.task_id,
+                error=str(exc),
+            )
+        payload: dict[str, str] = {
+            "envelope": envelope.to_json(),
+            "task_id": envelope.task_id,
+            "engine": envelope.engine,
+        }
+        await redis.xadd(
+            STREAM_ASSET_TASKS, cast(dict, payload), maxlen=10_000, approximate=True
+        )
+        try:
+            await redis.set(
+                asset_status_key(envelope.task_id),
+                json.dumps(
+                    {
+                        "status": "queued",
+                        "actor": actor,
+                        "source": envelope.source,
+                        "targets": envelope.targets,
+                        "engine": envelope.engine,
+                        "submitted_at": envelope.submitted_at,
+                    }
+                ),
+                ex=STATUS_TTL_SEC,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "asset_status_sidechannel_write_failed",
+                task_id=envelope.task_id,
+                error=str(exc),
+            )
+        logger.info(
+            "asset_task_enqueued",
             task_id=envelope.task_id,
             engine=envelope.engine,
             targets=envelope.targets,

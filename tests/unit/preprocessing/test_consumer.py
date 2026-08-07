@@ -48,6 +48,44 @@ def _reset_pipeline_sem():
     consumer_mod._pipeline_sem = None
 
 
+# ── _stable_event_id ─────────────────────────────────────
+
+
+def test_stable_event_id_source_prefixed():
+    """V13 P0-1: payload ids must be source-prefixed so two sources that
+    share an id (e.g. auto-increment counters) cannot collide on the
+    events table primary key."""
+    c = AlertConsumer()
+    assert (
+        c._stable_event_id('{"id": "42", "msg": "x"}', source="raw-alerts")
+        == "raw-alerts:42"
+    )
+    assert (
+        c._stable_event_id('{"event_id": "e-1"}', source="raw-alerts")
+        == "raw-alerts:e-1"
+    )
+    assert (
+        c._stable_event_id('{"alert_id": "a-7"}', source="raw-alerts")
+        == "raw-alerts:a-7"
+    )
+    assert (
+        c._stable_event_id('{"uuid": "u-9"}', source="raw-alerts")
+        == "raw-alerts:u-9"
+    )
+
+
+def test_stable_event_id_default_source_kafka():
+    c = AlertConsumer()
+    assert c._stable_event_id('{"id": "1"}') == "kafka:1"
+
+
+def test_stable_event_id_hash_fallback_unchanged():
+    c = AlertConsumer()
+    # Non-JSON payloads keep the sha256 fallback (deterministic across
+    # redeliveries, no source prefix needed -- the hash is already unique).
+    assert c._stable_event_id("raw syslog line").startswith("sha256:")
+
+
 # ── _process ────────────────────────────────────────────────
 
 
@@ -77,12 +115,20 @@ def test_process_excludes_private_ip():
 
 
 async def test_emit_invokes_run_pipeline(monkeypatch):
+    """阶段 4-2 拆分后, _emit 改为 Redis Stream 入队 (preprocessing 镜像不再依赖 LangGraph)。
+    测试断言改为 enqueue_event 被正确调用。
+    """
     c = AlertConsumer()
-    fake_run = AsyncMock()
-    monkeypatch.setattr("src.orchestration.runner.run_pipeline", fake_run)
+    fake_enqueue = AsyncMock()
+    fake_enqueue.return_value = "evt-1"
+    monkeypatch.setattr("src.preprocessing.vulnscan_queue.enqueue.enqueue_event", fake_enqueue)
     event = {"event_id": "e1", "sanitized_text": "x", "iocs": {"ips": []}, "source": "kafka"}
     await c._emit(event)
-    fake_run.assert_awaited_once_with("e1", "x", {"ips": []}, "kafka")
+    fake_enqueue.assert_awaited_once()
+    kwargs = fake_enqueue.await_args.kwargs
+    assert kwargs["event_id"] == "e1"
+    assert kwargs["payload"]["sanitized_text"] == "x"
+    assert kwargs["payload"]["source"] == "kafka"
 
 
 # ── _send_dlq ───────────────────────────────────────────────
@@ -127,14 +173,15 @@ async def test_run_parse_failure_sends_dlq_and_commits(monkeypatch):
 
 
 async def test_run_pipeline_failure_does_not_commit(monkeypatch):
-    """A pipeline execution failure must NOT commit, so Kafka redelivers for retry."""
+    """阶段 4-2 拆分后, _emit -> enqueue_event 入队失败必须不 commit,
+    触发 Kafka 重投递 (同原语义)。"""
     c = AlertConsumer()
     fc = _FakeConsumer([_FakeMsg("whoami from 45.33.32.156")])
     c._consumer = fc
     c._dlq_producer = AsyncMock()
     monkeypatch.setattr(
-        "src.orchestration.runner.run_pipeline",
-        AsyncMock(side_effect=RuntimeError("pipeline boom")),
+        "src.preprocessing.vulnscan_queue.enqueue.enqueue_event",
+        AsyncMock(side_effect=RuntimeError("redis enqueue failed")),
     )
     await c.run()
 

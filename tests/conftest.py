@@ -11,8 +11,8 @@ import os
 
 import pytest as _pytest
 
-
 os.environ.setdefault("STORE_BACKEND", "memory")
+os.environ.setdefault("SECAGENT_ALLOW_MEMORY_STORE", "1")  # 阶段 5 收尾 P-func-2:memory backend opt-in for unit tests
 os.environ.setdefault("API_SECRET_KEY", "test-secret-key-12345678")
 os.environ.setdefault("HITL_TIMEOUT_SEC", "5")
 os.environ.setdefault("NACOS_SERVER", "")  # disable nacos in tests; settings come from env
@@ -37,11 +37,11 @@ except Exception as _e:
 # sessions, so without this reset the next session's _login("admin")
 # would 401 from the first call. The reset uses UPSERT so it is safe
 # even on a fresh DB.
-import os as _os_reset_pwd  # noqa: E402  -- keep near conftest top
 
 
 async def _reset_default_passwords() -> None:
     from passlib.context import CryptContext as _CC
+
     from src.common.db.pg import get_pg_pool as _gpp_reset
 
     pwd = _CC(schemes=["bcrypt"], deprecated="auto")
@@ -82,6 +82,7 @@ except Exception as _e:
 # Uses UPSERT so re-runs do not conflict.
 try:
     from passlib.context import CryptContext
+
     from src.common.db.pg import get_pg_pool as _get_pool_for_seed
 
     async def _seed_test_users() -> None:
@@ -151,7 +152,9 @@ def _reset_test_passwords_each_test():
     rotates admin to AdminStrongPwd2026! and never restores).
     Runs after the module-level reset so the canonical row exists."""
     import asyncio as _aio_reset
+
     from passlib.context import CryptContext as _CC2
+
     from src.common.db.pg import get_pg_pool as _gpp_reset2
 
     pwd = _CC2(schemes=["bcrypt"], deprecated="auto")
@@ -217,8 +220,9 @@ async def _truncate_events() -> None:
 @_pytest.fixture(scope="session")
 def auth_headers():
     from fastapi.testclient import TestClient
-    from src.api.main import app
+
     from src.api.auth.jwt import create_access_token
+    from src.api.main import app
     # Build a per-role mapping by minting a JWT directly: it is
     # cheaper than a full login round-trip per test, and the
     # token_version reset fixture above guarantees the ver claim
@@ -257,5 +261,40 @@ def auth_headers():
 @_pytest.fixture(scope="session")
 def http_client():
     from fastapi.testclient import TestClient
+
     from src.api.main import app
     return TestClient(app)
+
+# 阶段 5 收尾 P1-5:pytest_collection_modifyitems 钩子自动给引 langgraph
+# 的测试文件打 `requires_scan_engine` marker,无需修改测试文件源码。
+# gateway / ai / graphrag 镜像构建时跑 `pytest -m 'not requires_scan_engine'`
+# 跳过;scan-engine 镜像完整跑全量测试。
+SCAN_ENGINE_TEST_NAMES = {
+    "test_vulnscan_nodes.py",
+    "test_main_nodes.py",
+    "test_orchestrator.py",
+    "test_graph_routing.py",
+    "test_playbook_matcher.py",
+    "test_hitl_handler.py",
+    "test_approval_store.py",
+    "test_investigation.py",
+    "test_runner.py",
+    "test_vulnscan_cancel.py",
+}
+
+
+@_pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """阶段 5 收尾 P1-5:按文件名给 items 打 requires_scan_engine marker。"""
+    rootdir = str(config.rootdir)
+    for item in items:
+        try:
+            rel = os.path.relpath(str(item.fspath), start=rootdir)
+        except Exception:
+            continue
+        rel = rel.replace(os.sep, "/")
+        # 匹配 tests/unit/orchestration/<name> 或 tests/unit/api/<name>
+        if rel.startswith("tests/unit/orchestration/") or rel.startswith("tests/unit/api/"):
+            name = rel.split("/")[-1]
+            if name in SCAN_ENGINE_TEST_NAMES:
+                item.add_marker(_pytest.mark.requires_scan_engine)

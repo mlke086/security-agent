@@ -16,7 +16,25 @@ class MilvusVectorClient:
         self._collection_name = settings.milvus_collection
         self._ensure_collection()
 
+    def _ensure_connected(self) -> None:
+        """P1 修复(2026-08-06 全量测试):graphrag 服务内 GraphRAGEngine 用完
+        close() 会断开 pymilvus 全局 default 连接;MemoryManager 随后复用
+        同一连接池时 Collection() 抛 ConnectionNotExistException。
+        这里在每次操作前幂等重连——连接已存在时 connect() 无副作用(同名
+        alias 已注册则返回既有连接),不存在时重建。
+        """
+        try:
+            from pymilvus import connections as _conns
+
+            # get_connection 抛异常 = 连接不存在 → 重建
+            _conns.get_connection("default")
+        except Exception:
+            settings = get_settings()
+            connections.connect(host=settings.milvus_host, port=settings.milvus_port)
+            logger.info("milvus_reconnected", host=get_settings().milvus_host)
+
     def search(self, query_vector: list[float], top_k: int = 10) -> list[dict]:
+        self._ensure_connected()
         collection = Collection(self._collection_name)
         collection.load()
         results = collection.search(
@@ -40,6 +58,7 @@ class MilvusVectorClient:
         return hits
 
     def insert(self, docs: list[dict]) -> None:
+        self._ensure_connected()
         collection = Collection(self._collection_name)
         data = [
             [d["doc_id"] for d in docs],
@@ -58,6 +77,7 @@ class MilvusVectorClient:
         try:
             from pymilvus import Collection
 
+            self._ensure_connected()
             collection = Collection(self._collection_name)
             # expr requires escaping; event_id is server-generated so safe
             expr = f'doc_id like "{event_id}:%"'

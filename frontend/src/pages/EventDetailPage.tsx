@@ -29,8 +29,16 @@ export default function EventDetailPage() {
 
   useEffect(() => {
     if (!eventId) return
+    // V13 P2-24: alive guard -- the SSE effect refetches details on every
+    // stream message; without this, a slow initial GET could resolve AFTER
+    // a fresher SSE-driven refetch and overwrite it with stale data.
+    let alive = true
     setLoading(true)
-    getEventDetail(eventId).then(setEv).catch(() => message.error("获取事件详情失败")).finally(() => setLoading(false))
+    getEventDetail(eventId)
+      .then((d) => { if (alive) setEv(d) })
+      .catch((err) => { if (alive) showError(err, "获取事件详情失败") })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
   }, [eventId])
 
   // SSE: live-refresh trace steps / status / approval as the pipeline progresses.
@@ -38,7 +46,6 @@ export default function EventDetailPage() {
     if (!eventId) return
     // F2 (2026-07-21): mint a 60s scoped SSE token first; reuse
     // api.defaults.baseURL so reverse-proxy / k8s ingress keep working.
-    if (!eventId) return
     if (!localStorage.getItem("token")) return
     // Capture the narrowed string so the async IIFE and inner helper both
     // see it as `string`, not `string | undefined`.
@@ -57,9 +64,15 @@ export default function EventDetailPage() {
       } catch (err) { console.warn("event_detail_sse_token_failed", err) }
     })()
     function wireSource(source: EventSource) {
+    // V13 P2-24: request-seq guard so a slow detail GET cannot overwrite
+    // a newer one (same pattern as the initial-load effect above).
+    let seq = 0
     source.onmessage = (e) => {
       if (e.data && e.data !== ": heartbeat") {
-        getEventDetail(eventIdStr).then(setEv).catch(() => {})
+        const my = ++seq
+        getEventDetail(eventIdStr)
+          .then((d) => { if (my === seq) setEv(d) })
+          .catch(() => {})
       }
     }
     // 防重连风暴：404/网络错误 readyState=CLOSED 时主动 close，避免无限重连

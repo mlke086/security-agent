@@ -498,3 +498,45 @@ func TestHTTPClientCAEmptyPathOK(t *testing.T) {
 		t.Fatal("expected a client for empty CA path (system roots)")
 	}
 }
+
+
+func TestRollbackBinaryRestoresOldExecutable(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "agent")
+	oldPath := execPath + ".old"
+	if err := os.WriteFile(execPath, []byte("new-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldPath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rollbackBinary(execPath); err != nil {
+		t.Fatalf("rollbackBinary: %v", err)
+	}
+	data, err := os.ReadFile(execPath)
+	if err != nil {
+		t.Fatalf("read restored executable: %v", err)
+	}
+	if string(data) != "old-binary" {
+		t.Fatalf("expected old binary restored, got %q", string(data))
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("expected .old backup consumed, stat err=%v", err)
+	}
+}
+
+func TestRollbackBinaryNoBackupIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "agent")
+	if err := os.WriteFile(execPath, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := rollbackBinary(execPath); err != nil {
+		t.Fatalf("rollbackBinary without backup should be a no-op, got %v", err)
+	}
+	data, _ := os.ReadFile(execPath)
+	if string(data) != "binary" {
+		t.Fatalf("executable must be untouched, got %q", string(data))
+	}
+}

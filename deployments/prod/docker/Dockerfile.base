@@ -1,0 +1,27 @@
+# 阶段 0-6:基础镜像(方案 6.1,共享 layer,**不 COPY 源码**)
+# 产物:secagent-base:0.1.0
+# 各服务 FROM 此镜像后,在自己的 Dockerfile 里 COPY 需要的子包。
+FROM python:3.11-slim-bookworm
+
+# 公共运行时依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    tini \
+    jq \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 共享轻依赖(锁定版本,见 requirements/base.txt)
+COPY requirements/base.txt /tmp/requirements-base.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-base.txt \
+    && rm /tmp/requirements-base.txt
+
+# 不 COPY 任何源码 —— 服务层 Dockerfile 各自 COPY 自己需要的子包,
+# 避免 base layer 子包路径污染 / 服务层 COPY 触发 invalid cache。
+
+# tini 做 PID 1,优雅转发信号
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# 默认无 CMD,各服务 Dockerfile 覆盖
+CMD ["echo", "secagent-base: no service defined; service Dockerfile must override CMD"]

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -148,7 +148,9 @@ class VulnFinding(BaseModel):
     ai_processed: bool = False
     ai_reason: str | None = None
     ai_fix_summary: str | None = None
-    ai_processed_at: str = ""
+    # V13 fix: None instead of "" -- ES mapped this as a date; an empty
+    # string is not a parseable date and 400s the whole document write.
+    ai_processed_at: str | None = None
     # ---- Fix tracking (2026-07-29 UX upgrade) ----
     # first_fixed_at is the first time status transitioned to fixed/accepted;
     # last_fixed_at is the most recent such transition. Operators can use
@@ -175,6 +177,10 @@ class VulnFilter:
     # Server-side batch fetch of all existing vulns for a set of agents
     # (used by the aggregate reconcile step; avoids per-finding N+1).
     agent_ids: list[str] | None = None
+    # Exact single-agent filter (host drill-down view). agent_id is the
+    # stable unique host key, unlike hostname which can repeat across
+    # groups/renames, so the drill-down always targets one host.
+    agent_id: str | None = None
     severity: str | None = None
     status: str | None = None
     cve: str | None = None
@@ -226,15 +232,30 @@ class ScanReport(BaseModel):
     ai_processed: bool = False
     ai_model: str = ""
     ai_overall_advice: str = ""
-    ai_processed_at: str = ""
+    # V13 fix: None instead of "" (ES date mapping rejects empty string).
+    ai_processed_at: str | None = None
 
 
 class ScanIntent(BaseModel):
     targets: list[str] = []
     modules: list[ScanModule] = [ScanModule.SYS_VULN, ScanModule.BASELINE]
-    engine: Literal["matcher", "nuclei"] = "matcher"
+    # V13: three engines -- matcher (own CVE rule engine), nuclei (Nuclei
+    # CLI, default all ports), global (matcher + nuclei together). The
+    # tasks endpoint accepts the same three values; keep the parse
+    # contract in sync (Spec-P2-ENGINE).
+    engine: Literal["matcher", "nuclei", "global"] = "matcher"
     resource_limit: dict = {"cpu_percent": 30, "mem_percent": 30}
     schedule: str | None = None
+    # V13: nuclei knobs carried from the intent parse so the confirm card
+    # pre-fills them (empty = defaults). nuclei_ports: empty = all ports,
+    # else explicit 1-65535 list ("nuclei 默认全部端口，可指定端口").
+    # Element constraint = model-level backstop; the router and frontend
+    # also filter before the value reaches the agent command line.
+    nuclei_ports: list[Annotated[int, Field(ge=1, le=65535)]] = []
+    nuclei_severity: list[str] = []
+    nuclei_tags: list[str] = []
+    nuclei_templates: list[str] = []
+    nuclei_timeout_sec: int = 0
 
 
 class EnrollTokenRequest(BaseModel):

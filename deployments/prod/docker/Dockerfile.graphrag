@@ -1,0 +1,27 @@
+# 阶段 5:graphrag 服务 Dockerfile(唯一含 torch 的重镜像)
+# base + sentence-transformers + pymilvus + neo4j
+# uvicorn --host 127.0.0.1 --port 8002
+FROM secagent-base:0.1.0
+
+# graphrag 独享依赖(锁定)
+COPY requirements/graphrag.txt /tmp/requirements-graphrag.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-graphrag.txt \
+    && rm /tmp/requirements-graphrag.txt
+
+# COPY graphrag 所需子包:
+# - src/graphrag/(main + memory_manager)
+# - src/knowledge/graphrag/(vector + graph)
+# - src/common/(config + logging;无 db 因 graphrag 不直连 PG)
+COPY src/ /app/src/
+WORKDIR /app
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV EMBEDDING_MODEL_PATH=/opt/models/bge-large-zh-v1.5
+
+# entrypoint 阶段 5 收尾时建 entrypoint-graphrag.sh,fail-fast 检查模型存在性
+COPY deployments/prod/docker/entrypoint-graphrag.sh /usr/local/bin/entrypoint-graphrag.sh
+RUN chmod +x /usr/local/bin/entrypoint-graphrag.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-graphrag.sh"]
+CMD ["uvicorn", "src.graphrag.main:app", "--host", "127.0.0.1", "--port", "8002", "--proxy-headers"]

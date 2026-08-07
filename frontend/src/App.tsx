@@ -10,8 +10,10 @@ import AlertInboxPage from './pages/AlertInboxPage'
 import ApprovalsPage from './pages/ApprovalsPage'
 import HostOnboardPage from './pages/HostOnboardPage'
 import ScanTaskPage from './pages/ScanTaskPage'
+import QueueMonitorPage from './pages/QueueMonitorPage'
 import ScanMonitorPage from './pages/ScanMonitorPage'
 import VulnListPage from './pages/VulnListPage'
+import AssetScanPage from './pages/AssetScanPage'
 import ScanReportPage from './pages/ScanReportPage'
 import RulesPage from './pages/RulesPage'
 import ModelsPage from './pages/ModelsPage'
@@ -40,8 +42,10 @@ export default function App() {
             <Route path="/approvals" element={<ApprovalsPage />} />
             <Route path="/hosts" element={<HostOnboardPage />} />
             <Route path="/scan" element={<ScanTaskPage />} />
+            <Route path="/queue-monitor" element={<QueueMonitorPage />} />
             <Route path="/scan-monitor/:taskId" element={<ScanMonitorPage />} />
             <Route path="/vulns" element={<VulnListPage />} />
+ <Route path="/asset-scan" element={<AssetScanPage />} />
             <Route path="/report" element={<ScanReportPage />} />
             <Route path="/rules" element={<RulesPage />} />
             <Route path="/models" element={<ModelsPage />} />

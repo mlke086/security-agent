@@ -193,9 +193,20 @@ func HandleUpgrade(req UpgradeRequest) error {
 // ApplyStagedAndRestart asks the service manager to swap in the new binary.
 // It must NOT block the ack path: the caller acks the server first and then
 // invokes this in a background goroutine.
-func ApplyStagedAndRestart(_ UpgradeRequest, _ *config.Config) error {
+func ApplyStagedAndRestart(req UpgradeRequest, _ *config.Config) error {
 	if runtime.GOOS == "windows" {
 		return fmt.Errorf("apply staged binary on Windows requires the service helper")
+	}
+	// V13 P1-10: resolve the executable path the same way HandleUpgrade did
+	// (test override first, os.Executable otherwise) so the rollback knows
+	// where the staged binary and its ".old" backup live.
+	execPath := req.ExecutablePath
+	if execPath == "" {
+		var err error
+		execPath, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve executable path: %w", err)
+		}
 	}
 	// F2-UPGRADE-01 (2026-07-22): restart via systemd so the process picks
 	// up the binary that HandleUpgrade already staged to disk.  We shell out
@@ -208,10 +219,36 @@ func ApplyStagedAndRestart(_ UpgradeRequest, _ *config.Config) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("systemctl restart secagent: %w", err)
+		// V13 P1-10: HandleUpgrade already swapped the NEW binary onto
+		// execPath (the old one sits at execPath+".old"). If the restart
+		// cannot even be initiated, restore the old binary so a later
+		// reboot / systemd Restart=always does not load an unverified
+		// binary. (A crash *after* a successful Start is not detectable
+		// from here -- the process is about to be killed by systemd.)
+		if rbErr := rollbackBinary(execPath); rbErr != nil {
+			return fmt.Errorf("systemctl restart secagent: %w (rollback failed: %v)", err, rbErr)
+		}
+		return fmt.Errorf("systemctl restart secagent: %w (old binary restored)", err)
 	}
 	// Don't Wait() -- the current process is about to be killed by systemd
 	// and we don't want to block the goroutine.
+	return nil
+}
+
+// rollbackBinary restores execPath from execPath+".old" when a staged
+// upgrade could not be applied (V13 P1-10). No-op when no backup exists.
+func rollbackBinary(execPath string) error {
+	oldPath := execPath + ".old"
+	if _, err := os.Stat(oldPath); err != nil {
+		return nil // nothing to restore
+	}
+	if err := os.Remove(execPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(oldPath, execPath); err != nil {
+		return err
+	}
+	log.Printf("[updater] restored previous binary from %s", oldPath)
 	return nil
 }
 

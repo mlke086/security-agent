@@ -250,10 +250,29 @@ async def _publish_pack(rule_items: list[RuleItem], version: str | None = None) 
                 body={
                     "settings": {"number_of_shards": 1, "number_of_replicas": 0},
                     "mappings": {
+                        # V13 fix: NVD rule `check.value` is sometimes a
+                        # date-shaped version string (e.g. "2024-01-01") mixed
+                        # with plain versions in the SAME pack document. ES
+                        # date detection then tries to re-map the already-created
+                        # field to date -> "cannot be changed from keyword to
+                        # date" on every sync. Disable date detection so ALL
+                        # strings stay keyword (via the dynamic template below).
+                        "date_detection": False,
+                        "dynamic_templates": [
+                            {
+                                "strings_as_keyword": {
+                                    "match_mapping_type": "string",
+                                    "mapping": {
+                                        "type": "keyword",
+                                        "ignore_above": 1024,
+                                    },
+                                }
+                            }
+                        ],
                         "properties": {
                             "version": {"type": "keyword"},
                             "published_at": {"type": "date"},
-                        }
+                        },
                     },
                 },
             )

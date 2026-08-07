@@ -16,6 +16,7 @@ from src.agents.manager import register_online
 from src.agents.models import ScanModule, ScanResult, VulnFinding
 from src.agents.signing import sign_message
 from src.agents.store import get_vulnscan_store
+from src.common.channels import vulnscan_task_channel
 from src.common.logging.logger import get_logger
 
 logger = get_logger(__name__)
@@ -181,11 +182,9 @@ class AgentGateway:
             # WebSocket while leaving its Redis subscription alive.
             _conns.pop(agent_id, None)
             r = self._redis()
-            try:
-                if await r.get(f"agent:conn:{agent_id}") == self.worker_id:
-                    await r.delete(f"agent:conn:{agent_id}")
-            finally:
-                await r.aclose()
+            # V13 P1-1: shared redis client is process-lifetime; do NOT aclose().
+            if await r.get(f"agent:conn:{agent_id}") == self.worker_id:
+                await r.delete(f"agent:conn:{agent_id}")
             logger.info("agent_disconnected", agent_id=agent_id)
         pubsub = getattr(ws.state, "_pubsub", None)
         if pubsub:
@@ -286,6 +285,11 @@ class AgentGateway:
                 # snapshots). Best-effort persist to ES; a failure
                 # here never tears down the agent connection.
                 await self._record_monitor_event(agent_id, payload)
+            elif msg_type == "host_metrics":
+                # 需求①: host_metrics 性能时序。与 monitor_event 同样
+                # best-effort（fire-and-forget 写入 ES，失败仅 log），
+                # 高频消息绝不能因存储抖动拖垮 WS 连接。
+                await self._record_host_metrics(agent_id, payload)
             else:
                 logger.debug("unknown_agent_msg_type", type=msg_type, agent_id=agent_id)
         except Exception as exc:
@@ -324,8 +328,6 @@ class AgentGateway:
             logger.warning(
                 "pending_agent_command_delivery_failed", agent_id=agent_id, error=str(exc)
             )
-        finally:
-            await r.aclose()
 
     async def send_to_agent(self, agent_id: str, msg: dict) -> bool:
         """Send a message to an agent. Sensitive commands are signed before sending."""
@@ -357,9 +359,6 @@ class AgentGateway:
         except Exception as exc:
             logger.warning("redis_publish_failed", agent_id=agent_id, error=str(exc))
             return False
-        finally:
-            if r is not None:
-                await r.aclose()
 
     async def _record_response_ack(self, agent_id: str, payload: dict) -> None:
         """Mirror a response_ack to the per-action Redis status key.
@@ -398,12 +397,6 @@ class AgentGateway:
                 agent_id=agent_id,
                 error=str(exc),
             )
-        finally:
-            if r is not None:
-                try:
-                    await r.aclose()
-                except Exception:
-                    pass
         logger.info(
             "response_ack_recorded",
             action_id=action_id,
@@ -430,6 +423,30 @@ class AgentGateway:
             # ES outage should never cost the agent its socket.
             logger.warning(
                 "monitor_event_persist_failed",
+                agent_id=agent_id,
+                error=str(exc),
+            )
+
+    async def _record_host_metrics(self, agent_id: str, payload: dict) -> None:
+        """Persist a host_metrics sample to the ES secagent-hostmetrics index.
+
+        需求① (2026-08-06): fire-and-forget like monitor_event -- the agent
+        sends every 15s and drops points while disconnected, so a transient
+        ES failure only loses the current tick, never the connection.
+        hostname rides in the message envelope (agent stamps it at send
+        time); agent_id is stamped here from the authenticated connection
+        (same trust boundary as scan_result / monitor_event).
+        """
+        try:
+            from src.agents.metrics_store import get_metrics_store
+
+            # hostname 随 payload 上报（与 monitor_event 同约定）；
+            # agent_id 由已认证连接盖章。
+            hostname = str(payload.get("hostname") or "") if isinstance(payload, dict) else ""
+            await get_metrics_store().save_metrics(agent_id, hostname, payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "host_metrics_persist_failed",
                 agent_id=agent_id,
                 error=str(exc),
             )
@@ -461,7 +478,7 @@ class AgentGateway:
     async def _pub_async(self, task_id: str, payload: dict) -> None:
         try:
             r = self._redis()
-            await r.publish(f"vulnscan:task:{task_id}", json.dumps(payload, ensure_ascii=False))
+            await r.publish(vulnscan_task_channel(task_id), json.dumps(payload, ensure_ascii=False))
         except Exception:
             pass
 

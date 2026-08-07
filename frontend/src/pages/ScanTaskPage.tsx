@@ -251,7 +251,10 @@ export default function ScanTaskPage() {
         </Popconfirm>
       </>
     )},
-  ], [aiProgress, hostGroupByName])
+    // V13 P2-22: deps must include page/pageSize -- handleDeleteTask (via
+    // fetchTasks) captures them, and a stale closure reloaded page 1 after
+    // deleting a row on page 2 (table data shifted but paginator stayed).
+  ], [aiProgress, hostGroupByName, page, pageSize])
 
   return (
     <div>

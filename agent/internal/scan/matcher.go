@@ -228,7 +228,11 @@ func versionCompare(v1, op, v2 string) bool {
 	case "!=", "ne":
 		return cmp != 0
 	default:
-		return cmp < 0 // Default to "<"
+		// V13 P2-17: an unknown operator in a rule was silently treated as
+		// "<", producing systematic false positives/negatives that were
+		// invisible to the operator. Fail closed: log and never match.
+		log.Printf("[matcher] unknown version operator %q in rule; rule skipped", op)
+		return false
 	}
 }
 

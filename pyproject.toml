@@ -92,6 +92,13 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=src --cov-report=term-missing --cov-fail-under=80"
+# 阶段 5 收尾 P1-5:langgraph 相关测试集标 ``requires_scan_engine`` marker,
+# gateway / ai / graphrag 镜像 build 时跑 ``pytest -m "not requires_scan_engine"`` 跳过,
+# scan-engine 镜像完整跑全量测试。
+# 已自动注册 markers 列表(避免 pytest 警告)。
+markers = [
+    "requires_scan_engine: 依赖 langgraph / orchestration.subgraphs 子图,只在 scan-engine 镜像跑",
+]
 
 [tool.coverage.run]
 source = ["src"]

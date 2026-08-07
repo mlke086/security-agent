@@ -12,7 +12,7 @@ Reuses backend endpoints from /api/v1/alerts (Phase 1).
 The list polls every 15s; status changes are visible to other
 operators within one tick.
 */
-import { useEffect, useMemo, useState, useCallback } from "react"
+import { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import { formatBeijing } from "../utils/time"
 import { showError } from "../utils/showError"
 import {
@@ -91,7 +91,12 @@ export default function AlertInboxPage() {
     return () => clearTimeout(t)
   }, [hostname])
 
+  // V13 P2-24: request-seq guard -- the 15s auto-refresh, manual refresh
+  // and filter changes can race; a slow older response used to overwrite a
+  // newer filtered fetch (and re-apply stale filters to the list).
+  const fetchSeq = useRef(0)
   const fetchList = useCallback(async () => {
+    const seq = ++fetchSeq.current
     setLoading(true)
     try {
       const res = await listAlerts({
@@ -102,6 +107,7 @@ export default function AlertInboxPage() {
         limit: pageSize,
         offset: (page - 1) * pageSize,
       })
+      if (seq !== fetchSeq.current) return // stale response, drop it
       setItems(res.items || [])
       // Quick severity histogram from the current page
       const c: Counts = { total: res.count, critical: 0, high: 0, unhandled: 0 }
@@ -112,9 +118,9 @@ export default function AlertInboxPage() {
       }
       setCounts(c)
     } catch (err) {
-      showError(err, "加载告警失败")
+      if (seq === fetchSeq.current) showError(err, "加载告警失败")
     } finally {
-      setLoading(false)
+      if (seq === fetchSeq.current) setLoading(false)
     }
   }, [severity, status, source, debouncedHostname, page, pageSize])
 

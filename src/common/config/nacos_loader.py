@@ -61,6 +61,9 @@ PROTECTED_OVERRIDE_KEYS: frozenset[str] = frozenset(
         "VIRUSTOTAL_API_KEY",
         "ALIENVAULT_OTX_API_KEY",
         "NVD_API_KEY",
+        # V13: Serper.dev / Tavily 搜索额度按次计费，凭据走 env/Nacos（env 优先）
+        "SERPER_API_KEY",
+        "TAVILY_API_KEY",
         # LLM 凭据
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
@@ -215,12 +218,20 @@ def apply_nacos_overrides(nacos_config: dict[str, Any]) -> dict[str, list[str]]:
     for raw_key, value in nacos_config.items():
         if value is None:
             continue  # YAML null is "comment this out"; do not blank env.
+        # V13 D0-1: a `${...}` placeholder value means "inject from env /
+        # secret at runtime". Never treat the placeholder string itself as
+        # a real config value -- that would break the consuming client with
+        # a literal "${DEEPSEEK_API_KEY}" instead of failing visibly.
+        if isinstance(value, str) and re.match(r"^\$\{.*\}$", value.strip()):
+            unrecognized.append(raw_key)
+            continue
         canonical = _normalize_env_key(raw_key, valid_keys)
         if canonical is None:
-            # Unknown key: still inject into env (so accidentally-correct
-            # keys do work) but flag for the operator via `unrecognized`.
+            # V13 P2-12: unknown keys are reported but NOT injected into
+            # the global env -- injecting arbitrary keys could override
+            # process-affecting variables (HTTP_PROXY / NO_PROXY / etc.)
+            # that trust_env=True clients (httpx) pick up implicitly.
             unrecognized.append(raw_key)
-            os.environ[raw_key.upper()] = str(value)
             continue
         # canonical is Settings.model_field name (lowercase). The env var
         # form is uppercase, which is what PROTECTED_OVERRIDE_KEYS uses
@@ -263,6 +274,58 @@ def _config_fingerprint(nacos_config: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _resolve_data_ids(s) -> list[str]:
+    """
+    阶段 0-2:多 dataId 拆分支持(方案 A 合并指纹)。
+
+    - `nacos_data_ids` 非空:按逗号/空白拆分,trim 去空
+    - `nacos_data_ids` 为空:回退到单 `nacos_data_id`(向后兼容旧部署)
+
+    返回保序去重的 dataId 列表。
+    """
+    raw = (s.nacos_data_ids or "").strip()
+    ids: list[str] = []
+    if raw:
+        for part in re.split(r"[,;\s]+", raw):
+            part = part.strip()
+            if part and part not in ids:
+                ids.append(part)
+    if not ids and s.nacos_data_id:
+        ids = [s.nacos_data_id]
+    return ids
+
+
+async def _fetch_all_data_ids(s) -> dict[str, Any]:
+    """
+    阶段 0-2:依次 fetch 每个 dataId,合并为单一 dict。
+
+    合并策略:后到的 dataId 覆盖先到的(后写者优先);与 Nacos 多 dataId 语义一致。
+    失败处理:单个 dataId fetch 失败不阻断整体,只记日志并跳过该 dataId。
+    """
+    merged: dict[str, Any] = {}
+    data_ids = _resolve_data_ids(s)
+    for did in data_ids:
+        try:
+            sub = await fetch_nacos_config(
+                s.nacos_server,
+                did,
+                s.nacos_group,
+                s.nacos_namespace,
+                s.nacos_username,
+                s.nacos_password,
+            )
+        except Exception as exc:
+            logger.warning(
+                "nacos_data_id_fetch_failed",
+                data_id=did,
+                **_format_exception(exc),
+            )
+            continue
+        if sub:
+            merged.update(sub)
+    return merged
+
+
 async def start_nacos_listener() -> None:
     """启动 Nacos 配置变更监听(定时轮询模式),热更新 Settings。
 
@@ -271,6 +334,9 @@ async def start_nacos_listener() -> None:
 
     多 worker 模型下,各 worker 进程独立持有一份 Settings 单例,
     hot reload 只影响发起 reload 的那个 worker。
+
+    阶段 0-2:多 dataId 支持——轮询所有 `NACOS_DATA_IDS`,合并后取指纹。
+    详见 docs/分布式架构拆分方案.md 5.3(方案 A 合并指纹)。
     """
     global _listener_task
     from src.common.config.settings import get_settings
@@ -279,18 +345,18 @@ async def start_nacos_listener() -> None:
     if not s.nacos_server:
         return
 
+    data_ids = _resolve_data_ids(s)
+    logger.info(
+        "nacos_listener_data_ids_resolved",
+        count=len(data_ids),
+        data_ids=data_ids,
+    )
+
     async def _poll():
         last_fingerprint = ""
         while True:
             try:
-                nacos_config = await fetch_nacos_config(
-                    s.nacos_server,
-                    s.nacos_data_id,
-                    s.nacos_group,
-                    s.nacos_namespace,
-                    s.nacos_username,
-                    s.nacos_password,
-                )
+                nacos_config = await _fetch_all_data_ids(s)
                 if nacos_config:
                     fp = _config_fingerprint(nacos_config)
                     if fp != last_fingerprint:
@@ -302,6 +368,7 @@ async def start_nacos_listener() -> None:
                             reload_settings()
                             logger.info(
                                 "nacos_config_reloaded",
+                                data_ids=data_ids,
                                 keys=len(nacos_config),
                                 applied=len(summary["applied"]),
                                 skipped=len(summary["skipped_protected"]),

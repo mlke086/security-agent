@@ -17,6 +17,9 @@ from src.agents.models import (
 from src.agents.store import INDEX_VULNS, detected_sort_key, get_vulnscan_store
 from src.agents.ws_gateway import get_agent_gateway
 from src.common.audit.audit_logger import get_audit_logger
+
+# 阶段 5 收尾 P0-3:channel 名共享常量(scan-engine 与 gateway SSE 端契约)
+from src.common.channels import vulnscan_task_channel
 from src.common.logging.logger import get_logger
 
 logger = get_logger(__name__)
@@ -197,7 +200,10 @@ async def dispatch(state: dict) -> dict:
     targets = state["targets"]
     modules = state["modules"]
 
-    if await _is_task_cancelled(task_id):
+    # V13 P1-5: use the double-checked _confirm_cancellation instead of the
+    # single fail-closed _is_task_cancelled -- a transient redis blip must not
+    # mislabel a healthy task as cancelled before it even dispatches.
+    if await _confirm_cancellation(task_id):
         return {"status": "cancelled", "dispatched": False, "total_targets": 0}
 
     # Resolve targets to agent_ids
@@ -449,7 +455,9 @@ async def collect(state: dict) -> dict:
 
     task_id = state["task_id"]
     total = state.get("total_targets", 0)
-    if state.get("status") == "cancelled" or await _is_task_cancelled(task_id):
+    # V13 P1-5: double-checked cancellation for the entry short-circuit (the
+    # status check is already the product of _confirm_cancellation upstream).
+    if state.get("status") == "cancelled" or await _confirm_cancellation(task_id):
         return {"status": "cancelled", "received_results": 0}
     if state.get("status") == "failed" or total == 0:
         return {"status": "failed", "received_results": 0}
@@ -885,11 +893,28 @@ async def llm_analysis(state: dict) -> dict:
         start = batch_idx * batch_size
         batch = findings[start : start + batch_size]
 
+        # 2026-08-06 LLM 分析监控:批次调用走 chat_with_retry(即时重试 +
+        # 指标埋点 + 失败进待补扫队列)。仍失败 -> 本批 finding 写 fallback。
+        batch_finding_ids = [_finding_field(f, "finding_id", "") for f in batch]
+        batch_finding_ids = [f for f in batch_finding_ids if f]
         try:
             prompt = _build_analysis_prompt(batch)
-            result = await adapter.chat_completion(
-                messages=[{"role": "user", "content": prompt}],
-                schema=AnalyzedResult,
+
+            async def _call_batch():
+                return await adapter.chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    schema=AnalyzedResult,
+                )
+
+            from src.scan_engine.llm_analysis import chat_with_retry
+
+            result = await chat_with_retry(
+                "analyze",
+                _call_batch,
+                task_id=task_id,
+                batch_idx=batch_idx,
+                finding_ids=batch_finding_ids,
+                extra={"task_id": task_id, "batch": batch_idx, "findings": len(batch_finding_ids)},
             )
             for af in result.analyzed:
                 all_analyzed.append(
@@ -1000,7 +1025,7 @@ async def _pub_progress(task_id: str, step: str, status: str, message: str) -> N
         import json as _json
 
         await _get_redis().publish(
-            f"vulnscan:task:{task_id}",
+            vulnscan_task_channel(task_id),
             _json.dumps(
                 {
                     "type": "scan_step",
@@ -1097,8 +1122,10 @@ async def generate_report(state: dict) -> dict:
         await _pub_progress(task_id, "cancel", "done", "Scan cancelled")
         return {"report": None, "status": "cancelled"}
 
-    # Read final vulns
-    vulns = await store.list_vulns(VulnFilter(task_id=task_id, limit=10000))
+    # Read final vulns. V13 P2-6: list_vulns(limit=10000) silently
+    # truncated reports for single tasks with >10k findings; use the
+    # search_after paged variant (same as aggregate reconcile).
+    vulns = await store.list_vulns_all(VulnFilter(task_id=task_id, limit=10000))
     if not vulns:
         # Edge case: no findings at all. ai_processed=False because no LLM
         # call has happened; ai_overall_advice is left empty intentionally.
@@ -1113,7 +1140,7 @@ async def generate_report(state: dict) -> dict:
             ai_processed=False,
             ai_model="",
             ai_overall_advice="",
-            ai_processed_at="",
+            ai_processed_at=None,
         )
         await store.save_report(report)
         await store.update_task(
@@ -1219,9 +1246,24 @@ By severity: {by_severity}
 By category: {by_category}
 Top risk: {top_vulns[0].get("name", "N/A") if top_vulns else "None"}
 Top hosts affected: {sorted({str(v.get("hostname") or "") for v in top_vulns if v.get("hostname")})[:5]}"""
+        # 2026-08-06 LLM 分析监控:报告摘要/建议走 chat_with_retry(即时重试+
+        # 指标埋点)。报告失败不影响任务完成(有 fallback 文案),不进补扫队列
+        # (报告可随时重新生成,补扫只针对漏洞分析)。
+        from src.scan_engine.llm_analysis import chat_with_retry
+
         summary_result, advice_result = await asyncio.gather(
-            adapter.chat_completion(messages=[{"role": "user", "content": summary_prompt}]),
-            adapter.chat_completion(messages=[{"role": "user", "content": advice_prompt}]),
+            chat_with_retry(
+                "report_summary",
+                lambda: adapter.chat_completion(messages=[{"role": "user", "content": summary_prompt}]),
+                task_id=task_id,
+                extra={"task_id": task_id},
+            ),
+            chat_with_retry(
+                "report_advice",
+                lambda: adapter.chat_completion(messages=[{"role": "user", "content": advice_prompt}]),
+                task_id=task_id,
+                extra={"task_id": task_id},
+            ),
             return_exceptions=True,
         )
         if isinstance(summary_result, Exception):
@@ -1256,7 +1298,7 @@ Top hosts affected: {sorted({str(v.get("hostname") or "") for v in top_vulns if 
         ai_processed=ai_processed,
         ai_model=ai_model_name,
         ai_overall_advice=ai_overall_advice_text[:1000],
-        ai_processed_at=datetime.now(UTC).isoformat() if ai_processed else "",
+        ai_processed_at=datetime.now(UTC).isoformat() if ai_processed else None,
     )
 
     await store.save_report(report)

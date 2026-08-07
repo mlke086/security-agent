@@ -1,0 +1,7 @@
+# 阶段 5 nacos 拆分:celery dataId(仅 celery 服务)
+# 审批超时相关参数;celery broker/backend 默认共享 redis_url。
+
+celery_broker_url: "${REDIS_URL}"
+celery_backend_url: "${REDIS_URL}"
+celery_task_queue: "security-agent-tasks"
+hitl_timeout_buffer_sec: 30

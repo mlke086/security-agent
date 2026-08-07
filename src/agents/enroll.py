@@ -273,7 +273,10 @@ $CONFIG_DIR = "$INSTALL_DIR\\config"
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR, $CONFIG_DIR | Out-Null
 $ARCH = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "amd64" }
 $BIN_URL = "$CONSOLE/api/v1/agents/binary/windows/$ARCH"
-Invoke-WebRequest -Uri "$BIN_URL?token=$TOKEN" -OutFile "$INSTALL_DIR\agent.exe"
+# V13 P1-12: send the token in the Authorization header, not the URL query
+# (a query token lands in process listings / logs / proxy records).
+$Headers = @{ Authorization = "Bearer $TOKEN" }
+Invoke-WebRequest -Uri "$BIN_URL" -Headers $Headers -OutFile "$INSTALL_DIR\agent.exe"
 # Best-effort nuclei CLI download from internal mirror (avoid GitHub).
 $NucleiZip = "nuclei___NUCLEI_VERSION___windows_$ARCH.zip"
 $NucleiUrl = "__NUCLEI_DOWNLOAD_BASE_URL__/$NucleiZip"

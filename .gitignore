@@ -106,9 +106,14 @@ frontend/background/
 frontend/favicon-package/
 agent/_p_*.py
 agent/dist/
+deployments/agent/dist/
 
 # Reasonix local session/task data (tool state, not project files)
 .reasonix/
 
 # local venv created for WSL tryout
 .venv-wsl/
+
+.sshp.ps1
+.askpass_helper.cmd
+.askpass_password.txt

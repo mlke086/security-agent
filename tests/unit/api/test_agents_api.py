@@ -4,10 +4,14 @@ Covers: enroll-tokens, install, enroll, binary, ca, host CRUD, upgrade, config.
 Per-tool-call spec: 200 + 401/403 + 422 + boundary for each endpoint.
 """
 from datetime import UTC
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from src.agents.models import Host, HostStatus
+from src.agents.upgrade import PreparedUpgrade
 
 # Must import app after conftest sets STORE_BACKEND=memory
 from src.api.main import app
@@ -614,6 +618,125 @@ class TestUpgrade:
             mock_gw.return_value = mock_gateway
             resp = client.post("/api/v1/agents/agent-1/upgrade", json={"version": "v1", "download_url": "http://x"}, headers=headers)
             assert resp.status_code == 404
+
+
+class TestUpgradeVersionGate:
+    """UPGRADE-FIX (2026-08-07): 版本一致返回 already_current; 下发失败同步置离线。
+
+    预期行为（用户设想）:
+    1. host.agent_version >= packaged → 返回 already_current + current_version,
+       不再下发同版本升级命令（原实现总是下发, 前端 already_current 分支永不触发）。
+    2. host.agent_version < packaged 且 WS 不在线 → delivered=False 时立即把
+       hosts.status 置 offline, 避免升级列"主机离线，待重连"与状态列"在线"矛盾。
+    """
+
+    PACKAGED = "0.3.0"  # 与 packaged_version() 一致（测试环境无 VERSION 文件时取 settings）
+
+    def _host(self, version: str) -> Host:
+        from datetime import datetime
+
+        return Host(
+            agent_id="agent-upg",
+            hostname="upg-01",
+            ip="10.9.9.1",
+            os="linux",
+            arch="amd64",
+            kernel="6.1",
+            status=HostStatus.ONLINE,
+            agent_version=version,
+            last_heartbeat=datetime.now(UTC).isoformat(),
+        )
+
+    def _prepared(self) -> PreparedUpgrade:
+        return PreparedUpgrade(
+            version=self.PACKAGED,
+            binary_path=Path("/srv/agent/linux/amd64/agent"),
+            message={"v": 1, "type": "agent_upgrade", "ts": "t", "payload": {}},
+        )
+
+    def test_version_equal_returns_already_current(self, auth_headers):
+        """版本一致 → already_current, 不下发, 不置离线。"""
+        headers = auth_headers("admin")
+        with (
+            patch("src.api.routers.agents.get_host", AsyncMock(return_value=self._host(self.PACKAGED))),
+            patch("src.api.routers.agents.prepare_upgrade", return_value=self._prepared()),
+            patch("src.api.routers.agents.get_agent_gateway") as mock_gw,
+            patch("src.api.routers.agents.get_vulnscan_store") as mock_store,
+            patch("src.api.routers.agents.get_audit_logger") as mock_audit,
+        ):
+            mock_audit.return_value.log = AsyncMock()
+            mock_store.return_value.update_host = AsyncMock()
+            resp = client.post(
+                "/api/v1/agents/agent-upg/upgrade", json={}, headers=headers
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "already_current"
+        assert data["current_version"] == self.PACKAGED
+        assert data["delivered"] is False
+        mock_gw.assert_not_called()
+        mock_store.return_value.update_host.assert_not_called()
+
+    def test_version_gt_packaged_returns_already_current(self, auth_headers):
+        """host 版本高于 packaged（如手工装了新版本）→ 同样视为已是最新。"""
+        headers = auth_headers("admin")
+        with (
+            patch("src.api.routers.agents.get_host", AsyncMock(return_value=self._host("0.4.0"))),
+            patch("src.api.routers.agents.prepare_upgrade", return_value=self._prepared()),
+            patch("src.api.routers.agents.get_agent_gateway") as mock_gw,
+            patch("src.api.routers.agents.get_audit_logger") as mock_audit,
+        ):
+            mock_audit.return_value.log = AsyncMock()
+            resp = client.post(
+                "/api/v1/agents/agent-upg/upgrade", json={}, headers=headers
+            )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "already_current"
+        mock_gw.assert_not_called()
+
+    def test_stale_version_offline_marks_host_offline(self, auth_headers):
+        """版本过旧 + WS 不在线 → delivered=False + update_host(status=offline)。"""
+        headers = auth_headers("admin")
+        with (
+            patch("src.api.routers.agents.get_host", AsyncMock(return_value=self._host("0.1.0"))),
+            patch("src.api.routers.agents.prepare_upgrade", return_value=self._prepared()),
+            patch("src.api.routers.agents.get_agent_gateway") as mock_gw,
+            patch("src.api.routers.agents.get_vulnscan_store") as mock_store,
+            patch("src.api.routers.agents.get_audit_logger") as mock_audit,
+        ):
+            mock_gw.return_value.send_to_agent = AsyncMock(return_value=False)
+            mock_store.return_value.update_host = AsyncMock()
+            mock_audit.return_value.log = AsyncMock()
+            resp = client.post(
+                "/api/v1/agents/agent-upg/upgrade", json={}, headers=headers
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["delivered"] is False
+        mock_store.return_value.update_host.assert_awaited_once_with(
+            "agent-upg", status="offline"
+        )
+
+    def test_stale_version_online_does_not_mark_offline(self, auth_headers):
+        """版本过旧但 WS 在线 → delivered=True, 不置离线。"""
+        headers = auth_headers("admin")
+        with (
+            patch("src.api.routers.agents.get_host", AsyncMock(return_value=self._host("0.1.0"))),
+            patch("src.api.routers.agents.prepare_upgrade", return_value=self._prepared()),
+            patch("src.api.routers.agents.get_agent_gateway") as mock_gw,
+            patch("src.api.routers.agents.get_vulnscan_store") as mock_store,
+            patch("src.api.routers.agents.get_audit_logger") as mock_audit,
+        ):
+            mock_gw.return_value.send_to_agent = AsyncMock(return_value=True)
+            mock_store.return_value.update_host = AsyncMock()
+            mock_audit.return_value.log = AsyncMock()
+            resp = client.post(
+                "/api/v1/agents/agent-upg/upgrade", json={}, headers=headers
+            )
+        assert resp.status_code == 200
+        assert resp.json()["delivered"] is True
+        mock_store.return_value.update_host.assert_not_called()
 
 
 class TestAgentConfig:

@@ -40,6 +40,7 @@ from src.agents.upgrade import (
     get_upgrade_status,
     prepare_upgrade,
     update_upgrade_status,
+    upgrade_needed,
 )
 from src.agents.ws_gateway import get_agent_gateway
 from src.api.auth.routes import require_role
@@ -677,7 +678,34 @@ async def api_upgrade_agent(
     except UpgradeNotAvailableError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    # UPGRADE-FIX (2026-08-07): 版本一致 → 提前返回 already_current,
+    # 不再下发同版本升级命令。原实现无条件 prepare_upgrade + send,
+    # 前端 handleUpgrade 的 already_current 分支因此永远不触发,
+    # 导致"已是最新版本"的预期行为从未生效。
+    if host.agent_version and not upgrade_needed(host.agent_version, prepared.version):
+        return {
+            "status": "already_current",
+            "version": prepared.version,
+            "current_version": host.agent_version,
+            "delivered": False,
+            "binary_path": str(prepared.binary_path),
+        }
+
     delivered = await get_agent_gateway().send_to_agent(agent_id, prepared.message)
+    if not delivered:
+        # UPGRADE-FIX: send_to_agent 返回 False = WS 不在线（命令入
+        # pending_cmd 队列等待重连补发）。此时立即把主机置 offline, 避免
+        # 升级状态显示"主机离线，待重连"而主机状态列仍显示"在线"的矛盾
+        # （原实现只依赖 mark_offline_expired 心跳超时 150s 后才置离线）。
+        # 副作用可接受: agent 恢复心跳时 manager 会写回 status="online"。
+        try:
+            await get_vulnscan_store().update_host(agent_id, status="offline")
+        except Exception as exc:  # noqa: BLE001
+            from src.common.logging.logger import get_logger as _log
+
+            _log(__name__).warning(
+                "upgrade_mark_offline_failed", agent_id=agent_id, error=str(exc)
+            )
     state = "sent" if delivered else "queued_for_delivery"
     await update_upgrade_status(
         agent_id,

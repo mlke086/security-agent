@@ -1,1 +1,1 @@
-﻿.ai_rules/RULES.md
+.ai_rules/RULES.md

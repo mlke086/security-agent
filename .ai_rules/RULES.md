@@ -69,5 +69,4 @@
 | DeepSeek-Reasonix | 项目根放 `REASONIX.md`（同上） |
 | 所有工具 | `.ai_rules/` 目录本身作为约定俗成的规则区 |
 
-> 当前未创建软链；如工具明确支持，可在项目根执行：
-> `ln -sf .ai_rules/RULES.md CLAUDE.md`（按工具对应）
+> 软链已建立（2026-08-09，commit e9c6e1e）：项目根 `CLAUDE.md` / `AGENTS.md` / `REASONIX.md` → `.ai_rules/RULES.md`，工具启动时自动读取本规则。
